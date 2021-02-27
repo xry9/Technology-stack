@@ -1,0 +1,18 @@
+1¡¢vim /etc/sysconfig/network-scripts/ifcfg-enp7s0f0
+TYPE=Ethernet
+BOOTPROTO=static
+IPADDR=192.168.1.121
+NETMASK=255.255.255.0
+NAME=enp7s0f0
+DEVICE=enp7s0f0
+ONBOOT=yes
+DNS1=192.168.10.1
+2¡¢vim ../network
+NETWORKING=yes
+NETWORKING_IPV6=no
+HOSTNAME=localhost.localdomain
+GATEWAY=192.168.1.1
+3¡¢systemctl restart network
+========================
+systemctl stop firewalld
+systemctl disable firewalld

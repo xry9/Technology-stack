@@ -1,0 +1,26 @@
+1、压缩：
+  如何选择压缩格式呢？这取决于文件的大小，你使用的压缩工具，下面是几条选择建议，效率由高到低排序：
+	1.用一些包含了压缩并且支持splittable的文件格式，比如Sequence File，RCFile或者Avro文件
+	2.使用提供splittable的压缩格式，比如，bzip2和索引后可以支持splittable的lzo。
+	3.提前把文件分成几个块，每个块单独压缩，这样就无需考虑splittable的问题了
+	4.如果为了快速压缩可以使用lzo，lz4或者snappy压缩格式
+2、hadoop fs -du -s /hbasegroup/fhl_temp/score_final_out/* | sort -nr	--统计字节数
+3、jar 相关
+在hadoop-env.sh中加入export HADOOP_CLASSPATH=/home/app/hbase-1.0.3/lib/*，后再运行hadoop jar ，打包就不用把hbase的jar一块打上了
+通过命令行参数传递jar文件, 如-libjars等;
+直接在conf中设置, 如conf.set(“tmpjars”,*.jar), jar文件用逗号隔开;
+利用分布式缓存, 如DistributedCache.addArchiveToClassPath(path, job), 此处的path必须是hdfs, 即自己讲jar上传到hdfs上, 然后将路径加入到分布式缓存中;
+第三方jar文件和自己的程序打包到一个jar文件中, 程序通过job.getJar()将获得整个文件并将其传至hdfs上. (很笨重)
+在每台机器的$HADOOP_HOME/lib目录中加入jar文件. (不推荐)
+4、
+	reduce端key只认compare比较结果，key的hashcode，equal值都不同，只要compare结果相同，相同的其它key就不要了，以wordcount降序排列为例。
+	reduce端的key，Iterable形式很具有欺骗性，本质并不是把相同的key的value聚合到一起，只是把key值compare结果相同的value放到了起，
+	即reduce来的一批数据（key,Iterable）中,每条key值都可能不同，但compare结果是相同的
+5、
+hdfs  haadmin -getServiceState  nn1	查看状态
+yarn logs -applicationid 命令
+6、
+	hosts文件中是 chen-hadoop00 形式，zookeeper 可以起来，但这这三台hadoop集群就是起不来，改成hadoop00就可以了，其它基本没改
+	hadoop集群环境，主机名用ha_1，下划线形式不行（同学验证）
+7、桥接模式时集群在格式化namenode时要关防火墙，否则No Route to Host from  cloud01/10.10.1.184 to cloud03:8485 failed on socket timeout exception: java.net.NoRouteToHostException
+8、namenode节点替换：1>替换的节点可以免登录到其它节点 2>配置文件做相应更改 3>tmp,journal目录scp过去 4>直接启动会发现两个namenode都是standby，只要在zoookeeper中把hadoop-ha节点删了（yarn-leader-election也删了吧），再格式化zk（在替换的节点做的，在哪个节点做应该都是一样的吧）,hdfs zkfc -formatZK，重新启动即可

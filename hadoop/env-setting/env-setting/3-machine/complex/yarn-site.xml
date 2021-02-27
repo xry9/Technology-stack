@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!--
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License. See accompanying LICENSE file.
+-->
+<configuration>
+<property>
+<name>yarn.resourcemanager.ha.enabled</name>
+<value>true</value>
+</property>
+<property>
+<name>yarn.resourcemanager.cluster-id</name>
+<value>yrc</value>
+</property>
+<property>
+<name>yarn.resourcemanager.ha.rm-ids</name>
+<value>rm1,rm2</value>
+</property>
+<property>
+<name>yarn.resourcemanager.hostname.rm1</name>
+<value>cloud01</value>
+</property>
+<property>
+<name>yarn.resourcemanager.hostname.rm2</name>
+<value>cloud02</value>
+</property>
+<property>
+<name>yarn.resourcemanager.zk-address</name>
+<value>cloud01:2181,cloud01:2181,cloud01:2181</value>
+</property>
+<property>
+<name>yarn.nodemanager.aux-services</name>
+<value>mapreduce_shuffle</value>
+</property>
+<property>
+<name>yarn.nodemanager.resource.memory-mb</name>
+<value>4096</value>
+</property>
+<property>
+<name>yarn.nodemanager.resource.cpu-vcores</name>
+<value>4</value>
+</property>
+<property>
+<name>yarn.resourcemanager.scheduler.class</name>
+<value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler</value>
+</property>
+<property>
+<name>yarn.scheduler.fair.preemption</name>
+<value>true</value>
+</property>
+<property>
+<name>yarn.log-aggregation-enable</name>    
+<value>true</value>    
+</property>
+<property>
+<name>yarn.log.server.url</name>
+<value>http://cloud01:19888/jobhistory/logs</value>
+<!--查看spark Executor的输出日志时用到-->
+</property>
+</configuration>

@@ -1,0 +1,590 @@
+hadoop checknative
+export HADOOP_ROOT_LOGGER=DEBUG,console
+hdfs dfs -ls /
+1、关于本地库:
+System.getProperty("java.library.path"); --> /usr/java/packages/lib/amd64:/usr/lib64:/lib64:/lib:/usr/lib
+a. System.load("/home/tyx/app/hadoop-2.7.2/lib/native/libhadoop.so");
+b. cd /usr/lib, ln -s /usr/local/app/hadoop-2.7.2/lib/native/libhadoop.so.1.0.0 libhadoop.so
+    System.loadLibrary("hadoop");
+c. export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native
+	System.loadLibrary("hadoop");
+d. hdfs-site.xml
+<property>
+<name>dfs.client.read.shortcircuit</name>
+<value>true</value>
+</property>
+<property>
+<name>dfs.domain.socket.path</name>
+<value>/home/tyx/hadoop-hdfs/dn_socket</value>
+<!--dn_socket 目录不要自己创建-->
+</property>
+[tyx@cluster01 hadoop-hdfs]$ ll /home/tyx/hadoop-hdfs/
+srw-rw-rw-. 1 tyx tyx 0 Jun  8 19:35 dn_socket
+好奇怪是紫色的哈哈
+https://blog.csdn.net/jewes/article/details/40189263
+https://www.cnblogs.com/zackstang/p/11721377.html
+https://hadoop.apache.org/docs/r2.7.2/hadoop-project-dist/hadoop-hdfs/ShortCircuitLocalReads.html
+-- 关于本地库, 可参见 org.apache.hadoop.util.NativeCodeLoader, checksum 时就用到了, org.apache.hadoop.util.NativeCrc32#nativeComputeChunkedSumsByteArray 方法就由 native 修饰
+
+
+Unix Domain Socket
+Socket 的三种类型
+Packet套接字提供的是L2的抓包能力, 也叫raw socket, 意思就是不经过操作系统tcp/ip协议栈处理的packet, 抓上来的包须要自己处理tcp/ip的头部信息
+JAVA仅支持到应用层, 是无法直接操作底层的, 所以JAVA如果想操作RAW SOCKET需要借助JNI调用C++/C才可以实现数捕获
+
+1、URL url = Thread.currentThread().getContextClassLoader().getResource("META-INF/service/a.txt");
+得到的是第一个 url, 例如多个jar包中都包含 META-INF/service/a.txt 时只返回第一jar包, 如是调用 getResources 则返回所有
+java.util.ServiceLoader 貌似是个协议, 使用方法是 ServiceLoader.load([ClassName].class), 加载 LocalClientProtocolProvider/YarnClientProtocolProvider
+在jar包中加上 META-INF/service/XX 就能找到
+/home/tyx/app/mygit/hadoop272/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/resources/META-INF/services/org.apache.hadoop.mapreduce.protocol.ClientProtocolProvider	--> 值为 org.apache.hadoop.mapred.LocalClientProtocolProvider
+/home/tyx/app/mygit/hadoop272/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/main/resources/META-INF/services/org.apache.hadoop.mapreduce.protocol.ClientProtocolProvider  --> 值为 org.apache.hadoop.mapred.YarnClientProtocolProvider
+https://www.cnblogs.com/aspirant/p/10616704.html
+
+5、读数流程:
+  a. DFSInputStream#openInfo  --> fetchLocatedBlocksAndGetLastBlockLength (dfsClient.getLocatedBlocks(src, 0);)
+  b. 选 DataNode, DFSInputStream#getBestNodeDNAddrPair
+  c. DFSInputStream#read(byte[], int, int) --> readWithStrategy, 这叫什么模式, 读数依赖的 currentNode pos... 都在 DFSInputStream, 而 buf[] 
+  却封闭在 ReaderStrategy 中, 应该不能叫访问者, 但应该叫啥呢
+  d. block --> Packet --> DataSlice , 好几级 reader, 但是真正的 inputStream 始终是一个, 这叫什么模式呢
+  e. 数据是否本地化读取在 BlockReaderFactory#build, 使用建造者模式封闭了产生 blockReader 的策略, 现在体会到了这个模式真的很好
+  f. 只看 RemoteBlockReader2, packet 的结构:
+    // Each packet looks like:
+    //   PLEN    HLEN      HEADER     CHECKSUMS  DATA
+    //   32-bit  16-bit   <protobuf>  <variable length>
+    // PLEN(packet length):      Payload length = length(PLEN) + length(CHECKSUMS) + length(DATA)
+    // HLEN:      Header length = length(HEADER)
+    // HEADER:    the actual packet header fields, encoded in protobuf
+    // CHECKSUMS: the crcs for the data chunk. May be missing if checksums were not requested
+    // DATA(DataSlice)       the actual block data 
+curDataSlice = curPacketBuf.slice(); 其实底层就 curDataSlice 一个 ByteBuffer, 而且 curDataSlice 是 DirectByteBuffer
+
+client 端 readBlock 时在 org.apache.hadoop.hdfs.RemoteBlockReader2 中, PacketReceiver packetReceiver = new PacketReceiver(true);// useDirectBuffers
+server 端接收 writeBlock 时, org.apache.hadoop.hdfs.server.datanode.BlockReceiver 中, PacketReceiver packetReceiver = new PacketReceiver(false);// useDirectBuffers
+为什么 server 端那样搞呢
+
+6、写数据流程
+a. FSDataOutputStream dataOutputStream = fs.create(path); 此操作是创建空文件, 因为到 server 端走的是 NameNodeRpcServer.create 方法,
+但此时即便文件创建成功,BlockLocation 也是空的
+
+a. NameNodeRpcServer#addBlock, 真下创建 block 的时机是 hdfs client 调用呀
+FSNamesystem#createNewBlock --> nextBlockId, FSNamesystem#blockIdManager 过后再研究一下
+FSNamesystem#getNewBlockTargets 真的挺复杂, 暂时不理了
+
+b. Main 线程中:
+FSDataOutputStream.PositionCache#write(byte[], int, int) --> DFSOutputStream#writeChunkImpl (也是以 chunk 的形式写出的) --> 
+DFSOutputStream#waitAndQueueCurrentPacket --> DFSOutputStream#queueCurrentPacket (dataQueue.addLast(currentPacket); 这是把数据加入队列了)
+DataStreamer#run 线程中:
+  one = dataQueue.getFirst();
+  DataStreamer#createBlockOutputStream 创建块连接也是在这里, 创建 socket 时 s = createSocketForPipeline(nodes[0], nodes.length, dfsClient); 
+  用 nodes[0] 也是有道理的, 应该是排好序了在 NN, 还有一个 new Sender(out).writeBlock(...); 而且还要等待 server 端返回
+
+c. 分析一下 hdfs 写数据为什么是一个 packet --> chunk 的形式, chunk 好理解, 因为每个 chunk 要做 checksum, 但是为什么要有 两级呢, 整个 packet 一次写出不
+行么, 因为这样, checksum 是由 data 产生的, 所以整 packet 写的话, 整 packet 的数据都要加到内存中, 这是其一, 其二整 packet 做 checksum 时间复杂度是不是更大呢
+
+d. 用流的方式写 hdfs 每写一次 block 号(blk_1073744035)会加1, 即文件名变了
+Client 往 hdfs 上写数据不仅仅是简单的网络写数据, 会创建另外的线程, 如果再考虑多副本的话, 说明往 hdfs 上写数据比普通的远程写数据要慢, tez 还是很有必要的
+mr 任务需要读写 hdfs 的操作又太多了, mr 启动很慢就验证了这一点, 其实 spark 也是落 hdfs 上, 所以有人说 tez 比 spark 快是有道理的, 不对呀 spark 和 tez 是不是一回事
+
+-----------------------------------------------------
+public class HDFSDemo {
+    static Configuration conf=new Configuration();
+    static FileSystem fs = null;
+    static {
+        conf.set("fs.defaultFS", "hdfs://192.168.58.130:9000");
+		fs = FileSystem.get(conf);
+    }
+    public static void read() throws IOException {
+        FSDataInputStream fsin= fs.open(new Path("/data/words.txt"));
+        BufferedReader br = new BufferedReader(new InputStreamReader(fsin));
+        while ((line = br.readLine()) != null) {
+            System.out.println(line);
+        }
+    }
+    public static void get(){
+		FileStatus[] dir = fs.listStatus(new Path("/data/"));
+		for (FileStatus status : dir){
+			System.out.println(status.getPath());
+		}
+    }
+}
+
+public abstract class org.apache.hadoop.fs.FileSystem extends Configured implements Closeable {
+	public FSDataInputStream open(Path f) throws IOException {
+		return open(f, getConf().getInt("io.file.buffer.size", 4096));
+	}
+}
+public class org.apache.hadoop.hdfs.DistributedFileSystem extends FileSystem {
+	DFSClient dfs;
+	// 这里调用应该不用太关注了, 
+	public void initialize(URI uri, Configuration conf) throws IOException {
+		this.dfs = new DFSClient(uri, conf, statistics);
+	}
+	public FSDataInputStream open(Path f, final int bufferSize) throws IOException {
+		Path absF = fixRelativePart(f);
+		return new FileSystemLinkResolver<FSDataInputStream>() {
+			@Override
+			public FSDataInputStream doCall(final Path p) throws IOException, UnresolvedLinkException {
+				final DFSInputStream dfsis = dfs.open(getPathName(p), bufferSize, verifyChecksum);
+				return dfs.createWrappedInputStream(dfsis);
+			}
+		}.resolve(this, absF);
+	}
+	
+	public FSDataOutputStream create(final Path f, final FsPermission permission, final EnumSet<CreateFlag> cflags, final int bufferSize, final short replication, final long blockSize, final Progressable progress, final ChecksumOpt checksumOpt) throws IOException {
+		Path absF = fixRelativePart(f);
+		return new FileSystemLinkResolver<FSDataOutputStream>() {
+			public FSDataOutputStream doCall(final Path p) throws IOException, UnresolvedLinkException {
+				final DFSOutputStream dfsos = dfs.create(getPathName(p), permission, cflags, replication, blockSize, progress, bufferSize, checksumOpt);
+				return dfs.createWrappedOutputStream(dfsos, statistics);
+			}
+		}.resolve(this, absF);
+	}
+  
+}
+// 此类在 rpc 章节中也有
+public class org.apache.hadoop.hdfs.DFSClient implements java.io.Closeable, RemotePeerFactory, DataEncryptionKeyFactory {
+	final org.apache.hadoop.hdfs.protocol.ClientProtocol namenode;
+	final SocketFactory socketFactory;
+	public DFSClient(URI nameNodeUri, Configuration conf, FileSystem.Statistics stats) throws IOException {
+		this(nameNodeUri, null, conf, stats);
+	}
+	public DFSClient(URI nameNodeUri, ClientProtocol rpcNamenode, Configuration conf, FileSystem.Statistics stats) throws IOException {
+		this.socketFactory = NetUtils.getSocketFactory(conf, ClientProtocol.class);
+		NameNodeProxies.ProxyAndInfo<ClientProtocol> proxyInfo = NameNodeProxies.createProxy(conf, nameNodeUri, ClientProtocol.class, nnFallbackToSimpleAuth);
+		this.namenode = proxyInfo.getProxy();
+	}
+
+	public DFSInputStream open(String src, int buffersize, boolean verifyChecksum) throws IOException, UnresolvedLinkException {
+		return new DFSInputStream(this, src, verifyChecksum);
+	}  
+	public HdfsDataInputStream createWrappedInputStream(DFSInputStream dfsis) throws IOException {
+		return new HdfsDataInputStream(dfsis);
+	}
+	public HdfsDataOutputStream createWrappedOutputStream(DFSOutputStream dfsos, FileSystem.Statistics statistics, long startPos) throws IOException {
+		return new HdfsDataOutputStream(dfsos, statistics, startPos);
+	}
+	public LocatedBlocks getLocatedBlocks(String src, long start) throws IOException {
+		return getLocatedBlocks(src, start, dfsClientConf.prefetchSize);
+	}
+	public LocatedBlocks getLocatedBlocks(String src, long start, long length) throws IOException {
+		return callGetBlockLocations(namenode, src, start, length);
+	}
+	static LocatedBlocks callGetBlockLocations(ClientProtocol namenode,String src, long start, long length) throws IOException {
+		return namenode.getBlockLocations(src, start, length);
+	}
+	public DFSOutputStream create(String src, FsPermission permission, EnumSet<CreateFlag> flag, short replication, long blockSize, Progressable progress, int buffersize, ChecksumOpt checksumOpt) throws IOException {
+		return create(src, permission, flag, true, replication, blockSize, progress, buffersize, checksumOpt, null);
+	}
+	public DFSOutputStream create(String src, FsPermission permission, EnumSet<CreateFlag> flag, boolean createParent, short replication, long blockSize, Progressable progress, int buffersize, ChecksumOpt checksumOpt, InetSocketAddress[] favoredNodes) throws IOException {
+		final DFSOutputStream result = DFSOutputStream.newStreamForCreate(this, src, masked, flag, createParent, replication, blockSize, progress, buffersize, dfsClientConf.createChecksum(checksumOpt), getFavoredNodesStr(favoredNodes));
+		return result;
+	}
+
+	
+	public Peer newConnectedPeer(InetSocketAddress addr, Token<BlockTokenIdentifier> blockToken, DatanodeID datanodeId) throws IOException {
+		Peer peer = null;
+		Socket sock = socketFactory.createSocket();
+		NetUtils.connect(sock, addr, getRandomLocalInterfaceAddr(), dfsClientConf.socketTimeout);// addr --> 192.168.58.130:50010 这里是真正建立连接(block 级别的)
+		peer = TcpPeerServer.peerFromSocketAndKey(saslClient, sock, this, blockToken, datanodeId);// NioInetPeer(Socket[addr=/192.168.58.130,port=50010,localport=45281])
+		return peer;
+	}
+
+}
+
+public class org.apache.hadoop.fs.FSDataInputStream extends DataInputStream implements Seekable, PositionedReadable, ByteBufferReadable, HasFileDescriptor, CanSetDropBehind, CanSetReadahead, HasEnhancedByteBufferAccess, CanUnbuffer {
+	public FSDataInputStream(InputStream in) {
+		super(in);
+	}
+}
+
+public class org.apache.hadoop.hdfs.client.HdfsDataInputStream extends FSDataInputStream {
+	public HdfsDataInputStream(DFSInputStream in) throws IOException {
+		super(in);
+	}
+}
+public class org.apache.hadoop.hdfs.client.HdfsDataOutputStream extends FSDataOutputStream {
+	public HdfsDataOutputStream(DFSOutputStream out, FileSystem.Statistics stats, long startPosition) throws IOException {
+		super(out, stats, startPosition);
+	}
+}
+
+public abstract class org.apache.hadoop.fs.FileSystemLinkResolver<T> {
+	public T resolve(final FileSystem filesys, final Path path) throws IOException {
+		Path p = path;
+		FileSystem fs = filesys;
+		for (boolean isLink = true; isLink;) {
+			T in = doCall(p);
+			isLink = false;
+			return in;
+		}
+	}
+}
+
+=================================================
+从这里的 read 方法撸就可以了, 上面是 java 的包装流
+public class org.apache.hadoop.hdfs.DFSInputStream extends FSInputStream implements ByteBufferReadable, CanSetDropBehind, CanSetReadahead, HasEnhancedByteBufferAccess, CanUnbuffer {
+	private DatanodeInfo currentNode = null;
+	private LocatedBlocks locatedBlocks = null;
+	DFSInputStream(DFSClient dfsClient, String src, boolean verifyChecksum) throws IOException, UnresolvedLinkException {
+		this.dfsClient = dfsClient;
+		this.verifyChecksum = verifyChecksum;
+		this.src = src;
+		openInfo();
+	}
+	void openInfo() throws IOException, UnresolvedLinkException {
+		synchronized(infoLock) {
+			lastBlockBeingWrittenLength = fetchLocatedBlocksAndGetLastBlockLength();
+			int retriesForLastBlockLength = dfsClient.getConf().retryTimesForGetLastBlockLength;
+			while (retriesForLastBlockLength > 0) {
+				if (lastBlockBeingWrittenLength == -1) {
+					waitFor(dfsClient.getConf().retryIntervalForGetLastBlockLength);
+					lastBlockBeingWrittenLength = fetchLocatedBlocksAndGetLastBlockLength();
+				} else {
+					break;
+				}
+				retriesForLastBlockLength--;
+			}
+		}
+	}
+	public synchronized int read(final byte buf[], int off, int len) throws IOException {
+		ReaderStrategy byteArrayReader = new ByteArrayStrategy(buf);
+		return readWithStrategy(byteArrayReader, off, len);
+	}
+	private long fetchLocatedBlocksAndGetLastBlockLength() throws IOException {
+		final LocatedBlocks newInfo = dfsClient.getLocatedBlocks(src, 0);
+		locatedBlocks = newInfo;
+		long lastBlockBeingWrittenLength = 0;
+		if (!locatedBlocks.isLastBlockComplete()) {
+			final LocatedBlock last = locatedBlocks.getLastLocatedBlock();
+			if (last != null) {
+				final long len = readBlockLength(last);
+				last.getBlock().setNumBytes(len);
+				lastBlockBeingWrittenLength = len; 
+			}
+		}
+		return lastBlockBeingWrittenLength;
+	}
+  
+	private synchronized int readWithStrategy(ReaderStrategy strategy, int off, int len) throws IOException {
+		Map<ExtendedBlock,Set<DatanodeInfo>> corruptedBlockMap = new HashMap<ExtendedBlock, Set<DatanodeInfo>>();
+		if (pos < getFileLength()) {
+			int retries = 2;
+			while (retries > 0) {
+				if (pos > blockEnd || currentNode == null) {
+					currentNode = blockSeekTo(pos);
+				}
+				int realLen = (int) Math.min(len, (blockEnd - pos + 1L));
+				int result = readBuffer(strategy, off, realLen, corruptedBlockMap);          
+				pos += result;
+				return result;
+			}
+		}
+		return -1;
+	}
+	private synchronized int readBuffer(ReaderStrategy reader, int off, int len, Map<ExtendedBlock, Set<DatanodeInfo>> corruptedBlockMap) throws IOException {
+		while (true) {
+			return reader.doRead(blockReader, off, len);
+		}
+	}
+	private interface ReaderStrategy {
+		public int doRead(BlockReader blockReader, int off, int len) throws ChecksumException, IOException;
+	}
+	private synchronized DatanodeInfo blockSeekTo(long target) throws IOException {
+		closeCurrentBlockReader();
+		DatanodeInfo chosenNode = null;
+		while (true) {
+			LocatedBlock targetBlock = getBlockAt(target);
+			this.pos = target;
+			this.blockEnd = targetBlock.getStartOffset() + targetBlock.getBlockSize() - 1;
+			this.currentLocatedBlock = targetBlock;
+			DNAddrPair retval = chooseDataNode(targetBlock, null);// 似乎可以理解为工具方法, 选择 datanode 并创建网络连接, 因为 LocatedBlock 中就包含了 所有的 datanode 信息
+			chosenNode = retval.info;
+			InetSocketAddress targetAddr = retval.addr;
+			ExtendedBlock blk = targetBlock.getBlock();
+			blockReader = new BlockReaderFactory(dfsClient.getConf()).setInetSocketAddress(targetAddr).setRemotePeerFactory(dfsClient).setDatanodeInfo(chosenNode).setStorageType(storageType).setFileName(src).setBlock(blk).setBlockToken(accessToken).setStartOffset(offsetIntoBlock).setVerifyChecksum(verifyChecksum).setClientName(dfsClient.clientName).setLength(blk.getNumBytes() - offsetIntoBlock).setCachingStrategy(curCachingStrategy).setAllowShortCircuitLocalReads(!shortCircuitForbidden).setClientCacheContext(dfsClient.getClientContext()).setUserGroupInformation(dfsClient.ugi).setConfiguration(dfsClient.getConfiguration()).
+				.build();
+			return chosenNode;
+		}
+	}	
+	private LocatedBlock getBlockAt(long offset) throws IOException {
+		synchronized(infoLock) {
+			final LocatedBlock blk;
+			if (offset >= locatedBlocks.getFileLength()) {
+				blk = locatedBlocks.getLastLocatedBlock();
+			}else {
+				int targetBlockIdx = locatedBlocks.findBlock(offset);
+				if (targetBlockIdx < 0) { // block is not cached
+					targetBlockIdx = LocatedBlocks.getInsertIndex(targetBlockIdx);
+					final LocatedBlocks newBlocks = dfsClient.getLocatedBlocks(src, offset);
+					locatedBlocks.insertRange(targetBlockIdx, newBlocks.getLocatedBlocks());
+				}
+				blk = locatedBlocks.get(targetBlockIdx);
+			}
+			return blk;
+		}
+	}	
+	private class ByteArrayStrategy implements ReaderStrategy {
+		final byte[] buf;
+		public ByteArrayStrategy(byte[] buf) {
+			this.buf = buf;
+		}
+		public int doRead(BlockReader blockReader, int off, int len) throws ChecksumException, IOException {
+			int nRead = blockReader.read(buf, off, len);
+			return nRead;
+		}
+	}
+}
+
+public class org.apache.hadoop.hdfs.DFSOutputStream extends FSOutputSummer implements Syncable, CanSetDropBehind {
+	private final DFSClient dfsClient;
+	private Socket s;
+	private final LinkedList<DFSPacket> dataQueue = new LinkedList<DFSPacket>();
+	static DFSOutputStream newStreamForCreate(DFSClient dfsClient, String src, FsPermission masked, EnumSet<CreateFlag> flag, boolean createParent, short replication, long blockSize, Progressable progress, int buffersize, DataChecksum checksum, String[] favoredNodes) throws IOException {
+		HdfsFileStatus stat = dfsClient.namenode.create(src, masked, dfsClient.clientName, new EnumSetWritable<CreateFlag>(flag), createParent, replication, blockSize, SUPPORTED_CRYPTO_VERSIONS);
+		final DFSOutputStream out = new DFSOutputStream(dfsClient, src, stat, flag, progress, checksum, favoredNodes);
+		out.start();
+		return out;
+	}
+	private DFSOutputStream(DFSClient dfsClient, String src, HdfsFileStatus stat, EnumSet<CreateFlag> flag, Progressable progress, DataChecksum checksum, String[] favoredNodes) throws IOException {
+		this(dfsClient, src, progress, stat, checksum);
+		streamer = new DataStreamer(stat, null);
+	}
+	private DFSOutputStream(DFSClient dfsClient, String src, Progressable progress, HdfsFileStatus stat, DataChecksum checksum) throws IOException {
+		super(getChecksum4Compute(checksum, stat));
+		this.dfsClient = dfsClient;
+		this.src = src;
+		this.byteArrayManager = dfsClient.getClientContext().getByteArrayManager();
+	}
+	private DFSPacket createHeartbeatPacket() throws InterruptedIOException {
+		final byte[] buf = new byte[PacketHeader.PKT_MAX_HEADER_LEN];
+		return new DFSPacket(buf, 0, 0, DFSPacket.HEART_BEAT_SEQNO, getChecksumSize(), false);
+	}
+
+	class DataStreamer extends Daemon {
+	    private volatile ExtendedBlock block; // its length is number of bytes acked
+		private DataOutputStream blockStream;
+		private ResponseProcessor response = null;
+		private volatile DatanodeInfo[] nodes = null; // list of targets for current block
+		private volatile String[] storageIDs = null;	
+		private DataStreamer(HdfsFileStatus stat, ExtendedBlock block) {
+			this.block = block;
+		}
+		public void run() {
+			while (!streamerClosed && dfsClient.clientRunning) {
+				DFSPacket one;
+				if (dataQueue.isEmpty()) {
+					one = createHeartbeatPacket();
+				} else {
+					one = dataQueue.getFirst(); // regular data packet
+				}
+	            setPipeline(nextBlockOutputStream());
+				initDataStreaming();          
+				if (!one.isHeartbeatPacket()) {
+					dataQueue.removeFirst();
+					ackQueue.addLast(one);
+				}
+				one.writeTo(blockStream);
+				blockStream.flush();   
+			}
+		}
+		private void initDataStreaming() {
+			response = new ResponseProcessor(nodes);
+			response.start();
+			stage = BlockConstructionStage.DATA_STREAMING;
+		}
+		private void setPipeline(LocatedBlock lb) {
+			setPipeline(lb.getLocations(), lb.getStorageTypes(), lb.getStorageIDs());
+		}
+		private void setPipeline(DatanodeInfo[] nodes, StorageType[] storageTypes, String[] storageIDs) {
+			this.nodes = nodes;
+			this.storageTypes = storageTypes;
+			this.storageIDs = storageIDs;
+		}
+		private LocatedBlock nextBlockOutputStream() throws IOException {
+			LocatedBlock lb = null;
+			DatanodeInfo[] nodes = null;
+			StorageType[] storageTypes = null;
+			int count = dfsClient.getConf().nBlockWriteRetry;
+			boolean success = false;
+			ExtendedBlock oldBlock = block;
+			do {
+				DatanodeInfo[] excluded = excludedNodes.getAllPresent(excludedNodes.asMap().keySet()).keySet().toArray(new DatanodeInfo[0]);
+				block = oldBlock;
+				lb = locateFollowingBlock(excluded.length > 0 ? excluded : null);
+				block = lb.getBlock();
+				nodes = lb.getLocations();
+				storageTypes = lb.getStorageTypes();
+				success = createBlockOutputStream(nodes, storageTypes, 0L, false);
+			} while (!success && --count >= 0);
+			return lb;
+		}
+		
+		private boolean createBlockOutputStream(DatanodeInfo[] nodes, StorageType[] nodeStorageTypes, long newGS, boolean recoveryFlag) {      
+			while (true) {
+				s = createSocketForPipeline(nodes[0], nodes.length, dfsClient);
+				OutputStream unbufOut = NetUtils.getOutputStream(s, writeTimeout);
+				InputStream unbufIn = NetUtils.getInputStream(s);
+				IOStreamPair saslStreams = dfsClient.saslClient.socketSend(s, unbufOut, unbufIn, dfsClient, accessToken, nodes[0]);
+				unbufOut = saslStreams.out;
+				unbufIn = saslStreams.in;
+				DataOutputStream out = new DataOutputStream(new BufferedOutputStream(unbufOut, HdfsConstants.SMALL_BUFFER_SIZE));
+				blockReplyStream = new DataInputStream(unbufIn);
+				BlockConstructionStage bcs = recoveryFlag? stage.getRecoveryStage(): stage;
+				ExtendedBlock blockCopy = new ExtendedBlock(block);
+				new Sender(out).writeBlock(blockCopy, nodeStorageTypes[0], accessToken, dfsClient.clientName, nodes, nodeStorageTypes, null, bcs, nodes.length, block.getNumBytes(), bytesSent, newGS, checksum4WriteBlock, cachingStrategy.get(), isLazyPersistFile, (targetPinnings == null ? false : targetPinnings[0]), targetPinnings);
+				BlockOpResponseProto resp = BlockOpResponseProto.parseFrom(PBHelper.vintPrefixed(blockReplyStream));
+				blockStream = out;
+				return true;
+			}
+		}
+		private class ResponseProcessor extends Daemon {
+			private DatanodeInfo[] targets = null;
+			ResponseProcessor (DatanodeInfo[] targets) {
+				this.targets = targets;
+			}
+			public void run() {
+				PipelineAck ack = new PipelineAck();
+				while (!responderClosed && dfsClient.clientRunning && !isLastPacketInBlock) {
+					one = ackQueue.getFirst();
+					lastAckedSeqno = seqno;
+					ackQueue.removeFirst();
+					dataQueue.notifyAll();
+					one.releaseBuffer(byteArrayManager);
+				}
+			}
+		}
+	}
+	static Socket createSocketForPipeline(final DatanodeInfo first, final int length, final DFSClient client) throws IOException {
+		final String dnAddr = first.getXferAddr(client.getConf().connectToDnViaHostname);
+		final InetSocketAddress isa = NetUtils.createSocketAddr(dnAddr);
+		final Socket sock = client.socketFactory.createSocket();
+		final int timeout = client.getDatanodeReadTimeout(length);
+		NetUtils.connect(sock, isa, client.getRandomLocalInterfaceAddr(), client.getConf().socketTimeout);
+		return sock;
+	}
+}
+public class Sender implements DataTransferProtocol {
+	private final DataOutputStream out;
+	public Sender(final DataOutputStream out) {
+		this.out = out;    
+	}	
+	public void writeBlock(final ExtendedBlock blk, final StorageType storageType, final Token<BlockTokenIdentifier> blockToken, final String clientName, final DatanodeInfo[] targets, final StorageType[] targetStorageTypes, final DatanodeInfo source, final BlockConstructionStage stage, final int pipelineSize, final long minBytesRcvd, final long maxBytesRcvd, final long latestGenerationStamp, DataChecksum requestedChecksum, final CachingStrategy cachingStrategy, final boolean allowLazyPersist, final boolean pinning, final boolean[] targetPinnings) throws IOException {
+		ClientOperationHeaderProto header = DataTransferProtoUtil.buildClientHeader(blk, clientName, blockToken);
+		OpWriteBlockProto.Builder proto = OpWriteBlockProto.newBuilder().setHeader(header).setStorageType(PBHelper.convertStorageType(storageType)).addAllTargets(PBHelper.convert(targets, 1)).addAllTargetStorageTypes(PBHelper.convertStorageTypes(targetStorageTypes, 1)).setStage(toProto(stage)).setPipelineSize(pipelineSize).setLatestGenerationStamp(latestGenerationStamp).setRequestedChecksum(checksumProto).setCachingStrategy(getCachingStrategy(cachingStrategy)).setAllowLazyPersist(allowLazyPersist).setPinning(pinning).addAllTargetPinnings(PBHelper.convert(targetPinnings, 1));    
+		proto.setSource(PBHelper.convertDatanodeInfo(source));
+		send(out, Op.WRITE_BLOCK, proto.build());
+	}
+	private static void send(final DataOutputStream out, final Op opcode, final Message proto) throws IOException {
+		op(out, opcode);
+		proto.writeDelimitedTo(out);
+		out.flush();
+	}
+	private static void op(final DataOutput out, final Op op) throws IOException {
+		out.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION);
+		op.write(out);
+	}
+}
+org.apache.hadoop.hdfs.class DFSPacket {
+	private byte[] buf;
+	DFSPacket(byte[] buf, int chunksPerPkt, long offsetInBlock, long seqno, int checksumSize, boolean lastPacketInBlock) {
+		this.buf = buf;
+	}
+	synchronized void writeTo(DataOutputStream stm) throws IOException {
+		PacketHeader header = new PacketHeader(pktLen, offsetInBlock, seqno, lastPacketInBlock, dataLen, syncBlock);
+		System.arraycopy(header.getBytes(), 0, buf, headerStart, header.getSerializedSize());
+		stm.write(buf, headerStart, header.getSerializedSize() + checksumLen + dataLen);
+	}
+}
+public class BlockReaderFactory implements ShortCircuitReplicaCreator {
+	public BlockReader build() throws IOException {
+		return getRemoteBlockReaderFromTcp();
+	}
+	private BlockReader getRemoteBlockReaderFromTcp() throws IOException {
+		BlockReader blockReader = null;
+		while (true) {
+			BlockReaderPeer curPeer = null;
+			Peer peer = null;
+			curPeer = nextTcpPeer();
+			if (curPeer.fromCache) remainingCacheTries--;
+			peer = curPeer.peer;
+			blockReader = getRemoteBlockReader(peer);
+			return blockReader;
+		}
+	}
+	private BlockReader getRemoteBlockReader(Peer peer) throws IOException {
+		return RemoteBlockReader2.newBlockReader(fileName, block, token, startOffset, length, verifyChecksum, clientName, peer, datanode, clientContext.getPeerCache(), cachingStrategy);
+	}
+	private BlockReaderPeer nextTcpPeer() throws IOException {
+		if (remainingCacheTries > 0) {
+			Peer peer = clientContext.getPeerCache().get(datanode, false);
+			if (peer != null) {
+				return new BlockReaderPeer(peer, true);
+			}
+		}
+		Peer peer = remotePeerFactory.newConnectedPeer(inetSocketAddress, token, datanode);
+		return new BlockReaderPeer(peer, false);
+	}
+}
+
+public class org.apache.hadoop.hdfs.RemoteBlockReader2 implements BlockReader {
+	private final PacketReceiver packetReceiver = new PacketReceiver(true);
+	protected RemoteBlockReader2(String file, String bpid, long blockId, DataChecksum checksum, boolean verifyChecksum, long startOffset, long firstChunkOffset, long bytesToRead, Peer peer, DatanodeID datanodeID, PeerCache peerCache) {
+		this.isLocal = DFSClient.isLocalAddress(NetUtils.createSocketAddr(datanodeID.getXferAddr()));
+		this.peer = peer;
+		this.datanodeID = datanodeID;
+		this.in = peer.getInputStreamChannel();
+		this.checksum = checksum;
+		this.verifyChecksum = verifyChecksum;
+		this.startOffset = Math.max( startOffset, 0 );
+		this.filename = file;
+		this.peerCache = peerCache;
+		this.blockId = blockId;
+		this.bytesNeededToFinish = bytesToRead + (startOffset - firstChunkOffset);
+		bytesPerChecksum = this.checksum.getBytesPerChecksum();
+		checksumSize = this.checksum.getChecksumSize();
+	}
+	public static BlockReader newBlockReader(String file, ExtendedBlock block, Token<BlockTokenIdentifier> blockToken, long startOffset, long len, boolean verifyChecksum, String clientName, Peer peer, DatanodeID datanodeID, PeerCache peerCache, CachingStrategy cachingStrategy) throws IOException {
+		final DataOutputStream out = new DataOutputStream(new BufferedOutputStream(peer.getOutputStream()));
+		new Sender(out).readBlock(block, blockToken, clientName, startOffset, len, verifyChecksum, cachingStrategy);
+		DataInputStream in = new DataInputStream(peer.getInputStream());
+		BlockOpResponseProto status = BlockOpResponseProto.parseFrom(PBHelper.vintPrefixed(in));
+		ReadOpChecksumInfoProto checksumInfo = status.getReadOpChecksumInfo();
+		long firstChunkOffset = checksumInfo.getChunkOffset();
+		return new RemoteBlockReader2(file, block.getBlockPoolId(), block.getBlockId(), checksum, verifyChecksum, startOffset, firstChunkOffset, len, peer, datanodeID, peerCache);
+	}
+	public synchronized int read(byte[] buf, int off, int len) throws IOException {
+		if (curDataSlice == null || curDataSlice.remaining() == 0 && bytesNeededToFinish > 0) {
+			readNextPacket();
+		}
+		int nRead = Math.min(curDataSlice.remaining(), len);
+		curDataSlice.get(buf, off, nRead);
+		return nRead;
+	}
+	private void readNextPacket() throws IOException {
+		packetReceiver.receiveNextPacket(in);
+		PacketHeader curHeader = packetReceiver.getHeader();
+		curDataSlice = packetReceiver.getDataSlice();
+		if (curHeader.getDataLen() > 0) {
+			int chunks = 1 + (curHeader.getDataLen() - 1) / bytesPerChecksum;
+			int checksumsLen = chunks * checksumSize;      
+			lastSeqNo = curHeader.getSeqno();
+			bytesNeededToFinish -= curHeader.getDataLen();
+		}
+		if (curHeader.getOffsetInBlock() < startOffset) {
+			int newPos = (int) (startOffset - curHeader.getOffsetInBlock());
+			curDataSlice.position(newPos);
+		}
+		if (bytesNeededToFinish <= 0) {
+			readTrailingEmptyPacket();
+			sendReadResult(Status.SUCCESS);
+		}
+	}
+}
+public class org.apache.hadoop.hdfs.protocol.datatransfer.PacketReceiver implements Closeable {
+	private ByteBuffer curPacketBuf = null;
+	private ByteBuffer curChecksumSlice = null;
+	private ByteBuffer curDataSlice = null;
+	public void receiveNextPacket(ReadableByteChannel in) throws IOException {
+		doRead(in, null);// 暂处往下不想再详细讨论了, 以后的吧
+	}
+}

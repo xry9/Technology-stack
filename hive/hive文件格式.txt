@@ -1,0 +1,153 @@
+2> sequencefile:
+	以K-V的形式作为存储格式。它比textfile更加紧凑，并且更加适合MR作业的输出格式。
+	sequencefile的压缩分为：I   记录压缩
+							II  块压缩     --> 块压缩有一个更好的压缩比
+								使用块压缩要进行设置
+									set hive.exec.compress.output=true;
+									set io.seqfile.compression.type=block;     (BLOCK)
+	但是：
+		由于textfile 和 sequencefile都是行水平上的文件存储格式，这样在我们只需要一列的时候也必须读取一整行，导致这两种格式也不是最好的优化格式。
+		为了解决这个行水平上的存储格式问题又引入了rcfile,orc以及parquet。
+3> RCFILE:  recod columnar file
+	a. 一种简短的柱状记录文件。也就是面向列的存储格式
+	b. 和sequencefile相似，也由二进制K-V对儿组成。
+	c. rcfile将数据分割成行组，一个或者多个行组被存储到hdfs上的一个文件中。
+	d. 之后rcfile将行组数据存储成柱状格式：(具体)--> 将第一行转成第一列，第二行转正第二列 ... ...
+	c. 这种存储格式是支持切分的，并且允许hive跳过不相关的数据从而更高效的得到结果
+
+4> orc: optimized row columnar
+	a. 一种优化的柱状记录文件，也就是对rcfile的优化
+	b. 在rcfile中数据被分割成了行组，而行组默认大小是4m。在orc中将数据分出了stripe，默认大小是256m。4->256可以提高读的吞吐量。(qeduencefile是1m)
+	c. 与rcfile另一个不同是roc可以识别特定的压缩器，这样就能依赖不同的类型而更加优化的进行压缩。
+	d. 它也存储的统计数据，比如MIN, MAX, SUM, and COUNT, on columns 以及 a lightweight index，这样就可以跳过不重要的行块了
+
+5> parquet:
+	a. 另一种柱状文件格式，和Orc有相似之处
+	b. 相比ORC，parquet支持Hadoop生态圈中更多的项目。(ORC只支持hive和pig)
+
+建议：1>  如果在你的Hadoop环境中hive是主要的项目，那么建议使用ORC。
+	      如果在你的Hadoop环境中使用了多个工具，那么建议使用parquet
+	  2>  har,hadoop archive file是hdfs上另一种归档文件格式，使用与大量小文件直接存储于hdfs的情况(hdfs不适用于大量小文件)
+		  但是由于不支持切片，兼容性等问题，har并不是很受欢迎
+		  
+		  
+		  
+		  
+		  
+		  
+		  
+压缩
+------------
+	
+	Compression		Codec											Extension		Splittable
+
+	Deflate			org.apache.hadoop.io.compress.DefaultCodec		.deflate		N
+	GZip			org.apache.hadoop.io.compress.GzipCodec			.gz				N
+	Bzip2			org.apache.hadoop.io.compress.BZip2Codec		.gz				Y
+	LZO				com.hadoop.compression.lzo.LzopCodec			.lzo			N
+	LZ4				org.apache.hadoop.io.compress.Lz4Codec			.lz4			N
+	Snappy			org.apache.hadoop.io.compress.SnappyCodec		.snappy			N
+	
+ 比较：
+	1> hadoop 默认是deflate。压缩效率比GZip高，但是消耗CPU。
+	2> Bzip2支持切片，但是消耗CPU比较大导致速度比较慢
+	3> Lzo没有本地实现
+	4> 如果在压缩比和时间之间找一个平衡的化，LZ4和Snappy是比较好的选择。
+	5> 由于大多数压缩文件都不支持切片，建议hdfs上的大文件不要使用压缩
+	6> 压缩器的指定可以再mapred-site.xml，hive-site.xml或者hive CLI中指定
+
+
+hive_压缩
+------------
+	1> hive底层会触发MR作业。hive的压缩技术能够有效的减少map与reduce之间数据的传输量，以及减小最终输出到hdfs上的结果数据的大小。
+	2> 使用压缩可以提升hive的查询性能。想要对MR作业的中间文件进行压缩我们需要进行属性设定(在CLI和hive-site.xml中两种途径)
+		a.  SET hive.exec.compress.intermediate=true
+			SET hive.intermediate.compression.codec=org.apache.hadoop.io.compress.SnappyCodec
+			--> 中间的压缩只能节省job中涉及到的特定的空间磁盘。
+			SET hive.exec.compress.output=true
+			SET mapred.output.compression.codec=org.apache.hadoop.io.compress.SnappyCodec
+			--> 对最终输出的压缩，这样完成了进一步的压缩     --> 这个属性也可以在hive-site.xml中设定
+
+			
+			
+			
+			
+			
+			
+			
+			
+Hadoop生态圈中的小文件
+---------------------
+众所周知，Hadoop是不适合用于大量小文件的场景的
+
+	a. Hadoop自己对于大量小文件也提供了一些应对方式：
+			Hadoop Archive and HAR:     对小文件进行打包的工具
+			SequenceFile format:		可以压缩小文件称为大文件
+			CombineFileInputFormat:		在小文件输入前进行合并
+
+	c. 在hive中我们可以通过配置属性避免一些小文件的产生
+		hive.merge.mapfiles:               job的最终输出之前合并小文件默认就是TRUE
+		hive.merge.mapredfiles:            map的输出合并小文件，默认是false
+		hive.merge.size.per.task:          job的输出合并文件的大小，默认是256000000
+		hive.merge.smallfiles.avgsize:     触发文件合并的阀，默认是16000000
+		注：添加了输出合并的选择，hive会生成额外的MR对数据进行合并，也就是避免了小文件的产生但是作业中会触发更多的MR	
+
+		
+		
+Hadoop的运行模式分为：本地模式；伪分布模式；完全分布模式
+----------------------
+   触发完全分布式进行MR作业的时候，触发完全分布式也是需要资源支持的，但处理数据使用的资源比触发完全分布模式的资源的时候就可以使用本地模式
+   当满足一下情况的时适合本地模式：
+		a. 总的job数据处理量大小 < hive.exec.mode.local.auto.inputbytes.max
+		b. 总的map任务数         < hive.exec.mode.local.auto.input.files.max
+		c. 总的reduce数          是 1或0
+	hive自动转化job到本地模式运行需要的设置：
+		SET hive.exec.mode.local.auto=true; --default false
+		SET hive.exec.mode.local.auto.inputbytes.max=50000000;
+		SET hive.exec.mode.local.auto.input.files.max=5;
+
+
+JVM reuse
+-----------------
+	1> 默认情况下Hadoop为每一个map或reduce任务触发一个jvm，之后map会reduce任务是并行运算的。
+	   当任务是轻量级的时候触发jvm比运算的时间还要少。此时适合选择jvm重用而不是并行运算
+	2> jvm重用适用于同一个job中的map或reduce任务。
+	3> 为了保证重用，我们需要设定job中jvm运行的任务的最大数。属性mapred.job.reuse.jvm.num.tasks(默认是1，也就是一个jvm运行一个任务)
+	   举例：
+			SET mapred.job.reuse.jvm.num.tasks=5;
+		注：如果设为-1，就是job中所有的任务都运行在同一个jvm中
+
+并行运算Parallel execution
+-----------------------
+hive中查询指令默认是几个按序的阶段，但是这些阶段并不都是相互依赖的。反而，他们可以并行运算来节省job的整个运行时间。
+启动并行执行：
+		SET hive.exec.parallel=true;                  -—> default false
+		SET hive.exec.parallel.thread.number=16;      --> 默认最大的并行数量是8
+注：启动并行执行有利于提高集群的利用率，但是当集群当前的状态利用率已经非常高速时候再启动并行执行的话并不一定再能提升多少效率
+join优化
+------------------
+	默认是reduce端连接，使用于big table。
+	mapjoin适用于连接操作中的一个表很小，而且可以在内存中容纳。
+	0.7之后可以自动转换成mapjoin。需要开启如下属性:
+
+	jdbc:hive2://> SET hive.auto.convert.join=true; --default false
+	jdbc:hive2://> SET hive.mapjoin.smalltable.filesize=600000000; --default 25M
+	jdbc:hive2://> SET hive.auto.convert.join.noconditionaltask=true; --default false. Set to true so that map join hint is not needed
+	jdbc:hive2://> SET hive.auto.convert.join.noconditionaltask.size=10000000; --The default value controls the size of table to fit in memory
+
+	bucket map join :
+		jdbc:hive2://> SET hive.auto.convert.join=true; --default false
+		jdbc:hive2://> SET hive.optimize.bucketmapjoin=true; --default false
+
+	Sort merge bucket (SMB) join
+		jdbc:hive2://> SET hive.input.format=org.apache.hadoop.hive.ql.io.BucketizedHiveInputFormat;
+		jdbc:hive2://> SET hive.auto.convert.sortmerge.join=true;
+		jdbc:hive2://> SET hive.optimize.bucketmapjoin=true;
+		jdbc:hive2://> SET hive.optimize.bucketmapjoin.sortedmerge=true;
+		jdbc:hive2://> SET hive.auto.convert.sortmerge.join.noconditionaltask=true;
+	
+	skew join:倾斜连接
+	jdbc:hive2://> SET hive.optimize.skewjoin=true;	--If there is data skew in join, set it to true. Default is false.
+	jdbc:hive2://> SET hive.skewjoin.key=100000;	--This is the default value. If the number of key is bigger than
+													--this, the new keys will send to the other unused reducers.
+				   SET hive.groupby.skewindata=true;

@@ -1,0 +1,23 @@
+
+eclipse中加入System.setProperty("hadoop.home.dir", "D:\\java\\hadoop\\hadoop-2.6.0\\")，即可提交spark任务到集群，src中加入hive-site.xml，即可创建HiveContext
+========
+./hbase mapredcp 会列出与mapreduce集成用的jar包。./hbase classpath
+========
+========
+HBase_权威指南:
+Put类有一个rowlock的可选参数，在频繁地修改某些行，用户有必要创建一个RowLock实例来防止其它用户修改此行
+76页 KeyValue类：建议将KeyValue和它的比较器都设计为Hbase内部使用
+86页 原子性操作compare-and-set
+110页 行锁
+153页 自定义过滤器
+http://www.code123.cc/1503.html
+已读到198页
+========
+hadoop fs -getmerge
+========
+HBase_权威指南 68页下：推荐用户只创建一次THbase实例，而且是每个线程创建一个，然后在客户端应用的生命周期内复用这个对象
+Put heapSize()
+========
+dfs -count 
+鑫哥说kylin只支持15个维度，kylin官方称底层要用kudu
+========

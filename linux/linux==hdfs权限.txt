@@ -1,0 +1,95 @@
+userdel -rf db2
+passwd -d bd1	--删除密码
+创建一个用户，它所在组名与用户名相同
+groupadd bdgroup
+useradd -g bdgroup db2
+gpasswd bdgroup	--添加组密码
+gpasswd -r bdgroup	--取消组密码
+gpasswd -a bigdata bdgroup	--添加组成员
+gpasswd -d bigdata bdgroup	--删除组成员
+
+usermod -g bigdata tyx	--修改用户所在组
+
+gpasswd -a bigdata tyx	--将用户添加到指定组，但是/etc/passwd文件中bigdata账户所在组并没有变，而且创建的文件还是属于之前组（就是所谓主组和附加组吧）,用groups命令查看是属于两个组的。whoami查看用户名
+gpasswd -d bigdata tyx	--将用户从指定组删除
+groups tyx
+查看组内多少用户vim /etc/group应该可以,或groups命令
+chown 用户:组 文件	--更改文件所属用户，而且这个用用户在不在那个组里好像无所谓
+chown -R tyx:tyx compile
+=====================================
+组是用户的集合，在系统中组有两种：私有组和标准组，当创建用户的时候，没有为其制定属于哪个组，Linux 就会建立一个和用户同名的私有组，此私有组中只含有该用户。
+若使用标准组，在创建新用户时，为其制定属于哪个组。当一个用户属于多个组时，其登陆后所属的组称为主组，其他的组称为附加组。
+----
+useradd -g tyx tyx3:
+用tyx3创建的文件所属组是tyx，但是passwd文件 tyx3:x:503:500::/home/tyx3:/bin/bash
+=============================================
+hadoop fs -chown bd1:bdgroup /
+hdfs的组是有用的，而且和linux是对应的，只不过容易使人产生迷惑：
+	1>某目录权限是777，(Linux上)一个其它组的用户，当然可创建文件了，但是让人恶心的是该文件所属组同上级目录
+	2>不考虑supergroup情况，手动更改hdfs的组（linux里有的组），这样就可以和linux的权限管理对应上了，但是还有一个坑，动态变更用户在linux权限时（例如组的关系）要重启hdfs才能生效
+=================hive权限======================
+set hive.security.authorization.enabled=true;
+show grant;
+grant create on database db to user root;
+grant drop on table tab3 to user root;
+grant create to user root;	--全局制授权，创建库时
+grant select on table tab2 to user bd;
+grant select(name) on table tab2 to user bd;	--列级权限
+set system:user.name;
+revoke create on database default from user hadoop;
+
+hive> CREATE TABLE authorization_test_group(a int,b int);  
+hive> SELECT * FROM authorization_test_group;  
+hive> GRANT SELECT on table authorization_test_group to group bd;  --linux同组用户生效
+hive> SELECT * FROM authorization_test_group;  
+
+hive> CREATE TABLE authentication_test_role (a int , b int);  
+hive> SELECT * FROM authentication_test_role;  
+hive> CREATE ROLE users_who_can_select_authentication_test_role;  
+hive> GRANT ROLE users_who_can_select_authentication_test_role TO USER bd;  
+hive> GRANT SELECT ON TABLE authentication_test_role  TO ROLE users_who_can_select_authentication_test_role;  
+hive> SELECT * FROM authentication_test_role;  
+
+给了table3 update权限就可insert into table tab3 select * from tab2;也可以load data 了
+
+==================================================
+vim core-site.xml
+<property>
+<name>dfs.permissions</name>
+<value>true</value>
+</property>
+<property>
+<name>hadoop.security.authorization</name>
+<value>true</value>
+</property>
+<property>
+<name>fs.permissions.umask-mode</name>
+<value>077</value>
+</property>
+
+vim hadoop-policy.xml
+<property>
+<name>security.client.protocol.acl</name>
+<value>tyx,tyx1,tyx2,tyx3,tyx4</value>
+</property>
+
+经初步验证acl这种权限与普通权限认证没什么不同，惟一不同就是把用能访问集群户固定下来了。控制任务提交security.job.client.protocol.acl
+==================================================
+hive权限：
+grant select on table tab1 to user tyx;
+GRANT CREATE ON DATABASE default TO user tyx;	--建表权限 
+库和表权限的应该就这两张元数据表db_privs,tbl_privs
+似乎是没有建库的权限
+表的update上load数据时用到
+所有用户都是public角色，给pulic role授权相当于给所有用户授权了（应该是）
+GRANT CREATE ON DATABASE default TO role admin;
+
+CREATE ROLE r1;
+GRANT CREATE ON DATABASE default TO role r1;
+默认会创建两个role:admin,pulic,相当于所有用户都是public角色，给public受权相当于给所有用户授权
+hive.users.in.admin.role，属性可以加入admin角色的用户
+一直没找到怎样获得建库权限
+<property>
+<name>hive.semantic.analyzer.hook</name>
+<value>com.xrjy.hiveHook.HiveAdminHook</value>
+</property>

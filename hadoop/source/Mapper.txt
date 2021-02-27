@@ -1,0 +1,390 @@
+1、大概说下 Counter 机制, 定义一个 enum 就好, Task 中 counters.findCounter(...).incr, Task 向 AppMaster 汇报 counters, job 的客户端自然能够拿到了 job.getCounters();
+2、最后 merge 时 MapTask.MapOutputBuffer#mergeParts 方法中
+if (combinerRunner == null || numSpills < minSpillsForCombine) {// 3
+	Merger.writeFile(kvIter, writer, reporter, job);
+} else {
+	combineCollector.setWriter(writer); combinerRunner.combine(kvIter, combineCollector);
+}
+merge 后产生两个文件 file.out.index, file.out
+
+class org.apache.hadoop.mapred.YarnChild {
+	public static void main(String[] args) throws Throwable {
+		String host = args[0];
+		int port = Integer.parseInt(args[1]);
+		final TaskAttemptID firstTaskid = TaskAttemptID.forName(args[2]);
+		long jvmIdLong = Long.parseLong(args[3]);
+		JVMId jvmId = new JVMId(firstTaskid.getJobID(), firstTaskid.getTaskType() == TaskType.MAP, jvmIdLong);
+		final JobConf job = new JobConf(MRJobConfig.JOB_CONF_FILE);// job.xml, 已经加载到了文件的内容, 应该是在同级目录下
+		final InetSocketAddress address = NetUtils.createSocketAddrForHost(host, port);
+		// 走的是 WritableRpcEngine 引擎
+		final TaskUmbilicalProtocol umbilical = (TaskUmbilicalProtocol)RPC.getProxy(TaskUmbilicalProtocol.class, TaskUmbilicalProtocol.versionID, address, job);
+		JvmContext context = new JvmContext(jvmId, "-1000");
+		Task myTask = umbilical.getTask(context);// 走了一圈 RPC 反序列回一个 task, 对 MapTask 主要是 TaskSplitIndex, AM 处理好
+		task = myTask.getTask();
+		final Task taskFinal = task;
+		taskFinal.run(job, umbilical);	
+	}
+}
+
+public class org.apache.hadoop.mapred.MapTask extends Task {
+	private TaskSplitIndex splitMetaInfo = new TaskSplitIndex();
+	public void run(final JobConf job, final TaskUmbilicalProtocol umbilical) throws IOException, ClassNotFoundException, InterruptedException {
+		this.umbilical = umbilical;
+		if (conf.getNumReduceTasks() == 0) {
+			mapPhase = getProgress().addPhase("map", 1.0f);
+		} else {
+			// If there are reducers then the entire attempt's progress will be split between the map phase (67%) and the sort phase (33%).
+			mapPhase = getProgress().addPhase("map", 0.667f);
+			sortPhase  = getProgress().addPhase("sort", 0.333f);
+		}
+		TaskReporter reporter = startReporter(umbilical); 
+		initialize(job, getJobID(), reporter, useNewApi);
+		runNewMapper(job, splitMetaInfo, umbilical, reporter);
+		done(umbilical, reporter);		
+	}
+	private <INKEY,INVALUE,OUTKEY,OUTVALUE> void runNewMapper(final JobConf job, final TaskSplitIndex splitIndex, final TaskUmbilicalProtocol umbilical, TaskReporter reporter ) throws IOException, ClassNotFoundException, InterruptedException {
+		org.apache.hadoop.mapreduce.TaskAttemptContext taskContext = new org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl(job, getTaskID(), reporter);
+		org.apache.hadoop.mapreduce.Mapper<INKEY,INVALUE,OUTKEY,OUTVALUE> mapper = (org.apache.hadoop.mapreduce.Mapper<INKEY,INVALUE,OUTKEY,OUTVALUE>) ReflectionUtils.newInstance(taskContext.getMapperClass(), job);
+		org.apache.hadoop.mapreduce.InputFormat<INKEY,INVALUE> inputFormat = (org.apache.hadoop.mapreduce.InputFormat<INKEY,INVALUE>) ReflectionUtils.newInstance(taskContext.getInputFormatClass(), job);
+		org.apache.hadoop.mapreduce.InputSplit split = getSplitDetails(new Path(splitIndex.getSplitLocation()), splitIndex.getStartOffset());
+		org.apache.hadoop.mapreduce.RecordReader<INKEY,INVALUE> input = new NewTrackingRecordReader<INKEY,INVALUE>(split, inputFormat, reporter, taskContext);
+		org.apache.hadoop.mapreduce.RecordWriter output = null;    
+		if (job.getNumReduceTasks() == 0) {
+			output = new NewDirectOutputCollector(taskContext, job, umbilical, reporter);
+		} else {
+			output = new NewOutputCollector(taskContext, job, umbilical, reporter);
+		}
+		org.apache.hadoop.mapreduce.MapContext<INKEY, INVALUE, OUTKEY, OUTVALUE> mapContext = new MapContextImpl<INKEY, INVALUE, OUTKEY, OUTVALUE>(job, getTaskID(), input, output, committer, reporter, split);
+		org.apache.hadoop.mapreduce.Mapper<INKEY,INVALUE,OUTKEY,OUTVALUE>.Context mapperContext = new WrappedMapper<INKEY, INVALUE, OUTKEY, OUTVALUE>().getMapContext(mapContext);
+		input.initialize(split, mapperContext);
+		mapper.run(mapperContext);
+		statusUpdate(umbilical);
+	}
+	private <T> T getSplitDetails(Path file, long offset) throws IOException {//hdfs://192.168.58.130:9000/tmp/hadoop-yarn/staging/tyx/.staging/job_1583118429632_0026/job.split
+		FileSystem fs = file.getFileSystem(conf);
+		FSDataInputStream inFile = fs.open(file);
+		inFile.seek(offset);
+		String className = StringInterner.weakIntern(Text.readString(inFile));
+		Class<T> cls = (Class<T>) conf.getClassByName(className);
+		SerializationFactory factory = new SerializationFactory(conf);
+		Deserializer<T> deserializer = (Deserializer<T>) factory.getDeserializer(cls);
+		deserializer.open(inFile);
+		T split = deserializer.deserialize(null);
+		long pos = inFile.getPos();
+		getCounters().findCounter(TaskCounter.SPLIT_RAW_BYTES).increment(pos - offset);
+		inFile.close();
+		return split;
+	}	
+	static class NewTrackingRecordReader<K,V> extends org.apache.hadoop.mapreduce.RecordReader<K,V> {
+		private final org.apache.hadoop.mapreduce.RecordReader<K,V> real;
+		private final org.apache.hadoop.mapreduce.Counter fileInputByteCounter;
+		NewTrackingRecordReader(org.apache.hadoop.mapreduce.InputSplit split, org.apache.hadoop.mapreduce.InputFormat<K, V> inputFormat, TaskReporter reporter, org.apache.hadoop.mapreduce.TaskAttemptContext taskContext) throws InterruptedException, IOException {
+			this.reporter = reporter;
+			private final List<Statistics> fsStats;
+			this.inputRecordCounter = reporter.getCounter(TaskCounter.MAP_INPUT_RECORDS);
+			this.fileInputByteCounter = reporter.getCounter(FileInputFormatCounter.BYTES_READ);
+			List <Statistics> matchedStats = null;
+			if (split instanceof org.apache.hadoop.mapreduce.lib.input.FileSplit) {
+				matchedStats = getFsStatistics(((org.apache.hadoop.mapreduce.lib.input.FileSplit) split).getPath(), taskContext.getConfiguration());
+			}
+			fsStats = matchedStats;
+			long bytesInPrev = getInputBytes(fsStats);
+			this.real = inputFormat.createRecordReader(split, taskContext);
+			long bytesInCurr = getInputBytes(fsStats);
+			fileInputByteCounter.increment(bytesInCurr - bytesInPrev);
+		}
+		public void initialize(org.apache.hadoop.mapreduce.InputSplit split, org.apache.hadoop.mapreduce.TaskAttemptContext context) throws IOException, InterruptedException {
+			long bytesInPrev = getInputBytes(fsStats);
+			real.initialize(split, context);
+			long bytesInCurr = getInputBytes(fsStats);
+			fileInputByteCounter.increment(bytesInCurr - bytesInPrev);
+		}
+		public boolean nextKeyValue() throws IOException, InterruptedException {
+			long bytesInPrev = getInputBytes(fsStats);
+			boolean result = real.nextKeyValue();
+			long bytesInCurr = getInputBytes(fsStats);
+			if (result) {
+				inputRecordCounter.increment(1);
+			}
+			fileInputByteCounter.increment(bytesInCurr - bytesInPrev);
+			reporter.setProgress(getProgress());
+			return result;
+		}
+		public K getCurrentKey() throws IOException, InterruptedException {
+			return real.getCurrentKey();
+		}
+		public V getCurrentValue() throws IOException, InterruptedException {
+			return real.getCurrentValue();
+		}
+		public float getProgress() throws IOException, InterruptedException {
+			return real.getProgress();
+		}
+	}
+	private class NewOutputCollector<K,V> extends org.apache.hadoop.mapreduce.RecordWriter<K,V> {
+		private final MapOutputCollector<K,V> collector;
+		private final org.apache.hadoop.mapreduce.Partitioner<K,V> partitioner;
+		final BlockingBuffer bb = new BlockingBuffer();
+		NewOutputCollector(org.apache.hadoop.mapreduce.JobContext jobContext, JobConf job, TaskUmbilicalProtocol umbilical, TaskReporter reporter) throws IOException, ClassNotFoundException {
+			collector = createSortingCollector(job, reporter);
+			partitions = jobContext.getNumReduceTasks();
+			partitioner = (org.apache.hadoop.mapreduce.Partitioner<K,V>) ReflectionUtils.newInstance(jobContext.getPartitionerClass(), job);
+		}
+		public void write(K key, V value) throws IOException, InterruptedException {
+			collector.collect(key, value, partitioner.getPartition(key, value, partitions));
+		}
+		private <KEY, VALUE> MapOutputCollector<KEY, VALUE> createSortingCollector(JobConf job, TaskReporter reporter) throws IOException, ClassNotFoundException {
+			MapOutputCollector.Context context = new MapOutputCollector.Context(this, job, reporter);
+			Class<?>[] collectorClasses = job.getClasses(JobContext.MAP_OUTPUT_COLLECTOR_CLASS_ATTR, MapOutputBuffer.class);
+			for (Class clazz : collectorClasses) {
+				Class<? extends MapOutputCollector> subclazz = clazz.asSubclass(MapOutputCollector.class);
+				MapOutputCollector<KEY, VALUE> collector = ReflectionUtils.newInstance(subclazz, job);
+				collector.init(context);
+				return collector;
+			}
+		}
+	}
+	public static class MapOutputBuffer<K extends Object, V extends Object> implements MapOutputCollector<K, V>, IndexedSortable {
+		private Serializer<K> keySerializer;
+		private Serializer<V> valSerializer;
+		public void init(MapOutputCollector.Context context) throws IOException, ClassNotFoundException {
+			combinerRunner = CombinerRunner.create(job, getTaskID(), combineInputCounter, reporter, null);
+		}
+		public synchronized void collect(K key, V value, final int partition) throws IOException {
+			reporter.progress();
+			checkSpillException();
+			bufferRemaining -= METASIZE;
+			if (bufferRemaining <= 0) {
+				spillLock.lock();
+				do {
+					if (!spillInProgress) {
+						final int kvbidx = 4 * kvindex;
+						final int kvbend = 4 * kvend;
+						final int bUsed = distanceTo(kvbidx, bufindex);
+						final boolean bufsoftlimit = bUsed >= softLimit;
+						if ((kvbend + METASIZE) % kvbuffer.length != equator - (equator % METASIZE)) {
+							resetSpill();
+							bufferRemaining = Math.min(distanceTo(bufindex, kvbidx) - 2 * METASIZE, softLimit - bUsed) - METASIZE;
+							continue;
+						} else if (bufsoftlimit && kvindex != kvend) {
+							startSpill();
+							final int avgRec = (int) (mapOutputByteCounter.getCounter() / mapOutputRecordCounter.getCounter());
+							final int distkvi = distanceTo(bufindex, kvbidx);
+							final int newPos = (bufindex + Math.max(2 * METASIZE - 1, Math.min(distkvi / 2, distkvi / (METASIZE + avgRec) * METASIZE))) % kvbuffer.length;
+							setEquator(newPos);
+							bufmark = bufindex = newPos;
+							final int serBound = 4 * kvend;
+							bufferRemaining = Math.min(distanceTo(bufend, newPos), Math.min(distanceTo(newPos, serBound), softLimit)) - 2 * METASIZE;
+						}
+					}
+				} while (false);
+				spillLock.unlock();
+			}
+			int keystart = bufindex;
+			keySerializer.serialize(key);
+			if (bufindex < keystart) {
+				bb.shiftBufferedKey();
+				keystart = 0;
+			}
+			final int valstart = bufindex;
+			valSerializer.serialize(value);
+			bb.write(b0, 0, 0);
+			int valend = bb.markRecord();
+			mapOutputRecordCounter.increment(1);
+			mapOutputByteCounter.increment(distanceTo(keystart, valend, bufvoid));
+			kvmeta.put(kvindex + PARTITION, partition);
+			kvmeta.put(kvindex + KEYSTART, keystart);
+			kvmeta.put(kvindex + VALSTART, valstart);
+			kvmeta.put(kvindex + VALLEN, distanceTo(valstart, valend));
+			kvindex = (kvindex - NMETA + kvmeta.capacity()) % kvmeta.capacity();
+		}
+		
+		private void sortAndSpill() throws IOException, ClassNotFoundException, InterruptedException {
+			final long size = distanceTo(bufstart, bufend, bufvoid) + partitions * APPROX_HEADER_LENGTH;
+			FSDataOutputStream out = null;
+			final SpillRecord spillRec = new SpillRecord(partitions);
+			final Path filename = mapOutputFile.getSpillFileForWrite(numSpills, size);
+			out = rfs.create(filename);
+			sorter.sort(MapOutputBuffer.this, mstart, mend, reporter);// 快排
+			for (int i = 0; i < partitions; ++i) {
+				IFile.Writer<K, V> writer = null;
+				long segmentStart = out.getPos();
+				FSDataOutputStream partitionOut = CryptoUtils.wrapIfNecessary(job, out);
+				writer = new Writer<K, V>(job, partitionOut, keyClass, valClass, codec, spilledRecordsCounter);
+				if (combinerRunner == null) {
+					while (spindex < mend && kvmeta.get(offsetFor(spindex % maxRec) + PARTITION) == i) {
+						writer.append(key, value);
+						++spindex;
+					}
+				} else {
+					combineCollector.setWriter(writer);
+					combinerRunner.combine(kvIter, combineCollector);
+				}
+				writer.close();
+				writer = null;
+			}
+		}
+
+	}
+}
+abstract public class org.apache.hadoop.mapred.Task implements Writable, Configurable {
+	protected static List<Statistics> getFsStatistics(Path path, Configuration conf) throws IOException {
+		List<Statistics> matchedStats = new ArrayList<FileSystem.Statistics>();
+		path = path.getFileSystem(conf).makeQualified(path);
+		String scheme = path.toUri().getScheme();
+		for (Statistics stats : FileSystem.getAllStatistics()) {
+			if (stats.getScheme().equals(scheme)) {
+				matchedStats.add(stats);
+			}
+		}
+		return matchedStats;
+	}
+	public void initialize(JobConf job, JobID id, Reporter reporter, boolean useNewApi) throws IOException, ClassNotFoundException, InterruptedException {
+		jobContext = new JobContextImpl(job, id, reporter);
+		taskContext = new TaskAttemptContextImpl(job, taskId, reporter);
+		outputFormat = ReflectionUtils.newInstance(taskContext.getOutputFormatClass(), job);
+		committer = outputFormat.getOutputCommitter(taskContext);
+	}	
+	public class TaskReporter extends org.apache.hadoop.mapreduce.StatusReporter implements Runnable, Reporter {
+		public void progress() {
+			setProgressFlag();
+		}
+	}
+}
+public class org.apache.hadoop.mapreduce.Mapper<KEYIN, VALUEIN, KEYOUT, VALUEOUT> {
+	public void run(Context context) throws IOException, InterruptedException {
+		setup(context);// org.apache.hadoop.mapreduce.lib.map.WrappedMapper$Context
+		while (context.nextKeyValue()) {
+			map(context.getCurrentKey(), context.getCurrentValue(), context);
+		}
+		cleanup(context);
+	}
+}
+public class org.apache.hadoop.mapreduce.task.MapContextImpl<KEYIN,VALUEIN,KEYOUT,VALUEOUT> extends TaskInputOutputContextImpl<KEYIN,VALUEIN,KEYOUT,VALUEOUT> implements MapContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> {
+	public MapContextImpl(Configuration conf, TaskAttemptID taskid, RecordReader<KEYIN,VALUEIN> reader, RecordWriter<KEYOUT,VALUEOUT> writer, OutputCommitter committer, StatusReporter reporter, InputSplit split) {
+		super(conf, taskid, writer, committer, reporter);
+		this.reader = reader;
+		this.split = split;
+	}
+	public KEYIN getCurrentKey() throws IOException, InterruptedException {
+		return reader.getCurrentKey();
+	}
+	public VALUEIN getCurrentValue() throws IOException, InterruptedException {
+		return reader.getCurrentValue();
+	}
+	public boolean nextKeyValue() throws IOException, InterruptedException {
+		return reader.nextKeyValue();
+	}
+}
+public class org.apache.hadoop.mapreduce.lib.map.WrappedMapper<KEYIN, VALUEIN, KEYOUT, VALUEOUT> extends Mapper<KEYIN, VALUEIN, KEYOUT, VALUEOUT> {
+	public Mapper<KEYIN, VALUEIN, KEYOUT, VALUEOUT>.Context getMapContext(MapContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> mapContext) {
+		return new Context(mapContext);
+	}
+	public class Context extends Mapper<KEYIN, VALUEIN, KEYOUT, VALUEOUT>.Context {
+		protected MapContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> mapContext;
+		protected MapContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> mapContext;
+		public Context(MapContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> mapContext) {
+			this.mapContext = mapContext;
+		}
+		public VALUEIN getCurrentValue() throws IOException, InterruptedException {
+			return mapContext.getCurrentValue();
+		}
+		public boolean nextKeyValue() throws IOException, InterruptedException {
+			return mapContext.nextKeyValue();
+		}
+		public void write(KEYOUT key, VALUEOUT value) throws IOException, InterruptedException {
+			mapContext.write(key, value);
+		}
+	}
+}
+public class org.apache.hadoop.mapreduce.lib.input.TextInputFormat extends FileInputFormat<LongWritable, Text> {
+	public RecordReader<LongWritable, Text> createRecordReader(InputSplit split, TaskAttemptContext context) {
+		String delimiter = context.getConfiguration().get("textinputformat.record.delimiter");
+		byte[] recordDelimiterBytes = null;
+		if (null != delimiter) recordDelimiterBytes = delimiter.getBytes(Charsets.UTF_8);
+		return new LineRecordReader(recordDelimiterBytes);
+	}
+	protected boolean isSplitable(JobContext context, Path file) {
+		final CompressionCodec codec = new CompressionCodecFactory(context.getConfiguration()).getCodec(file);
+		if (null == codec) {
+			return true;
+		}
+		return codec instanceof SplittableCompressionCodec;
+	}
+}
+public class org.apache.hadoop.mapreduce.lib.input.LineRecordReader extends RecordReader<LongWritable, Text> {
+	private SplitLineReader in;
+	private LongWritable key;
+	private Text value;
+	public LineRecordReader(byte[] recordDelimiter) {
+		this.recordDelimiterBytes = recordDelimiter;
+	}
+	public void initialize(InputSplit genericSplit, TaskAttemptContext context) throws IOException {
+		FileSplit split = (FileSplit) genericSplit;
+		Configuration job = context.getConfiguration();
+		start = split.getStart();
+		end = start + split.getLength();
+		final Path file = split.getPath();
+		final FileSystem fs = file.getFileSystem(job);
+		fileIn = fs.open(file);
+		fileIn.seek(start);
+		in = new UncompressedSplitLineReader(fileIn, job, this.recordDelimiterBytes, split.getLength());
+		filePosition = fileIn;
+		if (start != 0) {// 这个意义深刻
+			start += in.readLine(new Text(), 0, maxBytesToConsume(start));
+		}
+		this.pos = start;
+	}
+	public boolean nextKeyValue() throws IOException {
+		// in.readLine 并将值塞给 key value
+		newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
+	}
+	public LongWritable getCurrentKey() {
+		return key;
+	}
+	public Text getCurrentValue() {
+		return value;
+	}
+	public float getProgress() throws IOException {
+		if (start == end) {
+			return 0.0f;
+		} else {
+			return Math.min(1.0f, (getFilePosition() - start) / (float)(end - start));
+		}
+	}
+}
+public class org.apache.hadoop.mapreduce.lib.input.UncompressedSplitLineReader extends SplitLineReader {
+	public UncompressedSplitLineReader(FSDataInputStream in, Configuration conf, byte[] recordDelimiterBytes, long splitLength) throws IOException {
+		super(in, conf, recordDelimiterBytes);
+		this.splitLength = splitLength;
+	}
+	public int readLine(Text str, int maxLineLength, int maxBytesToConsume) throws IOException {
+		int bytesRead = 0;
+		if (!finished) {
+			if (totalBytesRead > splitLength) {
+				finished = true;
+			}
+			bytesRead = super.readLine(str, maxLineLength, maxBytesToConsume);
+		}
+		return bytesRead;
+	}
+}
+public class org.apache.hadoop.mapreduce.lib.input.SplitLineReader extends org.apache.hadoop.util.LineReader {
+	public SplitLineReader(InputStream in, Configuration conf, byte[] recordDelimiterBytes) throws IOException {
+		super(in, conf, recordDelimiterBytes);
+	}
+}
+public class org.apache.hadoop.util.LineReader implements Closeable {
+	private final byte[] recordDelimiterBytes;
+	public LineReader(InputStream in, Configuration conf, byte[] recordDelimiterBytes) throws IOException {
+		this.in = in;
+		this.bufferSize = conf.getInt("io.file.buffer.size", DEFAULT_BUFFER_SIZE);
+		this.buffer = new byte[this.bufferSize];
+		this.recordDelimiterBytes = recordDelimiterBytes;
+	}
+	public int readLine(Text str, int maxLineLength, int maxBytesToConsume) throws IOException {
+		return readDefaultLine(str, maxLineLength, maxBytesToConsume);
+	}
+	private int readDefaultLine(Text str, int maxLineLength, int maxBytesToConsume) throws IOException {
+		// 根据换行符取数据
+	}
+}

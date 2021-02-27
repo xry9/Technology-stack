@@ -1,0 +1,453 @@
+1、总体来说 server 有两级线程, 有些细节可能不一定对
+  第一级是 Listener, 一个客户端创建一个 channel/Connection, 然后交给 Reader 做后续 RPC 调用, Reader 默认是 10 个,
+  第二级是由 Connection.processOneRpc(ByteBuffer buf) --> RpcServer#scheduler.dispatch(new CallRunner(RpcServer.this, call), 
+	scheduler 实现类是 SimpleRpcScheduler, 其下有 callExecutor.dispatch(callTask); 相当于交给了一个线程, 然后就是由这个线程走 PB-rpc 的, 往下的所有
+	也是一线程到底的
+2、sever 端是产生两个 channel 的 ServerSocketChannelImpl 和 SocketChannelImpl, 而 client 端只有一个 SocketChannelImpl. 我猜测一下好像是只有 SocketChannelImpl
+是干活儿的
+3、client 端 close 时会导致 server 端 channel.read 返回值是 -1, 在 Listener#doRead。client 不显示 close 进程结束同 close 一样。还有一个问题, 服务器
+怎样超时 close, 经测试 2min 会 close, 没找到在哪里设置
+  
+4、
+有必要单独拎出来说一下, RpcClientImpl.Connection 个数可以说是由 ConnectionId 决定的, 而一个 Connection 当然一对一 socket(≈ channel)
+public class ConnectionId { final User ticket; final String serviceName; final InetSocketAddress address; }
+服务端结合下面 readKey.attach(c); 注释看
+5、到 org.apache.hadoop.hbase.ipc.SimpleRpcScheduler#dispatch 之前, 是怎么从网络流读数据封装成 CallRunner, 主要是 nio 的技术, 往后是 RpcExecutor,
+也可以说是 scheduler 调度的事, 默认实现是 SimpleRpcScheduler, 
+
+从架构层面理一下 server 端的进程:
+public class RSRpcServices implements HBaseRPCErrorHandler, AdminService.BlockingInterface, ClientService.BlockingInterface, PriorityFunction, ConfigurationObserver {
+}
+a. RSRpcServices 实现了 BlockingInterface 接口可以把他认定成一个 sever 端(HMaster/HRegionServer)进程的实现类, 所以呢 server 进程可以分为三大块, 
+真正的进程 HMaster/HRegionServer, RSRpcServices, 还有 RPC 服务, 而且我觉得任何服务端架构都是这三块吧, 但是这三个块以什么样的形式连接在一起呢
+b. 分析一下, 真正的服务其实就一个, 所以在 HMaster/HRegionServe 进程启动时, 启动 RPC 服务即可, 所以进程里肯定要保持一个它的引用. RSRpcServices 中不
+需要保持其它两个的引用, RPC 服务中需要保持一个 RSRpcServices 的引用, 因为 server 端影响 client 调用肯定是从 RPC 服务开始调用的, 所以强引用是 
+HMaster/HRegionServer ① --引用--> RPC 服务 ②--引用--> RSRpcServices ③, 至于他们两两之间是否要保持引用, 看情况吧
+c. 以上是我分析的, 看看 hbase 怎么做的吧, 跟我想的不太一样, 他是把 ②③ 颠倒了, ① 的构造方法中调用 ②.start, 而 ② 的 start 方法中只有 ③.start, 所以我
+觉得 hbase 的做法没有我说的好
+d. 架构层面说完了, 其实最复杂最核心的是 RPC 服务(RpcServer), RpcServer 的 start 中 
+	responder.start(); // 一个线程
+	listener.start(); // 一个线程, 但是内部又启动了一组 Reader 线程
+	scheduler.start();
+e. 细说 listener, 有一个 ServerSocketChannel, 负责 accept 请求, 并产生新 SocketChannel channel = ServerSocketChannel.accept(), 新 channel 其实就对应
+一个 client 端 socket/channel, 并把 channel 交给 Reader, 一个 Reader 可以处理多个 channel, 所以将 client 请求封装成 RpcServer.Call 就在 Reader 线程中完成
+f. 再往下就是 scheduler.dispatch 了, 先回过头来介绍一下 scheduler, 默认实现是 SimpleRpcScheduler, 包含是三个具有优先集的 RpcExecutor, 实现类都是 
+FastPathBalancedQueueRpcExecutor, 这里面一般要包含两个队列, 任务队列(CallRunner)和 Handler 队列, Handler 就是个 Thread 所以 RpcExecutor 的名字没有错
+就是个线程池, 所以 scheduler.start() 就是把他下面的三个 RpcExecutor 中的 Handler 队列启动, 再说下这三个 RpcExecutor 有什么不同, 其实也没什么不同, 
+Handler 和 任务队列个数有些差别, 其实主要区别在于不同优先集使用不同的 RpcExecutor, 在于用户自觉。至于任务队列的实现我觉得有点奇葩, 不说了, 但是 
+FastPathHandler 设计没太明白, 可能也挺巧妙吧, 用到了 Semaphore, 最好还是整明白面试可以装个逼
+g. server 端处理完数据, 会调用 Responder#doRespond(Call call), 创建 Call 时已经把 Responder 加进去了, 服务端也只在一个 Responder, 为啥是一个呢, Reader
+为啥那么多, 我也有点迷糊, 因为数据处理的线程是 Handler 并不是 Reader 线程, 当然 Reader 处理逻辑比 Responder 复杂, 如果 client 请求的数据量都很大应该是
+有问题吧
+h. 接上一条, 上面分析的很对, 但是注意这个点 if (call.connection.responseQueue.isEmpty()), 如果成立, 则不往 responseQueue 里加了, 也就是 Handler 线程
+负责写出了, responseQueue 由 Responder 线程来处理, 而 responseQueue isNotEmpty 的情况也不多吧, 因为 channel connection responder 是一一对应的, 
+一个 connection 请求多次的场景不多
+i. doRespond 这块的 nio 操作我是看不大懂的
+j. 一个很重要的事情, processConnectionHeader
+
+6、scan 相关
+  a. server 端会有关于 nextCallSeq 的校验, 如果对不上则异常
+  b. regionserver.Leases 有这样一个线程呀, 在 RSRpcServices#addScanner 方法中, 会创建一个 leases, scan 开始时 remove 结束时 add
+7. RpcRetryingCaller 中用的算是一种模板模式吧, 在 callWithRetries 与 callWithoutRetries 方法中都要有 callable.prepare 还有一些异常捕获方式
+
+
+
+public class org.apache.hadoop.hbase.ipc.RpcServer implements RpcServerInterface, ConfigurationObserver {
+	private Listener listener = null;
+	protected Responder responder = null;
+	private final RpcScheduler scheduler;
+	public RpcServer(final Server server, final String name, final List<BlockingServiceAndInterface> services, final InetSocketAddress bindAddress, Configuration conf, RpcScheduler scheduler) throws IOException {    
+		this.server = server;
+		this.services = services;
+		this.bindAddress = bindAddress;
+		listener = new Listener(name);
+		this.port = listener.getAddress().getPort();
+		this.metrics = new MetricsHBaseServer(name, new MetricsHBaseServerWrapperImpl(this));
+		responder = new Responder();
+		this.scheduler = scheduler;
+		this.readThreads = conf.getInt("hbase.ipc.server.read.threadpool.size", 10);
+	}
+	public synchronized void start() {
+		if (started) return;
+		responder.start();
+		listener.start();
+		scheduler.start();
+		started = true;
+	}
+	public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md, Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, long startTime, int timeout) throws IOException {
+		status.setRPC(md.getName(), new Object[]{param}, receiveTime);
+		status.setRPCPacket(param);
+		status.resume("Servicing call");
+		PayloadCarryingRpcController controller = new PayloadCarryingRpcController(cellScanner);
+		controller.setCallTimeout(timeout);
+		Message result = service.callBlockingMethod(md, controller, param);
+		if (tooSlow || tooLarge) {
+			logResponse(param, md.getName(), md.getName() + "(" + param.getClass().getName() + ")", (tooLarge ? "TooLarge" : "TooSlow"), status.getClient(), startTime, processingTime, qTime, responseSize);
+		}
+		return new Pair<Message, CellScanner>(result, controller.cellScanner());
+	}
+	private class Listener extends Thread {
+		private ServerSocketChannel acceptChannel = null; //the accept channel
+		private Selector selector = null; //the selector that we use for the server
+		private Reader[] readers = null;
+		private ExecutorService readPool;
+		public Listener(final String name) throws IOException {
+			super(name);
+			acceptChannel = ServerSocketChannel.open();
+			acceptChannel.configureBlocking(false);
+			bind(acceptChannel.socket(), bindAddress, backlogLength);
+			port = acceptChannel.socket().getLocalPort();
+			selector= Selector.open();
+			readers = new Reader[readThreads];
+			readPool = Executors.newFixedThreadPool(readThreads, new ThreadFactoryBuilder().setNameFormat("RpcServer.reader=%d,bindAddress=" + bindAddress.getHostName() + ",port=" + port).setDaemon(true).setUncaughtExceptionHandler(Threads.LOGGING_EXCEPTION_HANDLER).build());
+			for (int i = 0; i < readThreads; ++i) {
+				Reader reader = new Reader();
+				readers[i] = reader;
+				readPool.execute(reader);
+			}
+			acceptChannel.register(selector, SelectionKey.OP_ACCEPT);
+			this.setName("RpcServer.listener,port=" + port);
+			this.setDaemon(true);
+		}
+		public void run() {
+			while (running) {
+				SelectionKey key = null;
+				selector.select(); // FindBugs IS2_INCONSISTENT_SYNC
+				Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+				while (iter.hasNext()) {
+					key = iter.next();
+					iter.remove();
+					if (key.isValid()) {
+						if (key.isAcceptable()) doAccept(key);
+					}
+					key = null;
+				}
+			}
+			acceptChannel.close();
+			selector.close();
+			selector= null;
+			acceptChannel= null;
+			while (!connectionList.isEmpty()) {
+				closeConnection(connectionList.remove(0));
+			}
+		}
+		void doAccept(SelectionKey key) throws IOException, OutOfMemoryError {
+			Connection c;
+			ServerSocketChannel server = (ServerSocketChannel) key.channel();
+			SocketChannel channel;
+			while ((channel = server.accept()) != null) {// 此 channel 应该是与 client 保持连接的 channel
+				channel.configureBlocking(false);
+				channel.socket().setTcpNoDelay(tcpNoDelay);
+				channel.socket().setKeepAlive(tcpKeepAlive);
+				Reader reader = getReader();
+				reader.startAdd();
+				SelectionKey readKey = reader.registerChannel(channel);
+				c = getConnection(channel, System.currentTimeMillis());// 单纯 new Connection(channel, time);
+				readKey.attach(c);// readKey 是与 channel 绑定的, 这里又与 Connection 绑定一下子, 就让 channel 与 Connection 绑定了一下子, 而且 channel 与 Connection 必须绑定, 这样才能保证请求数据的连续性呀
+				synchronized (connectionList) { connectionList.add(numConnections, c); numConnections++; }
+			}
+		}
+		private class Reader implements Runnable {
+			private final Selector readSelector;
+			Reader() throws IOException {
+				this.readSelector = Selector.open();
+			}
+			public void run() {
+				doRunLoop();
+			}
+			private synchronized void doRunLoop() {
+				while (running) {
+					readSelector.select();
+					while (adding) {
+						this.wait(1000);
+					}
+					Set<SelectionKey> itx = readSelector.selectedKeys();
+					Iterator<SelectionKey> iter = itx.iterator();
+					while (iter.hasNext()) {
+						SelectionKey key = iter.next();
+						iter.remove();
+						if (key.isValid()) {
+							if (key.isReadable()) {
+								doRead(key);
+							}
+						}
+					}
+				}
+			}
+			public synchronized SelectionKey registerChannel(SocketChannel channel) throws IOException {
+				return channel.register(readSelector, SelectionKey.OP_READ);
+			}
+		}
+		void doRead(SelectionKey key) throws InterruptedException {
+			int count;
+			Connection c = (Connection) key.attachment();// 我感觉这是灵魂
+			count = c.readAndProcess();			
+		}
+	}
+	public class Connection {
+		protected SocketChannel channel;
+		protected final ConcurrentLinkedDeque<Call> responseQueue = new ConcurrentLinkedDeque<Call>();
+		private final Lock responseWriteLock = new ReentrantLock();// 这东西可相当有用啊, 一个 connection 处理多个请求, 数据输出时需要加个锁呀
+		private InetAddress addr;
+		protected Socket socket;
+		protected int remotePort;
+		BlockingService service;
+		public Connection(SocketChannel channel, long lastContact) {
+			this.channel = channel;
+			this.lastContact = lastContact;
+			this.data = null;
+			this.socket = channel.socket();
+			this.addr = socket.getInetAddress();
+			if (addr == null) {
+				this.hostAddress = "*Unknown*";
+			} else {
+				this.hostAddress = addr.getHostAddress();
+			}
+			this.remotePort = socket.getPort();
+			if (socketSendBufferSize != 0) {
+				socket.setSendBufferSize(socketSendBufferSize);
+			}
+		}
+		public int readAndProcess() throws IOException, InterruptedException {
+			int count = read4Bytes();
+			if (count < 0 || dataLengthBuffer.remaining() > 0) { return count; }
+			if (!connectionPreambleRead) {
+				count = readPreamble();
+				if (!connectionPreambleRead) {
+					return count;
+				}
+				count = read4Bytes();
+				if (count < 0 || dataLengthBuffer.remaining() > 0) {
+					return count;
+				}
+			}
+			if (data == null) {
+				dataLengthBuffer.flip();
+				int dataLength = dataLengthBuffer.getInt();
+				data = ByteBuffer.allocate(dataLength);
+				incRpcCount();
+			}
+			count = channelRead(channel, data);
+			if (count >= 0 && data.remaining() == 0) { // count==0 if dataLength == 0
+				process();
+			}
+			return count;
+		}
+		private void process() throws IOException, InterruptedException {
+			data.flip();			
+			if (useSasl) {
+				saslReadAndProcess(data);
+			} else {
+				processOneRpc(data);
+			}
+			dataLengthBuffer.clear(); // Clean for the next call
+			data = null; // For the GC
+		}
+		private void processOneRpc(ByteBuffer buf) throws IOException, InterruptedException {
+			if (connectionHeaderRead) {
+				processRequest(buf);
+			} else {
+				processConnectionHeader(buf);
+				this.connectionHeaderRead = true;
+				this.user = userProvider.create(this.ugi);
+			}
+		}
+		protected void processRequest(ByteBuffer buf) throws IOException, InterruptedException {
+			long totalRequestSize = buf.limit();
+			int offset = 0;
+			CodedInputStream cis = CodedInputStream.newInstance(buf.array(), offset, buf.limit());
+			int headerSize = cis.readRawVarint32();
+			offset = cis.getTotalBytesRead();
+			Message.Builder builder = RequestHeader.newBuilder();
+			ProtobufUtil.mergeFrom(builder, cis, headerSize);
+			RequestHeader header = (RequestHeader) builder.build();
+			offset += headerSize;
+			int id = header.getCallId();
+			if ((totalRequestSize + callQueueSize.get()) > maxQueueSize) {
+				final Call callTooBig = new Call(id, this.service, null, null, null, null, this,
+				responder, totalRequestSize, null, null, 0);
+				ByteArrayOutputStream responseBuffer = new ByteArrayOutputStream();
+				metrics.exception(CALL_QUEUE_TOO_BIG_EXCEPTION);
+				setupResponse(responseBuffer, callTooBig, CALL_QUEUE_TOO_BIG_EXCEPTION, ", is hbase.ipc.server.max.callqueue.size too small?");
+				responder.doRespond(callTooBig);
+				return;
+			}
+			MethodDescriptor md = null;
+			Message param = null;
+			CellScanner cellScanner = null;
+			if (header.hasRequestParam() && header.getRequestParam()) {
+				if (!"RegionServerReport".equals(header.getMethodName())){
+					md = this.service.getDescriptorForType().findMethodByName(header.getMethodName());
+					builder = this.service.getRequestPrototype(md).newBuilderForType();
+					cis.resetSizeCounter();
+					int paramSize = cis.readRawVarint32();
+					offset += cis.getTotalBytesRead();
+					if (builder != null) {
+						ProtobufUtil.mergeFrom(builder, cis, paramSize);
+						param = builder.build();
+					}
+					offset += paramSize;
+				}
+				if (header.hasCellBlockMeta()) {
+					buf.position(offset);
+					cellScanner = ipcUtil.createCellScanner(this.codec, this.compressionCodec, buf);
+				}
+				Call call = new Call(id, this.service, md, header, param, cellScanner, this, responder, totalRequestSize, traceInfo, this.addr, timeout);
+				if (!scheduler.dispatch(new CallRunner(RpcServer.this, call))) { // 一般来说 if 块是进不来的
+					callQueueSize.add(-1 * call.getSize());
+					ByteArrayOutputStream responseBuffer = new ByteArrayOutputStream();
+					setupResponse(responseBuffer, call, CALL_QUEUE_TOO_BIG_EXCEPTION, "Call queue is full on " + server.getServerName() + ", too many items queued ?");
+					responder.doRespond(call);
+				}
+			}
+		}
+		private void processConnectionHeader(ByteBuffer buf) throws IOException {
+			this.connectionHeader = ConnectionHeader.parseFrom(new ByteBufferInputStream(buf));
+			String serviceName = connectionHeader.getServiceName();
+			this.service = getService(services, serviceName);
+		}
+	}
+	protected class Responder extends Thread {
+		private final Selector writeSelector;
+		private final Set<Connection> writingCons = Collections.newSetFromMap(new ConcurrentHashMap<Connection, Boolean>());
+		Responder() throws IOException {
+			writeSelector = Selector.open(); // create a selector
+		}
+		public void run() {
+			doRunLoop();
+		}
+		private void registerWrites() {
+			Iterator<Connection> it = writingCons.iterator();
+			while (it.hasNext()) {
+				Connection c = it.next();
+				it.remove();
+				SelectionKey sk = c.channel.keyFor(writeSelector);
+				if (sk == null) {
+					c.channel.register(writeSelector, SelectionKey.OP_WRITE, c);
+				} else {
+					sk.interestOps(SelectionKey.OP_WRITE);
+				}
+			}
+		}
+		public void registerForWrite(Connection c) {
+			if (writingCons.add(c)) {
+				writeSelector.wakeup();
+			}
+		}
+		private void doRunLoop() {
+			while (running) {
+				registerWrites();
+				int keyCt = writeSelector.select(purgeTimeout);
+				if (keyCt == 0) {
+					continue;
+				}
+				Set<SelectionKey> keys = writeSelector.selectedKeys();
+				Iterator<SelectionKey> iter = keys.iterator();
+				while (iter.hasNext()) {
+					SelectionKey key = iter.next();
+					iter.remove();
+					if (key.isValid() && key.isWritable()) {
+						doAsyncWrite(key);
+					}
+				}
+			}
+		}
+		private void doAsyncWrite(SelectionKey key) throws IOException {
+			Connection connection = (Connection) key.attachment();
+			boolean result = processAllResponses(connection);
+			if (result) {
+				key.interestOps(0);
+			}
+		}
+		private boolean processAllResponses(final Connection connection) throws IOException {
+			for (int i = 0; i < 20; i++) {
+				Call call = connection.responseQueue.pollFirst();
+				if (call == null) {
+					return true;
+				}
+				if (!processResponse(call)) {
+					connection.responseQueue.addFirst(call);
+					return false;
+				}
+			}
+			return connection.responseQueue.isEmpty();
+		}
+		private boolean processResponse(final Call call) throws IOException {
+			boolean error = true;
+			long numBytes = channelWrite(call.connection.channel, call.response);// 没有判断 channel 是否可写呀, 是不是不可写时写出的是 0 byte 呀
+			if (!call.response.hasRemaining()) {
+				call.done();
+				return true;
+			} else {
+				return false; // Socket can't take more, we will have to come back.
+			}
+		}
+		void doRespond(Call call) throws IOException {
+			boolean added = false;
+			if (call.connection.responseQueue.isEmpty() && call.connection.responseWriteLock.tryLock()) {
+				if (call.connection.responseQueue.isEmpty()) {
+					if (processResponse(call)) {
+						return; // we're done.
+					}
+					call.connection.responseQueue.addFirst(call);
+					added = true; // We will register to the selector later, outside of the lock.
+				}
+				call.connection.responseWriteLock.unlock();
+			}
+			if (!added) {
+				call.connection.responseQueue.addLast(call);
+			}
+			call.responder.registerForWrite(call.connection);
+			call.timestamp = System.currentTimeMillis();
+		}
+	}
+	static BlockingService getService(final List<BlockingServiceAndInterface> services, final String serviceName) {
+		BlockingServiceAndInterface bsasi = getServiceAndInterface(services, serviceName);
+		return bsasi == null? null: bsasi.getBlockingService();
+	}
+	static BlockingServiceAndInterface getServiceAndInterface(final List<BlockingServiceAndInterface> services, final String serviceName) {
+		for (BlockingServiceAndInterface bs : services) {
+			if (bs.getBlockingService().getDescriptorForType().getName().equals(serviceName)) {
+				return bs;
+			}
+		}
+		return null;
+	}
+	public static class BlockingServiceAndInterface {
+		private final BlockingService service;
+		private final Class<?> serviceInterface;
+		public BlockingServiceAndInterface(final BlockingService service, final Class<?> serviceInterface) {
+			this.service = service;
+			this.serviceInterface = serviceInterface;
+		}
+		public Class<?> getServiceInterface() {
+			return this.serviceInterface;
+		}
+		public BlockingService getBlockingService() {
+			return this.service;
+		}
+	}
+}
+public class org.apache.hadoop.hbase.ipc.CallRunner {
+	CallRunner(final RpcServerInterface rpcServer, final Call call) {
+		this.call = call;
+		this.rpcServer = rpcServer;
+		if (call != null && rpcServer != null) {
+			this.rpcServer.addCallSize(call.getSize());
+		}
+	}
+	public void run() {
+      if (!call.connection.channel.isOpen()) {
+        return;
+      }
+      this.status.setConnection(call.connection.getHostAddress(), call.connection.getRemotePort());
+      Pair<Message, CellScanner> resultPair = null;
+      RpcServer.CurCall.set(call);
+      TraceScope traceScope = null;
+      resultPair = this.rpcServer.call(call.service, call.md, call.param, call.cellScanner, call.timestamp, this.status, call.startTime, call.timeout);
+      Message param = resultPair != null ? resultPair.getFirst() : null;
+      CellScanner cells = resultPair != null ? resultPair.getSecond() : null;
+      call.setResponse(param, cells, errorThrowable, error);
+      call.sendResponseIfReady();
+  }
+}

@@ -1,0 +1,886 @@
+mvn clean install -Phadoop-2,dist -DskipTests
+遇到了 org/pentaho/pentaho-aggdesigner-algorithm/5.1.5-jhyde 下载报证书问题, 手动下载 jar/pom 就可以了
+
+1、通过调用栈信息 org.apache.hadoop.hive.ql.exec.Task#setId, join 操作创建了 7 个 task/stage
+STAGE DEPENDENCIES:
+  Stage-5 is a root stage , consists of Stage-6, Stage-1
+  Stage-6 has a backup stage: Stage-1
+  Stage-3 depends on stages: Stage-6
+  Stage-1
+  Stage-0 depends on stages: Stage-3, Stage-1
+----
+Stage-0: fetch
+Stage-1,Stage-2 就是两个 TableScan 创建的, Stage-2 被阻断了, 只剩一个 Stage-1 即 reduce-join,
+Stage-3, Stage-4 是两个表都争取创建 map-join, 选大小表最后留下一个 stage-3
+stage-5 是同 Stage-3, Stage-4 在同一个方法中创建的(org.apache.hadoop.hive.ql.optimizer.physical.MapJoinResolver.LocalMapJoinTaskDispatcher#processCurrentTask)
+stage-6 是 map-join 的前期上传文件的操作
+
+stage-[3-6] 是在 physical-TaskGraphWalker 中产生的
+stage-[1-2] 是在 TaskCompiler-GenMapRedWalker 中产生的, 说白了这个阶段就是生成 operator, physical 阶段是优化
+
+关于 job 数， 提示是不准确的, 因为统计的是 mapred 类型的数量, Stage-1 也被统计了进来, 但是他是不被执行的
+
+2、new ConditionalWork(listWorks); 相关操作除 join 好像只有这里了 GenMapRedUtils#createMRWorkForMergingFiles 被调用是在 GenMRFileSink1#process
+相关的 ListTasks 就是 MoveWork/MergeFileWork... 
+  a. insert 操作就会创建 MoveWork, 是否 insert 操作对 operator 树没有影响, 只是会有 MOVE stage
+  b. 会在 GenMRFileSink1#process 方法中判断 hive.merge.mapredfiles
+
+3、If sizes of at least n-1 tables in a n-way join is known, and their sum is smaller than the threshold size, convert the join into map-join and don't create a conditional task
+map-join 是否创建 conditionaltask, HIVECONVERTJOINNOCONDITIONALTASKTHRESHOLD("hive.auto.convert.join.noconditionaltask.size", 10000000L, ...)
+如果存在大表才直接走 map-join 不用 conditional
+4、分析
+ExplainSemanticAnalyzer#analyzeInternal 和 SemanticAnalyzer#analyzeInternal 的语法树, 可以得出结论, explain sql, 只是在外面包了一层, 对于这个 sql 如何解析没有影响
+5、CommonJoinTaskDispatcher#processCurrentTask 此方法中处理 mapjoin 操作, 好复杂
+
+6、
+几种 GraphWalker 说一下 DefaultGraphWalker, TaskGraphWalker, 大同小异, 都是有一个 Dispatcher
+Dispatcher 有好多种, 但是最常用的应该是 DefaultRuleDispatcher
+CommonJoinResolver --> CommonJoinTaskDispatcher.dispatch --> processCurrentTask
+MapJoinResolver	--> LocalMapJoinTaskDispatcher.dispatch --> processCurrentTask
+MetadataOnlyOptimizer --> NullScanTaskDispatcher.dispatch
+NullScanOptimizer --> NullScanTaskDispatcher 
+CrossProductCheck --> CrossProductCheck.dispatch
+7、
+MapWork mWork = task.getWork().getMapWork();
+ReduceWork rWork = task.getWork().getReduceWork();
+HashMap<String, Operator<? extends OperatorDesc>> opMap = ((MapredWork) task.getWork()).getMapWork().getAliasToWork();
+Operator<? extends OperatorDesc> reducerOp = rWork.getReducer();
+
+8、HiveServer 拿数据时创建 FetchOperator#getRecordReader, 其实是一个 LineRecordReader
+9、记录一次故障吧，日志打印完 Kill Command = /usr/local/app/hadoop-2.7.2/bin/hadoop job  -kill job_1601773179465_0003 就是启动不了, 单独启动一个 mr 也不行, 替换了干净的 hive/hadoop jar 也不行, 日志也都看了, 没有端倪. 灵机一动是不是磁盘满了, 果然啊
+10、MapJoin 方式会启动 org.apache.hadoop.hive.ql.exec.mr.ExecDriver#main -->setupChildLog4j 这里面有日志的各种骚操作
+
+=============================================
+select name,sum(age) from db.tab group by name;
+
+public class org.apache.hadoop.hive.cli.CliDriver {
+	int processLocalCmd(String cmd, CommandProcessor proc, CliSessionState ss) {
+		Driver qp = (Driver) proc;
+		PrintStream out = ss.out;
+		ret = qp.run(cmd).getResponseCode();
+		ArrayList<String> res = new ArrayList<String>();
+		while (qp.getResults(res)) {// 这就是取结果数据去了, 默认一次 100 条, 单纯的 select table 也走这
+			for (String r : res) {
+				out.println(r);
+			}
+		}
+		return ret;
+	}
+}
+public class Driver implements CommandProcessor {
+	private QueryPlan plan;
+	public CommandProcessorResponse run(String command) throws CommandNeedRetryException {
+		return run(command, false);
+	}
+	public CommandProcessorResponse run(String command, boolean alreadyCompiled) throws CommandNeedRetryException {
+		CommandProcessorResponse cpr = runInternal(command, alreadyCompiled);
+		return cpr;
+	}
+	private CommandProcessorResponse runInternal(String command, boolean alreadyCompiled) throws CommandNeedRetryException {
+		ret = compileInternal(command);
+		ret = execute();
+		return createProcessorResponse(ret);
+	}
+	private int compileInternal(String command) {
+		ret = compile(command);
+		return ret;
+	}
+	public int compile(String command, boolean resetTaskIds) {
+		command = new VariableSubstitution().substitute(conf,command);
+		ctx = new Context(conf);
+		ParseDriver pd = new ParseDriver();
+		ASTNode tree = pd.parse(command, ctx);
+		BaseSemanticAnalyzer sem = SemanticAnalyzerFactory.get(conf, tree);// CalcitePlanner
+		sem.analyze(tree, ctx);// 一切需要的东西都在这里面准备好了应该, 所以可以传给 plan
+		String queryStr = HookUtils.redactLogString(conf, command);
+		plan = new QueryPlan(queryStr, sem, perfLogger.getStartTime(PerfLogger.DRIVER_RUN), queryId, SessionState.get().getCommandType());//sem.getRootTasks()
+		return 0;
+	}
+	public int execute() throws CommandNeedRetryException {
+		for (Task<? extends Serializable> tsk : plan.getRootTasks()) { // tsk 在 compile 中 new QueryPlan 时传入
+			driverCxt.addToRunnable(tsk);// rootTask 如果是多个肯定他们之间没有依赖关系, 执行即可
+		}
+		while (!destroyed && driverCxt.isRunning()) { // 这里循环的目的是一直要提交下层的 task 
+			while ((task = driverCxt.getRunnable(maxthreads)) != null) {
+				TaskRunner runner = launchTask(task, queryId, noName, jobname, jobs, driverCxt);
+			}
+			TaskRunner tskRun = driverCxt.pollFinished();// 阻塞应该在这里
+			Task<? extends Serializable> tsk = tskRun.getTask();
+			for (Task<? extends Serializable> child : tsk.getChildTasks()) {
+				driverCxt.addToRunnable(child);
+			}
+		}
+	}
+	private TaskRunner launchTask(Task<? extends Serializable> tsk, String queryId, boolean noName, String jobname, int jobs, DriverContext cxt) throws HiveException {
+		TaskRunner tskRun = new TaskRunner(tsk, tskRes);
+		if (HiveConf.getBoolVar(conf, HiveConf.ConfVars.EXECPARALLEL) && tsk.isMapRedTask()) { // 并行执行
+			tskRun.setOperationLog(OperationLog.getCurrentOperationLog());
+			tskRun.start();
+		} else {
+			tskRun.runSequential();
+		}
+		return tskRun;
+	}
+	public boolean getResults(List res) throws IOException, CommandNeedRetryException {
+		if (isFetchingTable()) {
+			FetchTask ft = plan.getFetchTask();
+			ft.setMaxRows(maxRows);// 100
+			boolean result = ft.fetch(res);
+			return result;
+		}
+		return true;
+	}
+}
+
+public class org.apache.hadoop.hive.ql.exec.TaskRunner extends Thread {
+	protected Task<? extends Serializable> tsk;
+	public void runSequential() {		
+		exitVal = tsk.executeTask();
+	}
+}
+public abstract class org.apache.hadoop.hive.ql.exec.Task<T extends Serializable> implements Serializable, Node {
+	protected transient DriverContext driverContext;
+	public int executeTask() {
+		int retval = execute(driverContext);
+		return retval;
+	}
+}
+public class org.apache.hadoop.hive.ql.exec.mr.ExecDriver extends Task<MapredWork> implements Serializable, HadoopJobExecHook {
+	public int execute(DriverContext driverContext) {
+		Context ctx = driverContext.getCtx();
+		MapWork mWork = work.getMapWork();
+		ReduceWork rWork = work.getReduceWork();
+		FileSystem fs = emptyScratchDir.getFileSystem(job);
+		job.setOutputFormat(HiveOutputFormatImpl.class);
+		job.setMapperClass(ExecMapper.class);
+		job.setMapOutputKeyClass(HiveKey.class);
+		job.setMapOutputValueClass(BytesWritable.class);
+		String partitioner = HiveConf.getVar(job, ConfVars.HIVEPARTITIONER);
+		job.setPartitionerClass((Class<? extends Partitioner>) JavaUtils.loadClass(partitioner));
+		job.setNumReduceTasks(rWork != null ? rWork.getNumReduceTasks().intValue() : 0);
+		job.setReducerClass(ExecReducer.class);
+		String inpFormat = HiveConf.getVar(job, HiveConf.ConfVars.HIVEINPUTFORMAT);// CombineHiveInputFormat, 所以 job.setNumMapTasks 没有意义
+		job.setOutputKeyClass(Text.class);
+		job.setOutputValueClass(Text.class);
+		Utilities.setMapRedWork(job, work, ctx.getMRTmpPath());// 将 work 写到 hdfs map.xml 和 reduce.xml, 在 org.apache.hadoop.hive.ql.exec.Utilities#setBaseWork --> serializePlan. 然后 mapreduce 进程解析出 MapWork ReduceWork
+		JobClient jc = new JobClient(job);
+		rj = jc.submitJob(job);
+		return (returnVal);
+	}
+}
+
+public abstract class org.apache.hadoop.hive.ql.parse.BaseSemanticAnalyzer {
+	protected List<Task<? extends Serializable>> rootTasks;
+	public void analyze(ASTNode ast, Context ctx) throws SemanticException {
+		initCtx(ctx);
+		analyzeInternal(ast);
+	}
+}
+public class org.apache.hadoop.hive.ql.parse.SemanticAnalyzer extends BaseSemanticAnalyzer {
+	private QB qb;
+	protected HashMap<String, Operator<? extends OperatorDesc>> topOps;
+	protected LinkedHashMap<Operator<? extends OperatorDesc>, OpParseContext> opParseCtx;
+	public SemanticAnalyzer(HiveConf conf) throws SemanticException {
+		super(conf);
+		topOps = new LinkedHashMap<String, Operator<? extends OperatorDesc>>();
+		opParseCtx = new LinkedHashMap<Operator<? extends OperatorDesc>, OpParseContext>();
+	}
+	void analyzeInternal(ASTNode ast, PlannerContext plannerCtx) throws SemanticException {
+		if (!genResolvedParseTree(ast, plannerCtx)) {return;} // 这里很重要的, 将 ast 解析装入 this.qb 中
+		//this:CalcitePlanner 这里太硬核, 整个 sql 的操作树, 但是返回的是最底层的 operator, 所以这个 sinkOp 也用不到, 顶层的 operator 放在了 topOps 中
+		Operator sinkOp = genOPTree(ast, plannerCtx);
+		ParseContext pCtx = new ParseContext(conf, opToPartPruner, opToPartList, topOps, new HashSet<JoinOperator>(joinContext.keySet()), new HashSet<SMBMapJoinOperator>(smbMapJoinContext.keySet()), loadTableWork, loadFileWork, ctx, idToTableNameMap, destTableId, uCtx, listMapJoinOpsNoReducer, prunedPartitions, opToSamplePruner, globalLimitCtx, nameToSplitSample, inputs, rootTasks, opToPartToSkewedPruner, viewAliasToInput, reduceSinkOperatorsAddedByEnforceBucketingSorting, analyzeRewrite, tableDesc, queryProperties);
+		Optimizer optm = new Optimizer();
+		optm.setPctx(pCtx);
+		pCtx = optm.optimize();// 这里会优化 operator, 减少 operator 数
+		TaskCompiler compiler = TaskCompilerFactory.getCompiler(conf, pCtx);
+		compiler.compile(pCtx, rootTasks, inputs, outputs);// 这里面把要执行的 task 加入到了 rootTasks 中
+		return;
+	}
+	Operator genOPTree(ASTNode ast, PlannerContext plannerCtx) throws SemanticException {
+		return genPlan(qb);
+	}
+	public Operator genPlan(QB qb) throws SemanticException {
+		return genPlan(qb, false);
+	}
+	public Operator genPlan(QB qb, boolean skipAmbiguityCheck) throws SemanticException {
+		Map<String, Operator> aliasToOpInfo = new LinkedHashMap<String, Operator>();
+		for (String alias : qb.getTabAliases()) {
+			Operator op = genTablePlan(alias, qb);// TableScanOperator
+			aliasToOpInfo.put(alias, op);
+		}
+		Operator srcOpInfo = null;
+		if (qb.getParseInfo().getJoinExpr() != null) {			
+			srcOpInfo = genJoinPlan(qb, aliasToOpInfo);// join 的往这里走
+		} else {
+			srcOpInfo = aliasToOpInfo.values().iterator().next();
+			srcOpInfo = lastPTFOp != null ? lastPTFOp : srcOpInfo;
+		}
+		Operator bodyOpInfo = genBodyPlan(qb, srcOpInfo, aliasToOpInfo);
+		setQB(qb);
+		return bodyOpInfo;
+	}
+	private Operator genTablePlan(String alias, QB qb) throws SemanticException {
+		String alias_id = getAliasId(alias, qb);
+		Table tab = qb.getMetaData().getSrcForAlias(alias);
+		Operator<? extends OperatorDesc> top = topOps.get(alias_id);
+		RowResolver rwsch = new RowResolver();    
+		TableScanDesc tsDesc = new TableScanDesc(alias, vcList, tab);
+		setupStats(tsDesc, qb.getParseInfo(), tab, alias, rwsch);
+		top = putOpInsertMap(OperatorFactory.get(tsDesc, new RowSchema(rwsch.getColumnInfos())), rwsch);
+		topOps.put(alias_id, top);// 不用多说了太重要了, 把顶层 operator 存进去了
+		Operator<? extends OperatorDesc> op = top;
+		Operator output = putOpInsertMap(op, rwsch);
+		return output;
+	}
+	public <T extends OperatorDesc> Operator<T> putOpInsertMap(Operator<T> op, RowResolver rr) {
+		OpParseContext ctx = new OpParseContext(rr);
+		opParseCtx.put(op, ctx);
+		return op;
+	}
+	private Operator genBodyPlan(QB qb, Operator input, Map<String, Operator> aliasToOpInfo) throws SemanticException {
+		QBParseInfo qbp = qb.getParseInfo();
+		TreeSet<String> ks = new TreeSet<String>(qbp.getClauseNames());
+		Map<String, Operator<? extends OperatorDesc>> inputs = createInputForDests(qb, input, ks);
+		Operator curr = input;
+		if (!commonGroupByDestGroups.isEmpty()) {
+			for (List<String> commonGroupByDestGroup : commonGroupByDestGroups) {
+				String firstDest = commonGroupByDestGroup.get(0);
+				input = inputs.get(firstDest);
+				for (String dest : commonGroupByDestGroup) {
+					Operator<?> gbySource = curr;
+					if (qbp.getAggregationExprsForClause(dest).size() != 0 || getGroupByForClause(qbp, dest).size() > 0) {
+						curr = genSelectAllDesc(curr);// ***
+						ASTNode selExprList = qbp.getSelForClause(dest);						
+						curr = genGroupByPlanMapAggrNoSkew(dest, qb, curr);// ***
+					}
+					curr = genPostGroupByBodyPlan(curr, dest, qb, aliasToOpInfo, gbySource);// ***
+				}
+			}
+		}
+		return curr;
+	}
+	private Operator genJoinPlan(QB qb, Map<String, Operator> map) throws SemanticException {
+		QBJoinTree joinTree = qb.getQbJoinTree();
+		Operator joinOp = genJoinOperator(qb, joinTree, map, null);
+		return joinOp;
+	}
+	private Operator genJoinOperator(QB qb, QBJoinTree joinTree, Map<String, Operator> map, Operator joiningOp) throws SemanticException {
+		ExprNodeDesc[][] joinKeys = genJoinKeys(joinTree, srcOps);
+		for (int i = 0; i < srcOps.length; i++) {
+			String[] srcs = baseSrc[i] != null ? new String[] {baseSrc[i]} : joinTree.getLeftAliases();
+			srcOps[i] = genNotNullFilterForJoinSourcePlan(qb, srcOps[i], joinTree, joinKeys[i]);
+			srcOps[i] = genJoinReduceSinkChild(qb, joinKeys[i], srcOps[i], srcs, joinTree.getNextTag());
+		}
+		JoinOperator joinOp = (JoinOperator) genJoinOperatorChildren(joinTree, joinSrcOp, srcOps, omitOpts, joinKeys);
+		Operator op = joinOp;    
+		return op;
+	}
+	private Operator genJoinOperatorChildren(QBJoinTree join, Operator left, Operator[] right, HashSet<Integer> omitOpts, ExprNodeDesc[][] joinKeys) throws SemanticException {    
+		JoinOperator joinOp = (JoinOperator) OperatorFactory.getAndMakeChild(desc, new RowSchema(outputRR.getColumnInfos()), rightOps);// 为两个 operator 添加 joinOp
+		return putOpInsertMap(joinOp, outputRR);
+	}  
+	private Operator genSelectAllDesc(Operator input) throws SemanticException {
+		OpParseContext inputCtx = opParseCtx.get(input);
+		RowResolver inputRR = inputCtx.getRowResolver();
+		ArrayList<ColumnInfo> columns = inputRR.getColumnInfos();// [id: int, name: string, age: int, BLOCK__OFFSET__INSIDE__FILE: bigint, INPUT__FILE__NAME: string, ROW__ID: struct<transactionid:bigint,bucketid:int,rowid:bigint>]
+		ArrayList<ExprNodeDesc> colList = new ArrayList<ExprNodeDesc>();
+		ArrayList<String> columnNames = new ArrayList<String>();
+		for (int i = 0; i < columns.size(); i++) {
+			ColumnInfo col = columns.get(i);
+			colList.add(new ExprNodeColumnDesc(col));
+			columnNames.add(col.getInternalName());
+		}
+		RowResolver outputRR = inputRR.duplicate();
+		Operator output = putOpInsertMap(OperatorFactory.getAndMakeChild(new SelectDesc(colList, columnNames, true), outputRR.getRowSchema(), input), outputRR);
+		return output;
+	}
+	// group by 的 sql 时这一个方法里搞定了 GroupByOperator ReduceSinkOperator GroupByOperator 三个 operator, 以第一外结果传给下一个方式来完成依赖
+	private Operator genGroupByPlanMapAggrNoSkew(String dest, QB qb, Operator inputOperatorInfo) throws SemanticException {
+		QBParseInfo parseInfo = qb.getParseInfo();
+		ObjectPair<List<ASTNode>, List<Integer>> grpByExprsGroupingSets = getGroupByGroupingSetsForClause(parseInfo, dest);
+		List<ASTNode> grpByExprs = grpByExprsGroupingSets.getFirst();
+		List<Integer> groupingSets = grpByExprsGroupingSets.getSecond();
+		boolean groupingSetsPresent = !groupingSets.isEmpty();
+		int newMRJobGroupingSetsThreshold = conf.getIntVar(HiveConf.ConfVars.HIVE_NEW_JOB_GROUPING_SET_CARDINALITY);
+		if (groupingSetsPresent) {
+			checkExpressionsForGroupingSet(grpByExprs, parseInfo.getDistinctFuncExprsForClause(dest), parseInfo.getAggregationExprsForClause(dest), opParseCtx.get(inputOperatorInfo).getRowResolver());
+		}
+		Map<String, GenericUDAFEvaluator> genericUDAFEvaluators = new LinkedHashMap<String, GenericUDAFEvaluator>();
+		boolean groupingSetsNeedAdditionalMRJob = groupingSetsPresent && groupingSets.size() > newMRJobGroupingSetsThreshold ? true : false;
+		GroupByOperator groupByOperatorInfo = (GroupByOperator) genGroupByPlanMapGroupByOperator(qb, dest, grpByExprs, inputOperatorInfo, GroupByDesc.Mode.HASH, genericUDAFEvaluators, groupingSets, groupingSetsPresent && !groupingSetsNeedAdditionalMRJob);
+		groupOpToInputTables.put(groupByOperatorInfo, opParseCtx.get(inputOperatorInfo).getRowResolver().getTableNames());
+		Operator reduceSinkOperatorInfo = genGroupByPlanReduceSinkOperator(qb, dest, groupByOperatorInfo,  grpByExprs, grpByExprs.size(), true, numReducers, true, groupingSetsPresent && !groupingSetsNeedAdditionalMRJob);
+		return genGroupByPlanGroupByOperator1(parseInfo, dest, reduceSinkOperatorInfo, GroupByDesc.Mode.MERGEPARTIAL, genericUDAFEvaluators, groupingSets, groupingSetsPresent, groupingSetsNeedAdditionalMRJob);
+	}
+
+	private Operator genGroupByPlanMapGroupByOperator(QB qb, String dest, List<ASTNode> grpByExprs, Operator inputOperatorInfo, GroupByDesc.Mode mode, Map<String, GenericUDAFEvaluator> genericUDAFEvaluators, List<Integer> groupingSetKeys, boolean groupingSetsPresent) throws SemanticException {
+		RowResolver groupByInputRowResolver = opParseCtx.get(inputOperatorInfo).getRowResolver();
+		QBParseInfo parseInfo = qb.getParseInfo();
+		RowResolver groupByOutputRowResolver = new RowResolver();
+		groupByOutputRowResolver.setIsExprResolver(true);
+		ArrayList<ExprNodeDesc> groupByKeys = new ArrayList<ExprNodeDesc>();
+		ArrayList<String> outputColumnNames = new ArrayList<String>();
+		ArrayList<AggregationDesc> aggregations = new ArrayList<AggregationDesc>();
+		Map<String, ExprNodeDesc> colExprMap = new HashMap<String, ExprNodeDesc>();
+		for (int i = 0; i < grpByExprs.size(); ++i) {
+			ASTNode grpbyExpr = grpByExprs.get(i);
+			ExprNodeDesc grpByExprNode = genExprNodeDesc(grpbyExpr, groupByInputRowResolver);// Column[name]
+			groupByKeys.add(grpByExprNode);
+			String field = getColumnInternalName(i);
+			outputColumnNames.add(field);
+			groupByOutputRowResolver.putExpression(grpbyExpr, new ColumnInfo(field, grpByExprNode.getTypeInfo(), "", false));
+			colExprMap.put(field, groupByKeys.get(groupByKeys.size() - 1));
+		}
+		HashMap<String, ASTNode> aggregationTrees = parseInfo.getAggregationExprsForClause(dest);
+		boolean containsDistinctAggr = false;
+		for (Map.Entry<String, ASTNode> entry : aggregationTrees.entrySet()) {
+			ASTNode value = entry.getValue();
+			String aggName = unescapeIdentifier(value.getChild(0).getText());// sum
+			ArrayList<ExprNodeDesc> aggParameters = new ArrayList<ExprNodeDesc>();
+			for (int i = 1; i < value.getChildCount(); i++) {
+				ASTNode paraExpr = (ASTNode) value.getChild(i);
+				ExprNodeDesc paraExprNode = genExprNodeDesc(paraExpr, groupByInputRowResolver); // Column[age]
+				aggParameters.add(paraExprNode);
+			}
+			boolean isDistinct = value.getType() == HiveParser.TOK_FUNCTIONDI;
+			containsDistinctAggr = containsDistinctAggr || isDistinct;
+			boolean isAllColumns = value.getType() == HiveParser.TOK_FUNCTIONSTAR;
+			Mode amode = groupByDescModeToUDAFMode(mode, isDistinct);
+			GenericUDAFEvaluator genericUDAFEvaluator = getGenericUDAFEvaluator(aggName, aggParameters, value, isDistinct, isAllColumns);
+			GenericUDAFInfo udaf = getGenericUDAFInfo(genericUDAFEvaluator, amode, aggParameters);
+			aggregations.add(new AggregationDesc(aggName.toLowerCase(), udaf.genericUDAFEvaluator, udaf.convertedParameters, isDistinct, amode));
+			String field = getColumnInternalName(groupByKeys.size() + aggregations.size() - 1);
+			outputColumnNames.add(field);      
+		}
+		Operator op = putOpInsertMap(OperatorFactory.getAndMakeChild(new GroupByDesc(mode, outputColumnNames, groupByKeys, aggregations, false, groupByMemoryUsage, memoryThreshold, groupingSetKeys, groupingSetsPresent, groupingSetsPosition, containsDistinctAggr), new RowSchema(groupByOutputRowResolver.getColumnInfos()), inputOperatorInfo), groupByOutputRowResolver);
+		return op;
+	}
+	
+	private ReduceSinkOperator genGroupByPlanReduceSinkOperator(QB qb, String dest, Operator inputOperatorInfo, List<ASTNode> grpByExprs, int numPartitionFields, boolean changeNumPartitionFields, int numReducers, boolean mapAggrDone, boolean groupingSetsPresent) throws SemanticException {
+		RowResolver reduceSinkInputRowResolver = opParseCtx.get(inputOperatorInfo).getRowResolver();
+		QBParseInfo parseInfo = qb.getParseInfo();
+		RowResolver reduceSinkOutputRowResolver = new RowResolver();
+		reduceSinkOutputRowResolver.setIsExprResolver(true);
+		Map<String, ExprNodeDesc> colExprMap = new HashMap<String, ExprNodeDesc>();
+		List<String> outputKeyColumnNames = new ArrayList<String>();
+		List<String> outputValueColumnNames = new ArrayList<String>();
+		ArrayList<ExprNodeDesc> reduceKeys = getReduceKeysForReduceSink(grpByExprs, dest, reduceSinkInputRowResolver, reduceSinkOutputRowResolver, outputKeyColumnNames, colExprMap);
+		List<List<Integer>> distinctColIndices = getDistinctColIndicesForReduceSink(parseInfo, dest, reduceKeys, reduceSinkInputRowResolver, reduceSinkOutputRowResolver, outputKeyColumnNames, colExprMap);
+		ArrayList<ExprNodeDesc> reduceValues = new ArrayList<ExprNodeDesc>();
+		HashMap<String, ASTNode> aggregationTrees = parseInfo.getAggregationExprsForClause(dest);
+		int inputField = reduceKeys.size();
+		for (Map.Entry<String, ASTNode> entry : aggregationTrees.entrySet()) {
+			TypeInfo type = reduceSinkInputRowResolver.getColumnInfos().get(inputField).getType();
+			ExprNodeColumnDesc exprDesc = new ExprNodeColumnDesc(type, getColumnInternalName(inputField), "", false);
+			reduceValues.add(exprDesc);
+			inputField++;
+			String outputColName = getColumnInternalName(reduceValues.size() - 1);
+			outputValueColumnNames.add(outputColName);
+			String internalName = Utilities.ReduceField.VALUE.toString() + "." + outputColName;
+			reduceSinkOutputRowResolver.putExpression(entry.getValue(), new ColumnInfo(internalName, type, null, false));
+			colExprMap.put(internalName, exprDesc);
+		}
+		ReduceSinkOperator rsOp = (ReduceSinkOperator) putOpInsertMap(OperatorFactory.getAndMakeChild(PlanUtils.getReduceSinkDesc(reduceKeys, groupingSetsPresent ? keyLength + 1 : keyLength, reduceValues, distinctColIndices, outputKeyColumnNames, outputValueColumnNames, true, -1, numPartitionFields, numReducers, AcidUtils.Operation.NOT_ACID), new RowSchema(reduceSinkOutputRowResolver.getColumnInfos()), inputOperatorInfo), reduceSinkOutputRowResolver);
+		return rsOp;
+	}
+	
+	private Operator genGroupByPlanGroupByOperator1(QBParseInfo parseInfo, String dest, Operator reduceSinkOperatorInfo, GroupByDesc.Mode mode, Map<String, GenericUDAFEvaluator> genericUDAFEvaluators, List<Integer> groupingSets, boolean groupingSetsPresent, boolean groupingSetsNeedAdditionalMRJob) throws SemanticException {
+		ArrayList<String> outputColumnNames = new ArrayList<String>();
+		RowResolver groupByInputRowResolver = opParseCtx.get(reduceSinkOperatorInfo).getRowResolver();
+		RowResolver groupByOutputRowResolver = new RowResolver();
+		groupByOutputRowResolver.setIsExprResolver(true);
+		ArrayList<ExprNodeDesc> groupByKeys = new ArrayList<ExprNodeDesc>();
+		ArrayList<AggregationDesc> aggregations = new ArrayList<AggregationDesc>();
+		List<ASTNode> grpByExprs = getGroupByForClause(parseInfo, dest);
+		Map<String, ExprNodeDesc> colExprMap = new HashMap<String, ExprNodeDesc>();
+		for (int i = 0; i < grpByExprs.size(); ++i) {
+		ASTNode grpbyExpr = grpByExprs.get(i);
+		ColumnInfo exprInfo = groupByInputRowResolver.getExpression(grpbyExpr);
+		groupByKeys.add(new ExprNodeColumnDesc(exprInfo));
+		String field = getColumnInternalName(i);
+		outputColumnNames.add(field);
+		ColumnInfo oColInfo = new ColumnInfo(field, exprInfo.getType(), "", false);
+		groupByOutputRowResolver.putExpression(grpbyExpr, oColInfo);
+		addAlternateGByKeyMappings(grpbyExpr, oColInfo, reduceSinkOperatorInfo, groupByOutputRowResolver);
+		colExprMap.put(field, groupByKeys.get(groupByKeys.size() - 1));
+		}
+		int groupingSetsPosition = -1;
+		if (groupingSetsPresent) {
+			groupingSetsPosition = groupByKeys.size();
+			if (!groupingSetsNeedAdditionalMRJob) {
+				addGroupingSetKey(groupByKeys, groupByInputRowResolver, groupByOutputRowResolver, outputColumnNames, colExprMap);
+			}
+			else {
+				createNewGroupingKey(groupByKeys, outputColumnNames, groupByOutputRowResolver, colExprMap);
+			}
+		}
+		HashMap<String, ASTNode> aggregationTrees = parseInfo.getAggregationExprsForClause(dest);
+		String lastKeyColName = null;
+		List<ExprNodeDesc> reduceValues = null;
+		if (reduceSinkOperatorInfo.getConf() instanceof ReduceSinkDesc) {
+			List<String> inputKeyCols = ((ReduceSinkDesc)
+			reduceSinkOperatorInfo.getConf()).getOutputKeyColumnNames();
+			if (inputKeyCols.size() > 0) {
+				lastKeyColName = inputKeyCols.get(inputKeyCols.size() - 1);
+			}
+			reduceValues = ((ReduceSinkDesc) reduceSinkOperatorInfo.getConf()).getValueCols();
+		}
+		int numDistinctUDFs = 0;
+		boolean containsDistinctAggr = false;
+		for (Map.Entry<String, ASTNode> entry : aggregationTrees.entrySet()) {
+			ASTNode value = entry.getValue();
+			String aggName = unescapeIdentifier(value.getChild(0).getText());
+			ArrayList<ExprNodeDesc> aggParameters = new ArrayList<ExprNodeDesc>();
+			boolean isDistinct = (value.getType() == HiveParser.TOK_FUNCTIONDI);
+			containsDistinctAggr = containsDistinctAggr || isDistinct;
+			ColumnInfo paraExprInfo = groupByInputRowResolver.getExpression(value);
+			String paraExpression = paraExprInfo.getInternalName();
+			assert (paraExpression != null);
+			aggParameters.add(new ExprNodeColumnDesc(paraExprInfo.getType(), paraExpression, paraExprInfo.getTabAlias(), paraExprInfo.getIsVirtualCol()));
+			Mode amode = groupByDescModeToUDAFMode(mode, isDistinct);
+			GenericUDAFEvaluator genericUDAFEvaluator = null;
+			genericUDAFEvaluator = genericUDAFEvaluators.get(entry.getKey());
+			GenericUDAFInfo udaf = getGenericUDAFInfo(genericUDAFEvaluator, amode, aggParameters);
+			aggregations.add(new AggregationDesc(aggName.toLowerCase(), udaf.genericUDAFEvaluator, udaf.convertedParameters, (mode != GroupByDesc.Mode.FINAL && isDistinct), amode));
+			String field = getColumnInternalName(groupByKeys.size() + aggregations.size() - 1);
+			outputColumnNames.add(field);
+			groupByOutputRowResolver.putExpression(value, new ColumnInfo(field, udaf.returnType, "", false));
+		}
+		Operator op = putOpInsertMap(OperatorFactory.getAndMakeChild(new GroupByDesc(mode, outputColumnNames, groupByKeys, aggregations, groupByMemoryUsage, memoryThreshold, groupingSets, groupingSetsPresent && groupingSetsNeedAdditionalMRJob, groupingSetsPosition, containsDistinctAggr), new RowSchema(groupByOutputRowResolver.getColumnInfos()), reduceSinkOperatorInfo), groupByOutputRowResolver);
+		op.setColumnExprMap(colExprMap);
+		return op;
+	}
+	
+	private Operator genPostGroupByBodyPlan(Operator curr, String dest, QB qb, Map<String, Operator> aliasToOpInfo, Operator gbySource) throws SemanticException {
+		QBParseInfo qbp = qb.getParseInfo();
+		curr = genSelectPlan(dest, qb, curr, gbySource);
+		if (!SessionState.get().getHiveOperation().equals(HiveOperation.CREATEVIEW)) {
+			curr = genFileSinkPlan(dest, qb, curr);
+		}
+		return curr;
+	}
+	protected Operator genFileSinkPlan(String dest, QB qb, Operator input) throws SemanticException {
+		...// 这方法太长了
+		Operator output = putOpInsertMap(OperatorFactory.getAndMakeChild(fileSinkDesc, fsRS, input), inputRR);
+		return output;
+	}
+	boolean genResolvedParseTree(ASTNode ast, PlannerContext plannerCtx) throws SemanticException {
+		ASTNode child = ast;
+		this.ast = ast;
+		viewsExpanded = new ArrayList<String>();
+		ctesExpanded = new ArrayList<String>();
+		// 1. analyze and process the position alias
+		processPositionAlias(ast);
+		// 2. analyze create table command
+		if (ast.getToken().getType() == HiveParser.TOK_CREATETABLE) {
+			// if it is not CTAS, we don't need to go further and just return
+			if ((child = analyzeCreateTable(ast, qb, plannerCtx)) == null) {
+				return false;
+			}
+		} else {
+			SessionState.get().setCommandType(HiveOperation.QUERY);
+		}
+		// 3. analyze create view command
+		if (ast.getToken().getType() == HiveParser.TOK_CREATEVIEW || (ast.getToken().getType() == HiveParser.TOK_ALTERVIEW && ast.getChild(1).getType() == HiveParser.TOK_QUERY)) {
+			child = analyzeCreateView(ast, qb);
+			SessionState.get().setCommandType(HiveOperation.CREATEVIEW);
+			if (child == null) {
+				return false;
+			}
+			viewSelect = child;
+			viewsExpanded.add(createVwDesc.getViewName());
+		}
+		// 4. continue analyzing from the child ASTNode.
+		Phase1Ctx ctx_1 = initPhase1Ctx();
+		preProcessForInsert(child, qb);
+		if (!doPhase1(child, qb, ctx_1, plannerCtx)) {// doPhase1 内部也是个递归操作, 我觉得最重要的事情是遍历 table/alias --> qb.setTabAlias(alias, tabIdName); 以便后面产生 TableScanOperator
+			return false;
+		}
+		// 5. Resolve Parse Tree
+		getMetaData(qb);
+		plannerCtx.setParseTreeAttr(child, ctx_1);
+		return true;
+	}
+}
+public final class org.apache.hadoop.hive.ql.exec.OperatorFactory {
+  public static <T extends OperatorDesc> Operator<T> getAndMakeChild(T conf, RowSchema rwsch, Operator... oplist) {
+    Operator<T> ret = getAndMakeChild(conf, oplist);
+    ret.setSchema(rwsch);
+    return ret;
+  }
+public static <T extends OperatorDesc> Operator<T> getAndMakeChild(T conf, Operator... oplist) {
+    Operator<T> ret = get((Class<T>) conf.getClass());
+    for (Operator op : oplist) {
+      List<Operator> children = op.getChildOperators();
+      children.add(ret);// 这里完成了 operator 依赖
+      op.setChildOperators(children);
+    }
+    return (ret);
+  }
+}
+
+public class org.apache.hadoop.hive.ql.optimizer.Optimizer {
+	public ParseContext optimize() throws SemanticException {
+		for (Transform t : transformations) {
+			// HiveOpConverterPostProc Generator PredicateTransitivePropagate ConstantPropagate SyntheticJoinPredicate PredicatePushDown ConstantPropagate PartitionPruner PartitionConditionRemover GroupByOptimizer ColumnPruner SamplePruner MapJoinProcessor BucketingSortingReduceSinkOptimizer UnionProcessor JoinReorder ReduceSinkDeDuplication NonBlockingOpDeDupProc IdentityProjectRemover SimpleFetchOptimizer
+			pctx = t.transform(pctx);// IdentityProjectRemover 起到了减少 operator 作用 (select group by 操作减少 SelectOperator), join 操作这里没有任何处理 转 mapjoin 不是在这
+		}
+		return pctx;
+	}
+}
+
+public class org.apache.hadoop.hive.ql.parse.CalcitePlanner extends SemanticAnalyzer {
+	Operator genOPTree(ASTNode ast, PlannerContext plannerCtx) throws SemanticException {
+		sinkOp = super.genOPTree(ast, plannerCtx);
+		return sinkOp;
+	}
+}
+public abstract class org.apache.hadoop.hive.ql.parse.TaskCompiler {
+	public void compile(final ParseContext pCtx, final List<Task<? extends Serializable>> rootTasks, final HashSet<ReadEntity> inputs, final HashSet<WriteEntity> outputs) throws SemanticException {
+		List<LoadFileDesc> loadFileWork = pCtx.getLoadFileWork();
+		LoadFileDesc loadFileDesc = loadFileWork.get(0);
+		FetchWork fetch = new FetchWork(loadFileDesc.getSourcePath(), resultTab, outerQueryLimit);// loadFileDesc.getSourcePath() 就是结果数据路径
+		generateTaskTree(rootTasks, pCtx, mvTask, inputs, outputs);
+		optimizeTaskPlan(rootTasks, pCtx, ctx); // 各种 PhysicalOptimizer 骚操作, reduce-join --> map-join 就是在这里
+	}
+}
+public class org.apache.hadoop.hive.ql.parse.MapReduceCompiler extends TaskCompiler {
+	// 方法中  MapRedTask, MapredWork 创建并绑定, 并存在了 GenMRProcContext, 
+	// GenMRProcContext 被创建是在 org.apache.hadoop.hive.ql.parse.MapReduceCompiler#generateTaskTree
+	protected void generateTaskTree(List<Task<? extends Serializable>> rootTasks, ParseContext pCtx, List<Task<MoveWork>> mvTask, Set<ReadEntity> inputs, Set<WriteEntity> outputs) throws SemanticException {
+		ParseContext tempParseContext = getParseContext(pCtx, rootTasks);// pCtx 对 GenMRProcContext 很重要, 创建 task 时需要获取 operator, 在 Dispatcher.dispatch --> process 
+		GenMRProcContext procCtx = new GenMRProcContext(conf, new LinkedHashMap<Operator<? extends OperatorDesc>, Task<? extends Serializable>>(), tempParseContext, mvTask, rootTasks, new LinkedHashMap<Operator<? extends OperatorDesc>, GenMapRedCtx>(), inputs, outputs);
+		Map<Rule, NodeProcessor> opRules = new LinkedHashMap<Rule, NodeProcessor>();
+		opRules.put(new RuleRegExp(new String("R1"), TableScanOperator.getOperatorName() + "%"), new GenMRTableScan1());
+		opRules.put(new RuleRegExp(new String("R2"), TableScanOperator.getOperatorName() + "%.*" + ReduceSinkOperator.getOperatorName() + "%"), new GenMRRedSink1());
+		opRules.put(new RuleRegExp(new String("R3"), ReduceSinkOperator.getOperatorName() + "%.*" + ReduceSinkOperator.getOperatorName() + "%"), new GenMRRedSink2());
+		opRules.put(new RuleRegExp(new String("R4"), FileSinkOperator.getOperatorName() + "%"), new GenMRFileSink1());
+		opRules.put(new RuleRegExp(new String("R5"), UnionOperator.getOperatorName() + "%"), new GenMRUnion1());
+		opRules.put(new RuleRegExp(new String("R6"), UnionOperator.getOperatorName() + "%.*" + ReduceSinkOperator.getOperatorName() + "%"), new GenMRRedSink3());
+		opRules.put(new RuleRegExp(new String("R7"), MapJoinOperator.getOperatorName() + "%"), MapJoinFactory.getTableScanMapJoin());
+		Dispatcher disp = new DefaultRuleDispatcher(new GenMROperator(), opRules, procCtx);
+		GraphWalker ogw = new GenMapRedWalker(disp);
+		// topNodes = pCtx.getTopOps().values(); , rootTasks 也是在此方法中加进去的, rootTasks 中加的是要被执行的 task. task 的多层嵌套也是在这里完成
+		ogw.startWalking(topNodes, null);
+	}
+	protected void optimizeTaskPlan(List<Task<? extends Serializable>> rootTasks, ParseContext pCtx, Context ctx) throws SemanticException {
+		for (Task<? extends Serializable> rootTask : rootTasks) {
+			breakTaskTree(rootTask);// 截断 mWork 操作中多余的 operator, 即只留下 pCtx.getTopOps() 中的 map 端 operator, 但是已经存在了 map/reduce 中, 所以可以复原
+		}
+		PhysicalContext physicalContext = new PhysicalContext(conf, getParseContext(pCtx, rootTasks), ctx, rootTasks, pCtx.getFetchTask());
+		PhysicalOptimizer physicalOptimizer = new PhysicalOptimizer(physicalContext, conf);
+		physicalOptimizer.optimize();
+	}
+}
+
+public class org.apache.hadoop.hive.ql.parse.GenMapRedWalker extends DefaultGraphWalker {
+	public GenMapRedWalker(Dispatcher disp) {
+		super(disp);
+	}
+	public void walk(Node nd) throws SemanticException {
+		List<? extends Node> children = nd.getChildren();
+		opStack.push(nd);
+		Boolean result = dispatchAndReturn(nd, opStack);
+		if (children == null || result == Boolean.FALSE) {// join 操作两个 scanOp, 就是第二个 result 为 false, 才被阻断, 即一个 task. 应该是第二次 GenMRRedSink1#process 中返回的 false
+			opStack.pop();
+			return;
+		}
+		for (Node ch : children) {
+			walk(ch);// 这里是个递归调用啊，从顶层 operator 开始, 根据注册的不同的 opRules, 做不同的处理
+		}
+		opStack.pop();
+	}
+}
+public class org.apache.hadoop.hive.ql.lib.DefaultGraphWalker implements GraphWalker {
+	protected final IdentityHashMap<Node, Object> retMap = new  IdentityHashMap<Node, Object>();
+	protected final Dispatcher dispatcher;
+	public DefaultGraphWalker(Dispatcher disp) {
+		dispatcher = disp;
+		opStack = new Stack<Node>();
+	}
+	public <T> T dispatchAndReturn(Node nd, Stack<Node> ndStack) throws SemanticException {
+		Object[] nodeOutputs = null;
+		if (nd.getChildren() != null) {
+			nodeOutputs = new Object[nd.getChildren().size()];
+			int i = 0;
+			for (Node child : nd.getChildren()) {// 上面的 walk 递归使 Children Node 先执行了, 所以这里应该可以拿到值
+				nodeOutputs[i++] = retMap.get(child);
+			}
+		}
+		Object retVal = dispatcher.dispatch(nd, ndStack, nodeOutputs);
+		retMap.put(nd, retVal);// 这个返回值可以说相当重要了 TableScanOperator 不同但是下面的 JoinOperator 相同, 这里就保证了第二次 JoinOperator 后面的不被处理了
+		return (T) retVal;
+	}
+	public void startWalking(Collection<Node> startNodes, HashMap<Node, Object> nodeOutput) throws SemanticException {
+		toWalk.addAll(startNodes);
+		while (toWalk.size() > 0) {
+			Node nd = toWalk.remove(0);
+			walk(nd);
+			if (nodeOutput != null) {
+				nodeOutput.put(nd, retMap.get(nd));
+			}
+		}
+	}
+}
+public class org.apache.hadoop.hive.ql.optimizer.physical.PhysicalOptimizer {
+	public PhysicalContext optimize() throws SemanticException {
+		for (PhysicalPlanResolver r : resolvers) {// CommonJoinResolver MapJoinResolver MetadataOnlyOptimizer NullScanOptimizer CrossProductCheck
+			pctx = r.resolve(pctx);
+		}
+		return pctx;
+	}
+}
+
+public class org.apache.hadoop.hive.ql.lib.DefaultRuleDispatcher implements Dispatcher {
+	private final Map<Rule, NodeProcessor> procRules;
+	private final NodeProcessorCtx procCtx;
+	private final NodeProcessor defaultProc;
+	public DefaultRuleDispatcher(NodeProcessor defaultProc, Map<Rule, NodeProcessor> rules, NodeProcessorCtx procCtx) {
+		this.defaultProc = defaultProc;
+		procRules = rules;
+		this.procCtx = procCtx;
+	}
+	public Object dispatch(Node nd, Stack<Node> ndStack, Object... nodeOutputs) throws SemanticException {
+		Rule rule = null;
+		for (Rule r : procRules.keySet()) {
+			int cost = r.cost(ndStack);
+			if ((cost >= 0) && (cost <= minCost)) { // 为啥取最小的呢, 这样搞不好吧, 应该只有一个匹配上才好啊
+				minCost = cost;
+				rule = r;
+			}
+		}
+		NodeProcessor proc;
+		if (rule == null) {
+			proc = defaultProc;
+		} else {
+			proc = procRules.get(rule);
+		}
+		if (proc != null) {
+			return proc.process(nd, ndStack, procCtx, nodeOutputs);
+		} else {
+			return null;
+		}
+	}
+}
+public class org.apache.hadoop.hive.ql.optimizer.GenMRTableScan1 implements NodeProcessor {
+	public Object process(Node nd, Stack<Node> stack, NodeProcessorCtx opProcCtx, Object... nodeOutputs) throws SemanticException {
+		TableScanOperator op = (TableScanOperator) nd;
+		GenMRProcContext ctx = (GenMRProcContext) opProcCtx;
+		ParseContext parseCtx = ctx.getParseCtx();
+		MapredWork currWork = GenMapRedUtils.getMapRedWork(parseCtx);
+		MapRedTask currTask = (MapRedTask) TaskFactory.get(currWork, parseCtx.getConf());// 创建 task 时把 work 传入, 会调用 Task.setWork, 也就是 org.apache.hadoop.hive.ql.exec.mr.MapRedTask#execute 中用到的
+		Operator<? extends OperatorDesc> currTopOp = op;
+		ctx.setCurrTask(currTask);
+		ctx.setCurrTopOp(currTopOp);
+	}
+}
+
+public class GenMRFileSink1 implements NodeProcessor {
+	public Object process(Node nd, Stack<Node> stack, NodeProcessorCtx opProcCtx, Object... nodeOutputs) throws SemanticException {
+		GenMRProcContext ctx = (GenMRProcContext) opProcCtx;
+		Task<? extends Serializable> currTask = ctx.getCurrTask();
+		ctx.addRootIfPossible(currTask); // 加入到了 BaseSemanticAnalyzer sem 中的 rootTasks 中了
+	}
+}
+
+public class org.apache.hadoop.hive.ql.optimizer.GenMRRedSink1 implements NodeProcessor {
+	public Object process(Node nd, Stack<Node> stack, NodeProcessorCtx opProcCtx, Object... nodeOutputs) throws SemanticException {
+		ReduceSinkOperator op = (ReduceSinkOperator) nd;
+		GenMRProcContext ctx = (GenMRProcContext) opProcCtx;
+		Map<Operator<? extends OperatorDesc>, GenMapRedCtx> mapCurrCtx = ctx.getMapCurrCtx();
+		GenMapRedCtx mapredCtx = mapCurrCtx.get(stack.get(stack.size() - 2));
+		Task<? extends Serializable> currTask = mapredCtx.getCurrTask();// task 创建是在 GenMRTableScan1 中
+		MapredWork currPlan = (MapredWork) currTask.getWork();
+		String currAliasId = mapredCtx.getCurrAliasId();
+		Operator<? extends OperatorDesc> reducer = op.getChildOperators().get(0);
+		Task<? extends Serializable> oldTask = ctx.getOpTaskMap().get(reducer);
+		ctx.setCurrAliasId(currAliasId);
+		ctx.setCurrTask(currTask);
+		if (oldTask == null) {
+			if (currPlan.getReduceWork() == null) {
+				// 到了 ReduceSinkOperator 就去将此后的 operator 设置为 reduce 的 operator, 因为 map 操作只应该执行 ReduceSinkOperator 之前的 operator 
+				//所以, 后面后有操作将其截断
+				GenMapRedUtils.initPlan(op, ctx);
+			}
+		}
+		mapCurrCtx.put(op, new GenMapRedCtx(ctx.getCurrTask(), ctx.getCurrAliasId()));
+	}
+}
+
+public final class org.apache.hadoop.hive.ql.optimizer.GenMapRedUtils {
+	public static void initPlan(ReduceSinkOperator op, GenMRProcContext opProcCtx) throws SemanticException {
+		Operator<? extends OperatorDesc> reducer = op.getChildOperators().get(0);
+		Map<Operator<? extends OperatorDesc>, GenMapRedCtx> mapCurrCtx = opProcCtx.getMapCurrCtx();
+		GenMapRedCtx mapredCtx = mapCurrCtx.get(op.getParentOperators().get(0));
+		Task<? extends Serializable> currTask = mapredCtx.getCurrTask();
+		MapredWork plan = (MapredWork) currTask.getWork();
+		HashMap<Operator<? extends OperatorDesc>, Task<? extends Serializable>> opTaskMap = opProcCtx.getOpTaskMap();
+		// 此处的 currTopOp 已经被优化了, 并不是最初产生的那个了, 对象还是那个不同的是已经被砍去了一些中间的 operator
+		Operator<? extends OperatorDesc> currTopOp = opProcCtx.getCurrTopOp();
+		opTaskMap.put(reducer, currTask);
+		plan.setReduceWork(new ReduceWork());
+		plan.getReduceWork().setReducer(reducer);// 设置 reducer 的 operator
+		if (!opProcCtx.isSeenOp(currTask, currTopOp)) {
+			setTaskPlan(currAliasId, currTopOp, currTask, false, opProcCtx);// 转入 org.apache.hadoop.hive.ql.optimizer.GenMapRedUtils#setMapWork
+		}
+	}
+}
+
+public class org.apache.hadoop.hive.ql.optimizer.GenMRProcContext implements NodeProcessorCtx {
+	public GenMRProcContext(HiveConf conf, HashMap<Operator<? extends OperatorDesc>, Task<? extends Serializable>> opTaskMap, ParseContext parseCtx, List<Task<MoveWork>> mvTask, List<Task<? extends Serializable>> rootTasks, LinkedHashMap<Operator<? extends OperatorDesc>, GenMapRedCtx> mapCurrCtx, Set<ReadEntity> inputs, Set<WriteEntity> outputs) {
+		this.parseCtx = parseCtx;
+		this.rootTasks = rootTasks;
+		this.inputs = inputs;
+		this.outputs = outputs;
+		currTask = null;
+		currTopOp = null;
+	}
+	public List<Task<? extends Serializable>> getRootTasks() { return rootTasks; }
+	public void setRootTasks(List<Task<? extends Serializable>> rootTasks) { this.rootTasks = rootTasks; }
+	public boolean addRootIfPossible(Task<? extends Serializable> task) {
+		if (task.getParentTasks() == null || task.getParentTasks().isEmpty()) {
+			if (!rootTasks.contains(task)) {
+				boolean rrr = rootTasks.add(task);
+				return rrr;
+			}
+		}
+		return false;
+	}
+	public Task<? extends Serializable> getCurrTask() { return currTask; }
+	public void setCurrTask(Task<? extends Serializable> currTask) { this.currTask = currTask; }
+}
+
+public class org.apache.hadoop.hive.ql.exec.FetchTask extends Task<FetchWork> implements Serializable {
+	private FetchOperator fetch;
+	private ListSinkOperator sink;
+	public void initialize(HiveConf conf, QueryPlan queryPlan, DriverContext ctx) {
+		fetch = new FetchOperator(work, job, source, getVirtualColumns(source));
+	}
+	public boolean fetch(List res) throws IOException, CommandNeedRetryException {
+		sink.reset(res);
+		int rowsRet = work.getLeastNumRows();
+		while (sink.getNumRows() < rowsRet) {
+			if (!fetch.pushRow()) {
+				return fetched;
+			}
+			fetched = true;
+		}
+		return true;
+	}
+}
+public class org.apache.hadoop.hive.ql.exec.FetchOperator implements Serializable {
+	private transient final InspectableObject inspectable = new InspectableObject();
+	private transient Object[] row;
+	private transient Deserializer currSerDe;
+	private final boolean hasVC;
+	private final boolean isPartitioned;
+	private final List<VirtualColumn> vcCols;
+	private transient Path currPath;
+	private transient Iterator<Path> iterPath;
+	public FetchOperator(FetchWork work, JobConf job, Operator<?> operator, List<VirtualColumn> vcCols) throws HiveException {
+		this.operator = operator;
+		this.vcCols = vcCols;
+		this.hasVC = vcCols != null && !vcCols.isEmpty();
+		this.isPartitioned = !isStatReader && work.isPartitioned();
+		initialize();
+	}
+	private void initialize() throws HiveException {
+		row = new Object[1];
+		iterPath = Arrays.asList(work.getTblDir()).iterator();
+	}
+	public boolean pushRow() throws IOException, HiveException {
+		InspectableObject row = getNextRow();
+		if (row != null) {
+			pushRow(row);// 向 fetcher 发数据了
+		} else {
+			flushRow();
+		}
+		return row != null;
+	}
+	public InspectableObject getNextRow() throws IOException {
+		while (true) {
+			if (currRecReader == null) {
+				currRecReader = getRecordReader();
+			}
+			if (opNotEOF && footerBuffer == null) {
+				opNotEOF = currRecReader.next(key, value);
+			}
+			if (opNotEOF && footerBuffer != null) {
+				opNotEOF = footerBuffer.updateBuffer(job, currRecReader, key, value);
+			}
+			Object deserialized = currSerDe.deserialize(value);
+			inspectable.o = deserialized;
+			inspectable.oi = currSerDe.getObjectInspector();
+			return inspectable;
+		}
+	}
+	private RecordReader<WritableComparable, Writable> getRecordReader() throws Exception {
+		if (!iterSplits.hasNext()) {
+			FetchInputFormatSplit[] splits = getNextSplits();
+			iterSplits = Arrays.asList(splits).iterator();
+		}
+		final FetchInputFormatSplit target = iterSplits.next();
+		final RecordReader<WritableComparable, Writable> reader = target.getRecordReader(job);
+		currRecReader = reader;
+		key = currRecReader.createKey();
+		value = currRecReader.createValue();
+		headerCount = footerCount = 0;
+		return currRecReader;
+	}
+	protected FetchInputFormatSplit[] getNextSplits() throws Exception {
+		while (getNextPath()) {
+			Class<? extends InputFormat> formatter = currDesc.getInputFileFormatClass();
+			InputFormat inputFormat = getInputFormatFromCache(formatter, job);
+			InputSplit[] splits = inputFormat.getSplits(job, 1);// 这是关键，但是与 currPath 好像又是两条线，这样搞什么意思呢
+			FetchInputFormatSplit[] inputSplits = new FetchInputFormatSplit[splits.length];
+			for (int i = 0; i < splits.length; i++) {
+				inputSplits[i] = new FetchInputFormatSplit(splits[i], inputFormat);
+			}
+			if (inputSplits.length > 0) {
+				return inputSplits;
+			}
+		}
+	}
+	private boolean getNextPath() throws Exception {
+		while (iterPath.hasNext()) {
+			currPath = iterPath.next();
+			currDesc = iterPartDesc.next();
+			FileSystem fs = currPath.getFileSystem(job);
+			if (fs.exists(currPath)) {
+				for (FileStatus fStat : listStatusUnderPath(fs, currPath)) {
+					if (fStat.getLen() > 0) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+}
+
+public abstract class org.apache.hadoop.hive.ql.exec.Operator<T extends OperatorDesc> implements Serializable,Cloneable, Node {
+	private static AtomicInteger seqId;// 这东西挺重要, 顺序号影响到解析
+	private Operator(String name) {
+		id = name;
+	}
+	public Operator() {
+		this(String.valueOf(seqId.getAndIncrement()));
+	}
+}
+
+public class org.apache.hadoop.hive.ql.lib.RuleRegExp implements Rule {
+	public int cost(Stack<Node> stack) throws SemanticException {
+		int numElems = (stack != null ? stack.size() : 0);
+		String name = "";
+		for (int pos = numElems - 1; pos >= 0; pos--) {
+			name = stack.get(pos).getName() + "%" + name;// 这相当于还是 stack 的正序
+			Matcher m = pattern.matcher(name);
+			if (m.matches()) {
+				int result = m.group().length();
+				return result;
+			}
+		}
+		return -1;
+	}
+}

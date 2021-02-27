@@ -1,0 +1,579 @@
+2、DataNode 启动时向 NameNode 请求, DatanodeProtocolClientSideTranslatorPB#versionRequest
+3、
+  a. 重要操作都是在 FsDatasetImpl#addBlockPool 里做的
+	BPServiceActor#run --> BPServiceActor#connectToNNAndHandshake --> BPOfferService#verifyAndSetNamespaceInfo --> DataNode#initBlockPool --> FsDatasetImpl#addBlockPool
+  b. FsDatasetImpl 类看下, 是 DN 操作本地文件的入口
+  c. 心跳发送也是在 BPServiceActor 线程中执行的 offerService 中执行的
+  d. 也是在此执行 blockReport 只执行一次, 以 BlockListAsLongs 的形式一次性发出的
+  d. 心跳还干了什么事我不了解, 但是删除块是这样的:
+  BPServiceActor#offerService -->   BPServiceActor#processCommand --> BPOfferService#processCommandFromActor --> BPOfferService#processCommandFromActive --> FsDatasetImpl#invalidate --> FsDatasetAsyncDiskService#deleteAsync --> ReplicaFileDeleteTask#ReplicaFileDeleteTask
+  
+4、DN 也可以 cacheBlock, 是根据 HeartbeatResponse --> processCommand 执行的, 但是为什么要 cacheBlock 呢
+5、ReplicaInfo#getMetaFile 看看子目录怎么生成的, 生成最终目录是在 BlockPoolSlice#addBlock
+
+6、DN 内部应该包括三块
+BlockPoolManager: 本地 block 管理不用说了, 边 NN 并保持心跳也是在这里做的
+DataXceiverServer: 接收 50010 端口的数据请求, 读写操作都在这里
+  DataXceiverServer#run 每个客户端请求相当于创建一个 DataXceiver 线程呗
+ipcServer: 就是处理与 NN 之前的 RPC, 不对呀, 这里是做为 server, 端口是 dfs.datanode.ipc.address 50020, ClientDatanodeProtocolPB, 但是试了半天也没发现
+  哪里调用啊。org.apache.hadoop.ipc.Server#start, 中包括 responder listener handlers, 与和总结 Hbase Rpc 好像啊
+
+6、DN 扫描本地块到内存是在 ReplicaMap#add, 前置:
+  FsDatasetImpl#addBlockPool --> FsVolumeList#getAllVolumesMap --> BlockPoolSlice#getVolumeMap --> BlockPoolSlice#addToReplicasMap(489)
+还有两处:
+  a. DataXceiver.run --> Receiver.processOp --> Receiver.opWriteBlock --> DataXceiver.writeBlock --> BlockReceiver.<init> --> FsDatasetImpl.createRbw  // 这里最后是要被 move 的
+  b. PacketResponder.run --> PacketResponder.finalizeBlock --> FsDatasetImpl.finalizeBlock--> FsDatasetImpl.finalizeReplica
+https://www.cnblogs.com/ZFBG/p/11125068.html
+RBW (Replica Being Written To) 
+如果 client 端 create 一个文件并写数据, NN 端存不否是维护一个数据写的状态呢, DN 写完了数向 NN 汇报一下子呢
+
+
+7、server 接收流程:
+0) DataXceiver#run --> Receiver#processOp --> Receiver#opWriteBlock
+1)org.apache.hadoop.hdfs.server.datanode.DataXceiver#writeBlock
+  NetUtils.connect(mirrorSock, mirrorTarget, timeoutValue); // 创建写到的下个节点 socket
+2)org.apache.hadoop.hdfs.server.datanode.BlockReceiver#receiveBlock
+  创建一个 PacketResponder 线程
+3.1)org.apache.hadoop.hdfs.server.datanode.BlockReceiver#receivePacket
+  a. packetReceiver.mirrorPacketTo(mirrorOut);// 写到 pipeline 的下个节点, 
+  b. 往队列里 ackQueue.addLast(p); 
+  c. BlockReceiver#verifyChunks --> DataChecksum#verifyChunkedSums --> DataChecksum#verifyChunkedSums --> NativeCrc32#verifyChunkedSumsByteArray
+3.2) PacketResponder 线程中
+  a. pkt = waitForAckHead(seqno); if (lastPacketInBlock) { finalizeBlock(startTime); } 干啥不多说了
+  b. ack.readFields(downstreamIn);
+  c. 是否 lastPacketInBlock 是在 Packet 的 header 中接收的, 也就是说是客户端决定
+
+7、readBlock 操作: Receiver#opReadBlock --> BlockSender#sendBlock --> BlockSender#doSendBlock --> BlockSender#sendPacket --> SocketOutputStream#transferToFully
+
+每个 packet 的 data 部分是 64k, 一个 packet 包含多个 Chunks, chunkSize = DataChecksum.getBytesPerChecksum();// 512, 所以一个 packet 包含 128 个 chunk
+所以 packet 的结构是这样: header + chunk * 128 + data(64k), 而零拷贝只处理 data 部分, 还要关注一下 writeBlock 时怎么把 checksum 写出的
+8、hadoop distcp
+  start-balancer.sh
+  
+
+
+public class DataNode extends ReconfigurableBase implements InterDatanodeProtocol, ClientDatanodeProtocol, TraceAdminProtocol, DataNodeMXBean {
+	private InetSocketAddress streamingAddr;
+	public org.apache.hadoop.ipc.RPC.Server ipcServer;
+	volatile FsDatasetSpi<? extends FsVolumeSpi> data = null;
+	org.apache.hadoop.util.Daemon dataXceiverServer = null;// Daemon 继承了 Thread并 setDaemon(true);
+	org.apache.hadoop.hdfs.server.datanode.DataXceiverServer xserver = null;
+	
+	public static void main(String args[]) {
+		secureMain(args, null);
+	}
+	public static void secureMain(String args[], SecureResources resources) {
+		DataNode datanode = createDataNode(args, null, resources);
+	}
+	public static DataNode createDataNode(String args[], Configuration conf, SecureResources resources) throws IOException {
+		DataNode dn = instantiateDataNode(args, conf, resources);
+		dn.runDatanodeDaemon();
+		return dn;
+	}
+	public static DataNode instantiateDataNode(String args [], Configuration conf, SecureResources resources) throws IOException {
+		Collection<StorageLocation> dataLocations = getStorageLocations(conf);// 本质就是读配置 [DISK]file:/usr/local/app/hadoop-2.7.2/tmp/dfs/data/
+		return makeInstance(dataLocations, conf, resources);
+	}
+	static DataNode makeInstance(Collection<StorageLocation> dataDirs, Configuration conf, SecureResources resources) throws IOException {
+		LocalFileSystem localFS = FileSystem.getLocal(conf);
+		List<StorageLocation> locations = checkStorageLocations(dataDirs, localFS, dataNodeDiskChecker);
+		return new DataNode(conf, locations, resources);
+	}
+	DataNode(final Configuration conf, final List<StorageLocation> dataDirs, final SecureResources resources) throws IOException {
+		super(conf);
+		this.blockScanner = new BlockScanner(this, conf);
+		hostName = getHostName(conf);
+		startDataNode(conf, dataDirs, resources);
+	}
+	void startDataNode(Configuration conf, List<StorageLocation> dataDirs, SecureResources resources) throws IOException {
+		this.dataDirs = dataDirs;
+		initDataXceiver(conf);
+		startInfoServer(conf);// httpServer
+		pauseMonitor = new JvmPauseMonitor(conf);
+		pauseMonitor.start();
+		initIpcServer(conf);
+		blockPoolManager = new BlockPoolManager(this);
+		blockPoolManager.refreshNamenodes(conf);
+	}
+	private void initDataXceiver(Configuration conf) throws IOException {
+		TcpPeerServer tcpPeerServer = new TcpPeerServer(dnConf.socketWriteTimeout, DataNode.getStreamingAddr(conf)).setReceiveBufferSize(HdfsConstants.DEFAULT_DATA_SOCKET_SIZE);
+		streamingAddr = tcpPeerServer.getStreamingAddr();// /0.0.0.0:50010
+		xserver = new DataXceiverServer(tcpPeerServer, conf, this);
+		this.dataXceiverServer = new Daemon(new ThreadGroup("dataXceiverServer"), xserver);
+	}
+	private void initIpcServer(Configuration conf) throws IOException {
+		InetSocketAddress ipcAddr = NetUtils.createSocketAddr(conf.getTrimmed(DFS_DATANODE_IPC_ADDRESS_KEY));//0.0.0.0:50020
+		BlockingService service = ClientDatanodeProtocolService.newReflectiveBlockingService(clientDatanodeProtocolXlator);    
+		ipcServer = new RPC.Builder(conf).setProtocol(ClientDatanodeProtocolPB.class).setInstance(service).setBindAddress(ipcAddr.getHostName()).setPort(ipcAddr.getPort())
+			.setNumHandlers(conf.getInt(DFS_DATANODE_HANDLER_COUNT_KEY, DFS_DATANODE_HANDLER_COUNT_DEFAULT)).setVerbose(false).build();
+	}
+	public void runDatanodeDaemon() throws IOException {
+		blockPoolManager.startAll();
+		dataXceiverServer.start();
+		ipcServer.start();
+	}
+	// 此方法被回调，挺墨迹的不细究了
+	private void initStorage(final NamespaceInfo nsInfo) throws IOException {
+		final FsDatasetSpi.Factory<? extends FsDatasetSpi<?>> factory = FsDatasetSpi.Factory.getFactory(conf);
+		data = factory.newInstance(this, storage, conf);
+	}
+	DatanodeProtocolClientSideTranslatorPB connectToNN(
+		InetSocketAddress nnAddr) throws IOException {
+		return new DatanodeProtocolClientSideTranslatorPB(nnAddr, conf);
+	}
+	void initBlockPool(BPOfferService bpos) throws IOException {
+		NamespaceInfo nsInfo = bpos.getNamespaceInfo();
+		setClusterId(nsInfo.clusterID, nsInfo.getBlockPoolID());
+		blockPoolManager.addBlockPool(bpos);
+		initStorage(nsInfo);
+		checkDiskError();
+		data.addBlockPool(nsInfo.getBlockPoolID(), conf);// 往里很关键了
+		blockScanner.enableBlockPoolId(bpos.getBlockPoolId());
+		initDirectoryScanner(conf);
+	}
+
+}
+class org.apache.hadoop.hdfs.server.datanode.BlockPoolManager {
+  private final List<BPOfferService> offerServices = Lists.newArrayList();
+	synchronized void startAll() throws IOException {
+		for (BPOfferService bpos : offerServices) {
+			bpos.start();
+		}
+	}
+	void refreshNamenodes(Configuration conf) throws IOException {
+		Map<String, Map<String, InetSocketAddress>> newAddressMap = DFSUtil.getNNServiceRpcAddressesForCluster(conf);
+		doRefreshNamenodes(newAddressMap);// {ns1={nn1=cluster01/192.168.58.121:9000, nn2=cluster02/192.168.58.122:9000}}
+	}
+	
+	private void doRefreshNamenodes(Map<String, Map<String, InetSocketAddress>> addrMap) throws IOException {
+		...
+		BPOfferService bpos = createBPOS(addrs);
+		offerServices.add(bpos);
+		...
+		startAll();
+	}
+	protected BPOfferService createBPOS(List<InetSocketAddress> nnAddrs) {
+		return new BPOfferService(nnAddrs, dn);
+	}
+}
+class org.apache.hadoop.hdfs.server.datanode.BPOfferService {
+	private final DataNode dn;
+	private final List<BPServiceActor> bpServices = new CopyOnWriteArrayList<BPServiceActor>();
+	BPOfferService(List<InetSocketAddress> nnAddrs, DataNode dn) {
+		for (InetSocketAddress addr : nnAddrs) {// 搞个集合主要是连多个 NN
+			this.bpServices.add(new BPServiceActor(addr, this));
+		}
+	}
+	void start() {
+		for (BPServiceActor actor : bpServices) {
+			actor.start();
+		}
+	}
+	void verifyAndSetNamespaceInfo(NamespaceInfo nsInfo) throws IOException {
+		if (this.bpNSInfo == null) {
+			this.bpNSInfo = nsInfo;// 这里导致下面的 initBlockPool 只会执行一次
+			boolean success = false;
+			dn.initBlockPool(this);
+			success = true;
+		} else { ... }
+	}
+}
+class org.apache.hadoop.hdfs.server.datanode.BPServiceActor implements Runnable {
+	DatanodeProtocolClientSideTranslatorPB bpNamenode;
+	BPServiceActor(InetSocketAddress nnAddr, BPOfferService bpos) {
+		this.bpos = bpos;
+		this.dn = bpos.getDataNode();
+		this.nnAddr = nnAddr;
+		this.dnConf = dn.getDnConf();
+		scheduler = new Scheduler(dnConf.heartBeatInterval, dnConf.blockReportInterval);
+	}
+	public void run() {
+		while (true) {
+			// 官方注释: setup storage
+			// 代码走到 org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsVolumeList#getAllVolumesMap 时又起了线程, 然后直到了
+			// org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.ReplicaMap.add, 就是扫描本地目录添加 block 
+			connectToNNAndHandshake();// nnAddr: cluster01/192.168.58.121:9000, cluster02/192.168.58.122:9000 两个线程
+			break;
+		}
+		while (shouldRun()) {
+			offerService();// 心跳
+		}
+	}
+	private void connectToNNAndHandshake() throws IOException {
+		bpNamenode = dn.connectToNN(nnAddr);
+		NamespaceInfo nsInfo = retrieveNamespaceInfo();// 两次进来拿到的都是 active 的 
+		bpos.verifyAndSetNamespaceInfo(nsInfo);// 去做了扫描本地 block 文件添加到 ReplicaMap 中
+	}	
+	private void offerService() throws Exception {
+		while (shouldRun()) {
+			final boolean sendHeartbeat = scheduler.isHeartbeatDue(startTime);
+			if (sendHeartbeat) {
+				if (!dn.areHeartbeatsDisabledForTests()) {
+					HeartbeatResponse resp = sendHeartBeat();
+					if (!processCommand(resp.getCommands()))
+						continue;
+				}
+			}
+			List<DatanodeCommand> cmds = blockReport();// 这里也太重要了吧
+			processCommand(cmds == null ? null : cmds.toArray(new DatanodeCommand[cmds.size()]));
+		} // while (shouldRun())
+	}
+	
+	List<DatanodeCommand> blockReport() throws IOException {
+		if (!scheduler.isBlockReportDue()) {
+			return null;
+		}
+		final ArrayList<DatanodeCommand> cmds = new ArrayList<DatanodeCommand>();
+		reportReceivedDeletedBlocks();
+		Map<DatanodeStorage, BlockListAsLongs> perVolumeBlockLists = dn.getFSDataset().getBlockReports(bpos.getBlockPoolId());
+		StorageBlockReport reports[] = new StorageBlockReport[perVolumeBlockLists.size()];
+		for(Map.Entry<DatanodeStorage, BlockListAsLongs> kvPair : perVolumeBlockLists.entrySet()) {
+			BlockListAsLongs blockList = kvPair.getValue();
+			reports[i++] = new StorageBlockReport(kvPair.getKey(), blockList);
+			totalBlockCount += blockList.getNumberOfBlocks();
+		}
+		long reportId = generateUniqueBlockReportId();
+		DatanodeCommand cmd = bpNamenode.blockReport(bpRegistration, bpos.getBlockPoolId(), reports, new BlockReportContext(1, 0, reportId));
+		return cmds.size() == 0 ? null : cmds;
+	}
+}
+class org.apache.hadoop.hdfs.server.datanode.DataXceiverServer implements Runnable {
+	private final PeerServer peerServer;
+	private final DataNode datanode;
+	private final HashMap<Peer, Thread> peers = new HashMap<Peer, Thread>();
+	private final HashMap<Peer, DataXceiver> peersXceiver = new HashMap<Peer, DataXceiver>();
+	DataXceiverServer(PeerServer peerServer, Configuration conf, DataNode datanode) {
+		this.peerServer = peerServer;
+		this.datanode = datanode;
+	}
+	synchronized void addPeer(Peer peer, Thread t, DataXceiver xceiver) throws IOException {
+		peers.put(peer, t);
+		peersXceiver.put(peer, xceiver);
+	}
+	// DataNode 的 runDatanodeDaemon 方法中已将此线程启动
+	public void run() {
+		Peer peer = null;
+		while (datanode.shouldRun && !datanode.shutdownForUpgrade) {
+			peer = peerServer.accept();// 阻塞，等待客户端连接，比如读文件数据
+			int curXceiverCount = datanode.getXceiverCount();
+			new Daemon(datanode.threadGroup, DataXceiver.create(peer, datanode, this)).start();// 每个请求相当于创建一个 DataXceiver 线程呗
+		}
+	}
+}
+
+public class org.apache.hadoop.hdfs.net.TcpPeerServer implements PeerServer {
+	private final java.net.ServerSocket serverSocket;
+	public TcpPeerServer(int socketWriteTimeout, InetSocketAddress bindAddr) throws IOException {
+		this.serverSocket = (socketWriteTimeout > 0) ? ServerSocketChannel.open().socket() : new ServerSocket();
+		Server.bind(serverSocket, bindAddr, 0);
+	}
+	public Peer accept() throws IOException, SocketTimeoutException {
+		return peerFromSocket(serverSocket.accept());
+	}
+	public static Peer peerFromSocket(Socket socket) throws IOException {
+		return new NioInetPeer(socket);
+	}
+}
+
+class org.apache.hadoop.hdfs.server.datanode.DataXceiver extends Receiver implements Runnable {
+	private OutputStream socketOut;
+	public static DataXceiver create(Peer peer, DataNode dn, DataXceiverServer dataXceiverServer) throws IOException {
+		return new DataXceiver(peer, dn, dataXceiverServer);
+	}
+	private DataXceiver(Peer peer, DataNode datanode, DataXceiverServer dataXceiverServer) throws IOException {
+		this.peer = peer;
+		this.socketIn = peer.getInputStream();
+		this.socketOut = peer.getOutputStream();
+		this.datanode = datanode;
+		this.dataXceiverServer = dataXceiverServer;
+		this.connectToDnViaHostname = datanode.getDnConf().connectToDnViaHostname;
+		remoteAddress = peer.getRemoteAddressString();
+		final int colonIdx = remoteAddress.indexOf(':');
+		remoteAddressWithoutPort = (colonIdx < 0) ? remoteAddress : remoteAddress.substring(0, colonIdx);
+		localAddress = peer.getLocalAddressString();
+	}
+	public void run() {
+		int opsProcessed = 0;
+		Op op = null;
+		dataXceiverServer.addPeer(peer, Thread.currentThread(), this);
+		InputStream input = socketIn;
+		IOStreamPair saslStreams = datanode.saslServer.receive(peer, socketOut, socketIn, datanode.getXferAddress().getPort(), datanode.getDatanodeId());
+		input = new BufferedInputStream(saslStreams.in, HdfsConstants.SMALL_BUFFER_SIZE);// 本质还是 this.socketIn
+		socketOut = saslStreams.out;
+		super.initialize(new DataInputStream(input));
+		do {
+			op = readOp();
+			processOp(op);
+		} while ((peer != null) && (!peer.isClosed() && dnConf.socketKeepaliveTimeout > 0));
+	}
+	public void readBlock(final ExtendedBlock block, final Token<BlockTokenIdentifier> blockToken, final String clientName, final long blockOffset, final long length, final boolean sendChecksum, final CachingStrategy cachingStrategy) throws IOException {
+		previousOpClientName = clientName;
+		long read = 0;
+		OutputStream baseStream = getOutputStream();// 就是拿的 this.socketOut
+		DataOutputStream out = getBufferedOutputStream();
+		BlockSender blockSender = new BlockSender(block, blockOffset, length, true, false, sendChecksum, datanode, clientTraceFmt, cachingStrategy);
+		read = blockSender.sendBlock(out, baseStream, null);
+	}
+	public void writeBlock(final ExtendedBlock block, final StorageType storageType, final Token<BlockTokenIdentifier> blockToken, final String clientname, final DatanodeInfo[] targets, final StorageType[] targetStorageTypes, final DatanodeInfo srcDataNode, final BlockConstructionStage stage, final int pipelineSize, final long minBytesRcvd, final long maxBytesRcvd, final long latestGenerationStamp, DataChecksum requestedChecksum, CachingStrategy cachingStrategy, final boolean allowLazyPersist, final boolean pinning, final boolean[] targetPinnings) throws IOException {
+		final DataOutputStream replyOut = getBufferedOutputStream();// reply to upstream datanode or client, 注释说得很明白了
+		// blockReceiver 中会创建落盘的文件
+		blockReceiver = new BlockReceiver(block, storageType, in, peer.getRemoteAddressString(), peer.getLocalAddressString(), stage, latestGenerationStamp, minBytesRcvd, maxBytesRcvd, clientname, srcDataNode, datanode, requestedChecksum, cachingStrategy, allowLazyPersist, pinning);
+		if (targets.length > 0) {// 分部式集群会进来, 但是第三个节点不会进来
+			InetSocketAddress mirrorTarget = null;
+			mirrorNode = targets[0].getXferAddr(connectToDnViaHostname);
+			mirrorTarget = NetUtils.createSocketAddr(mirrorNode);
+			mirrorSock = datanode.newSocket();
+			int timeoutValue = dnConf.socketTimeout + (HdfsServerConstants.READ_TIMEOUT_EXTENSION * targets.length);
+			int writeTimeout = dnConf.socketWriteTimeout +  (HdfsServerConstants.WRITE_TIMEOUT_EXTENSION * targets.length);
+			NetUtils.connect(mirrorSock, mirrorTarget, timeoutValue);
+			mirrorSock.setSoTimeout(timeoutValue);
+			mirrorSock.setSendBufferSize(HdfsConstants.DEFAULT_DATA_SOCKET_SIZE);
+			OutputStream unbufMirrorOut = NetUtils.getOutputStream(mirrorSock, writeTimeout);
+			InputStream unbufMirrorIn = NetUtils.getInputStream(mirrorSock);
+			DataEncryptionKeyFactory keyFactory = datanode.getDataEncryptionKeyFactoryForBlock(block);
+			IOStreamPair saslStreams = datanode.saslClient.socketSend(mirrorSock, unbufMirrorOut, unbufMirrorIn, keyFactory, blockToken, targets[0]);
+			unbufMirrorOut = saslStreams.out;
+			unbufMirrorIn = saslStreams.in;
+			mirrorOut = new DataOutputStream(new BufferedOutputStream(unbufMirrorOut, HdfsConstants.SMALL_BUFFER_SIZE));
+			mirrorIn = new DataInputStream(unbufMirrorIn);
+			if (targetPinnings != null && targetPinnings.length > 0) {// dn1 走这个
+				new Sender(mirrorOut).writeBlock(originalBlock, targetStorageTypes[0], blockToken, clientname, targets, targetStorageTypes, srcDataNode, stage, pipelineSize, minBytesRcvd, maxBytesRcvd, latestGenerationStamp, requestedChecksum, cachingStrategy, false, targetPinnings[0], targetPinnings);
+			} else {// dn2/dn3 走这个
+				new Sender(mirrorOut).writeBlock(originalBlock, targetStorageTypes[0], blockToken, clientname, targets, targetStorageTypes, srcDataNode, stage, pipelineSize, minBytesRcvd, maxBytesRcvd, latestGenerationStamp, requestedChecksum, cachingStrategy, false, false, targetPinnings);
+			}
+		}		
+		BlockOpResponseProto.newBuilder().setStatus(mirrorInStatus).setFirstBadLink(firstBadLink).build().writeDelimitedTo(replyOut);
+		String mirrorAddr = (mirrorSock == null) ? null : mirrorNode;
+		blockReceiver.receiveBlock(mirrorOut, mirrorIn, replyOut, mirrorAddr, null, targets, false);
+		writeResponse(SUCCESS, null, replyOut);
+	}
+}
+public abstract class Receiver implements DataTransferProtocol {
+	protected DataInputStream in;
+	protected void initialize(final DataInputStream in) {
+		this.in = in;
+	}
+	protected final Op readOp() throws IOException {
+		return Op.read(in);
+	}
+	protected final void processOp(Op op) throws IOException {
+		switch(op) {
+			case READ_BLOCK:
+			opReadBlock();
+			break;
+			case WRITE_BLOCK:
+			opWriteBlock(in);
+			break;
+		}
+		......
+	}
+	private void opReadBlock() throws IOException {
+		OpReadBlockProto proto = OpReadBlockProto.parseFrom(vintPrefixed(in));
+		readBlock(PBHelper.convert(proto.getHeader().getBaseHeader().getBlock(),其它参数太多，本质就是解析 proto);
+	}
+	private void opWriteBlock(DataInputStream in) throws IOException {
+		final OpWriteBlockProto proto = OpWriteBlockProto.parseFrom(vintPrefixed(in));
+		writeBlock(PBHelper.convert(proto.getHeader().getBaseHeader().getBlock()),其它参数太多，本质就是解析 proto);
+	}
+}
+class org.apache.hadoop.hdfs.server.datanode.BlockSender implements java.io.Closeable {
+	private long blockInPosition = -1;
+	private InputStream blockIn; // Stream to read block data from
+	BlockSender(ExtendedBlock block, long startOffset, long length, boolean corruptChecksumOk, boolean verifyChecksum, boolean sendChecksum, DataNode datanode, String clientTraceFmt, CachingStrategy cachingStrategy) throws IOException {
+		this.block = block;
+		blockIn = datanode.data.getBlockInputStream(block, offset); // seek to offset
+	}
+	long sendBlock(DataOutputStream out, OutputStream baseStream, DataTransferThrottler throttler) throws IOException {
+		return doSendBlock(out, baseStream, throttler);
+	}
+	private long doSendBlock(DataOutputStream out, OutputStream baseStream, DataTransferThrottler throttler) throws IOException {
+		streamForSendChunks = baseStream;
+		boolean transferTo = transferToAllowed && !verifyChecksum && baseStream instanceof SocketOutputStream && blockIn instanceof FileInputStream;
+		FileChannel fileChannel = ((FileInputStream)blockIn).getChannel();
+        blockInPosition = fileChannel.position();// blockIn 就是干这点事吧, 源码中注释也说了
+		maxChunksPerPacket = numberOfChunks(TRANSFERTO_BUFFER_SIZE);
+		ByteBuffer pktBuf = ByteBuffer.allocate(pktBufSize);
+		long len = sendPacket(pktBuf, maxChunksPerPacket, streamForSendChunks, transferTo, throttler);
+		return totalRead;
+	}
+	private int sendPacket(ByteBuffer pkt, int maxChunks, OutputStream out, boolean transferTo, DataTransferThrottler throttler) throws IOException {
+		int dataLen = (int) Math.min(endOffset - offset, (chunkSize * (long) maxChunks));
+		byte[] buf = pkt.array();
+		if (transferTo) {// true
+			SocketOutputStream sockOut = (SocketOutputStream)out;//org.apache.hadoop.net.SocketOutputStream, 不用细看了
+			sockOut.write(buf, headerOff, dataOff - headerOff);
+			FileChannel fileCh = ((FileInputStream)blockIn).getChannel();
+			LongWritable waitTime = new LongWritable();
+			LongWritable transferTime = new LongWritable();
+			sockOut.transferToFully(fileCh, blockInPosition, dataLen, waitTime, transferTime);
+			blockInPosition += dataLen;
+		}
+		return dataLen;
+	}
+}
+class org.apache.hadoop.hdfs.server.datanode.BlockReceiver implements Closeable {
+	private OutputStream out = null;
+	private DataInputStream in = null;
+	private final PacketReceiver packetReceiver = new PacketReceiver(false);
+	BlockReceiver(final ExtendedBlock block, final StorageType storageType, final DataInputStream in, final String inAddr, final String myAddr, final BlockConstructionStage stage, final long newGs, final long minBytesRcvd, final long maxBytesRcvd, final String clientname, final DatanodeInfo srcDataNode, final DataNode datanode, DataChecksum requestedChecksum, CachingStrategy cachingStrategy, final boolean allowLazyPersist, final boolean pinning) throws IOException {
+		this.block = block;
+		this.in = in;
+		switch (stage) {
+			case PIPELINE_SETUP_CREATE:
+			replicaHandler = datanode.data.createRbw(storageType, block, allowLazyPersist);
+		}
+		replicaInfo = replicaHandler.getReplica();  //ReplicaBeingWritten, 父类 ReplicaInPipeline
+		streams = replicaInfo.createStreams(isCreate, requestedChecksum);//创建本地两个文件, BlockFile MetaFile 其实也就是根据 blockName 的
+		this.out = streams.getDataOut();
+	}
+	void receiveBlock(DataOutputStream mirrOut, DataInputStream mirrIn, DataOutputStream replyOut, String mirrAddr, DataTransferThrottler throttlerArg, DatanodeInfo[] downstreams, boolean isReplaceBlock) throws IOException {
+		while (receivePacket() >= 0) { /* Receive until the last packet */ }
+	}
+	private int receivePacket() throws IOException {
+		packetReceiver.receiveNextPacket(in);
+		ByteBuffer dataBuf = packetReceiver.getDataSlice();
+		out.write(dataBuf.array(), startByteToDisk, numBytesToDisk);// 这里只落了 data, 没有 checksum
+		if (responder != null && (syncBlock || shouldVerifyChecksum())) {
+			((PacketResponder) responder.getRunnable()).enqueue(seqno, lastPacketInBlock, offsetInBlock, Status.SUCCESS);
+		}
+	}
+	class PacketResponder implements Runnable, Closeable {
+		private final LinkedList<Packet> ackQueue = new LinkedList<Packet>();
+		void enqueue(final long seqno, final boolean lastPacketInBlock, final long offsetInBlock, final Status ackStatus) {
+			final Packet p = new Packet(seqno, lastPacketInBlock, offsetInBlock, System.nanoTime(), ackStatus);
+			synchronized(ackQueue) {
+				if (running) {
+					ackQueue.addLast(p);
+					ackQueue.notifyAll();
+				}
+			}
+		}
+		public void run() {
+			boolean lastPacketInBlock = false;
+			final long startTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
+			while (isRunning() && !lastPacketInBlock) {
+				long totalAckTimeNanos = 0;
+				boolean isInterrupted = false;
+				Packet pkt = null;
+				long expected = -2;
+				PipelineAck ack = new PipelineAck();
+				long seqno = PipelineAck.UNKOWN_SEQNO;
+				long ackRecvNanoTime = 0;
+				if (type != PacketResponderType.LAST_IN_PIPELINE && !mirrorError) {
+					ack.readFields(downstreamIn);// 不能一直阻塞吧?
+					ackRecvNanoTime = System.nanoTime();
+					Status oobStatus = ack.getOOBStatus();
+					if (oobStatus != null) {// 在这里就上报了呀, 但是上报完怎么 continue 呢, 这里是相当于有问题才上报呗
+						sendAckUpstream(ack, PipelineAck.UNKOWN_SEQNO, 0L, 0L, PipelineAck.combineHeader(datanode.getECN(), Status.SUCCESS));
+						continue;
+					}
+					seqno = ack.getSeqno();
+				}
+				if (seqno != PipelineAck.UNKOWN_SEQNO || type == PacketResponderType.LAST_IN_PIPELINE) {
+					pkt = waitForAckHead(seqno);
+					expected = pkt.seqno;
+					if (type == PacketResponderType.HAS_DOWNSTREAM_IN_PIPELINE && seqno != expected) { // 这里已经可以说明问题了, 上面 ack.readFields(downstreamIn); 应该是阻塞才对
+						throw new IOException(myString + "seqno: expected=" + expected + ", received=" + seqno);
+					}
+					lastPacketInBlock = pkt.lastPacketInBlock;
+				}
+				if (Thread.interrupted() || isInterrupted) {
+					running = false;
+					continue;
+				}
+				if (lastPacketInBlock) {
+					finalizeBlock(startTime);// 这可是相当重要啊
+				}
+				Status myStatus = pkt != null ? pkt.ackStatus : Status.SUCCESS;
+				sendAckUpstream(ack, expected, totalAckTimeNanos, (pkt != null ? pkt.offsetInBlock : 0), PipelineAck.combineHeader(datanode.getECN(), myStatus));
+				if (pkt != null) {
+					removeAckHead();
+				}
+			}
+		}
+		Packet waitForAckHead(long seqno) throws InterruptedException {
+			synchronized(ackQueue) {
+				while (isRunning() && ackQueue.size() == 0) {
+					ackQueue.wait();// 没有元素了才阻塞
+				}
+				return isRunning() ? ackQueue.getFirst() : null;
+			}
+		}
+		private void sendAckUpstream(PipelineAck ack, long seqno, long totalAckTimeNanos, long offsetInBlock, int myHeader) throws IOException {
+			sendAckUpstreamUnprotected(ack, seqno, totalAckTimeNanos, offsetInBlock, myHeader);
+		}
+		private void sendAckUpstreamUnprotected(PipelineAck ack, long seqno, long totalAckTimeNanos, long offsetInBlock, int myHeader) throws IOException {
+			PipelineAck replyAck = new PipelineAck(seqno, replies, totalAckTimeNanos);
+			if (replyAck.isSuccess() && offsetInBlock > replicaInfo.getBytesAcked()) {
+				replicaInfo.setBytesAcked(offsetInBlock);
+			}
+			long begin = Time.monotonicNow();
+			replyAck.write(upstreamOut);// send my ack back to upstream datanode
+			upstreamOut.flush();
+			long duration = Time.monotonicNow() - begin;
+			Status myStatus = PipelineAck.getStatusFromHeader(myHeader);
+		}
+	}
+}
+
+public class org.apache.hadoop.hdfs.protocol.datatransfer.PacketReceiver implements Closeable {
+	private ByteBuffer curPacketBuf = null;
+	public void receiveNextPacket(InputStream in) throws IOException {
+		doRead(null, in);
+	}
+}
+public class org.apache.hadoop.hdfs.server.datanode.ReplicaInPipeline extends ReplicaInfo implements ReplicaInPipelineInterface {
+	public ReplicaOutputStreams createStreams(boolean isCreate, DataChecksum requestedChecksum) throws IOException {
+		File blockFile = getBlockFile();// 此类本质是继承自 ReplicaInfo, 本质又继承自 org.apache.hadoop.hdfs.protocol.Block, 又通过 blockId 拼成 File
+		File metaFile = getMetaFile();
+		RandomAccessFile metaRAF = new RandomAccessFile(metaFile, "rw");
+		blockOut = new FileOutputStream(new RandomAccessFile( blockFile, "rw" ).getFD() );
+		crcOut = new FileOutputStream(metaRAF.getFD());
+		return new ReplicaOutputStreams(blockOut, crcOut, checksum, getVolume().isTransientStorage());
+	}
+}
+class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
+	final ReplicaMap volumeMap;// 全局信息都在这里了, BPid 是 NN 管理, FsDatasetImpl 和 DataStorage, 是 DN 自身结构
+	FsDatasetImpl(DataNode datanode, DataStorage storage, Configuration conf ) throws IOException {
+		for (int idx = 0; idx < storage.getNumStorageDirs(); idx++) {
+			addVolume(dataLocations, storage.getStorageDir(idx));// 这说明 FsDatasetImpl 与 DataStorage 是平级, 他们的子集也相互对应
+		}
+	}
+	public InputStream getBlockInputStream(ExtendedBlock b, long seekOffset) throws IOException {
+		File blockFile = getBlockFileNoExistsCheck(b, true);
+		return openAndSeek(blockFile, seekOffset);
+	}
+	private File getBlockFileNoExistsCheck(ExtendedBlock b, boolean touch) throws IOException {
+		return getFile(b.getBlockPoolId(), b.getLocalBlock().getBlockId(), touch);
+	}
+	File getFile(final String bpid, final long blockId, boolean touch) {
+		ReplicaInfo info = volumeMap.get(bpid, blockId);
+		return info.getBlockFile();
+	}
+}
+class org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.ReplicaMap {
+	private final Map<String, Map<Long, ReplicaInfo>> map = new HashMap<String, Map<Long, ReplicaInfo>>();
+	ReplicaInfo get(String bpid, long blockId) {
+		Map<Long, ReplicaInfo> m = map.get(bpid);
+		return m != null ? m.get(blockId) : null;
+	}
+	// 当然还有 add 方法, 不多说了。此类和 ReplicaInfo 应该是 DataNode 元数据的内存结构
+}
+abstract public class org.apache.hadoop.hdfs.server.datanode.ReplicaInfo extends Block implements Replica {
+	public File getBlockFile() {
+		return new File(getDir(), getBlockName());
+	}
+}
+public class org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB implements ProtocolMetaInterface, DatanodeProtocol, Closeable {
+	private final DatanodeProtocolPB rpcProxy;
+	public DatanodeProtocolClientSideTranslatorPB(InetSocketAddress nameNodeAddr, Configuration conf) throws IOException {
+		RPC.setProtocolEngine(conf, DatanodeProtocolPB.class, ProtobufRpcEngine.class);
+		rpcProxy = createNamenode(nameNodeAddr, conf, ugi);
+	}
+	private static DatanodeProtocolPB createNamenode(InetSocketAddress nameNodeAddr, Configuration conf, UserGroupInformation ugi) throws IOException {
+		return RPC.getProtocolProxy(DatanodeProtocolPB.class,
+			RPC.getProtocolVersion(DatanodeProtocolPB.class), nameNodeAddr, ugi,
+			conf, NetUtils.getSocketFactory(conf, DatanodeProtocolPB.class),
+			org.apache.hadoop.ipc.Client.getPingInterval(conf), null).getProxy();
+	}
+}

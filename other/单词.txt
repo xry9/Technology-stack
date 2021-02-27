@@ -1,0 +1,739 @@
+treat	处理
+entire	整个的
+embed	嵌入
+idempotent	幂等
+restrict	限定
+indefinite	无限期的
+labor	劳动
+elaborate on	详细说明
+eliminate	消除
+besides	除……之外
+spam	垃圾邮件
+commutative	交替的
+its worth highlighting	值得强调的是
+generic	一般的
+primitive	原生的
+mistake	差错
+inadvertent	不经意的
+creating a connection object has time and resource overheads
+incur	引起
+overall	全面的
+amortize	分期偿还
+respect	尊重
+implicit	隐式的
+explicit	明确的
+resilient	弹性的
+frequent	频繁的
+warm	暖和
+prime time
+graceful	优雅的
+bottleneck	瓶颈
+unify	统一
+coalesce	合并
+feasible	可行的
+sustain	维持
+conservative	保守的
+built-in	内置的
+adopted	采用
+granularity	粒度
+official	官方的
+definitive	明确的
+pertinent	有关的
+amendment	修改
+disparate	完全不同的
+restrict	限制
+expectation	预期
+prove	证明
+proof	证明
+corrupt	堕落
+extract	提取
+alternative	其它的
+transparent	显然的
+beneath	在下方
+denote	指示
+blind	失明的，弄瞎，蒙蔽
+migrate	迁移
+durable	持久的
+populate	居住于
+resilient	弹性的
+critical	关键的，批评的
+smooth	流畅的
+handy	方便的
+extensive	广泛的
+raise	增加，养育
+rough	粗糙的
+vendor	供应商
+manifestation	显示
+variant	易变的
+directive	指示
+moment	片刻
+resolve	决定，分解
+ensemble	全体
+factor in	包括
+absence	缺席
+optimal	最佳的
+confidence	信任
+boost	增加
+slight	微小的，轻蔑
+rule of thumb
+speculative	推理的
+occasional	偶尔的
+compatible	和谐的
+paragraph	段落
+capture	捕获
+interpret	翻译
+convention	公约
+obscure	昏暗的
+prompt	提示，迅速的
+approach	接近，方法
+terminology	术语
+alphabetical	按字母顺序的
+lexicographical	按字母顺序的
+alongside	在旁边
+sparse	稀疏的
+analogous	相似的
+quota	指标
+pin	针，牵制
+coarse	粗糙的
+tombstone	墓碑
+confuse	混淆
+mentione	提到
+purge	清理
+
+
+strength and weaknesses
+aim	瞄准
+traffic	流量
+negative	消极的
+navigation	导航
+phenomenon	现象
+accompany	陪伴
+freight	运输
+facilitate	帮助
+verbose	冗长的
+hex	十六进制
+conversation	交谈
+comprehensive	综合的
+regard to	至于
+bootstrap	引导程序
+voluminous	量大的
+constraint	约束
+parlance	说法
+integrity	完整性
+discourage	不鼓励
+courage	勇气
+dramatical	戏剧的
+exhaustive	详尽的
+monotonical	单调的
+lack	缺乏
+hosted on	托管在
+commodity	日用品
+out of the box
+as opposed to	而不是
+grain	谷物，纹理
+compete	竞争
+compound	复合
+lease	租约
+decompose	分解
+steady	稳定的
+drawback	缺点
+tier	等级
+deprecate	反对
+terminology	术语
+evict	驱逐
+disregard	不顾
+criteria	标准
+allergic	过敏的
+eligible	适当的
+qualify	合格
+quality	质量
+ambiguous	模棱两可的
+facade	外表
+prevailed	流行
+hinder	阻碍
+adjacent 	相邻的
+ship with	附带
+symbol	象征，符号
+contain	控制，包含
+ensemble	集合(n)
+intentional	故意的
+international	国际的
+internal	内部的
+adverse	不利的
+arbitrary	 随意的
+collision	冲突
+render	使成为
+influence	影响
+interpret	解释
+coherent	连贯的
+honor	纪念
+fragment	碎片
+thumb	拇指
+overwhelm	覆盖
+trick	技巧，欺骗
+sacrifice	牺牲
+allot	分配
+bring	引起
+retrieve	恢复
+nest	巢，嵌套
+in the sense that	在……意义上
+expert	专家
+detach	分离
+deviate	脱离
+versa	反的
+versus	对抗
+intuitive	直观的
+lightweight	轻量级的
+fashion	方式
+embrace	拥抱、采纳、包含
+license	许可证
+tremendous	极大的
+federate	联邦
+participate	参与
+universal	普遍的、全休的
+dense	稠密的
+dissect	剖析
+accurate	精准的
+balance	账户余额
+inspire	激励
+elastic	弹性的
+
+tong
+
+
+
+individually	各自地
+interactive	互相作用的
+improve	提高
+aggregates	聚合
+reduce	减少
+NameNode's load	负载
+concurrent	同时发生的   ----current	现在的
+auxiliary	辅助的
+illustrate	给…加插图 说明
+compression chunk
+binary	二进制的
+cascade	级联
+arbitrary	随意的
+
+complaint	投诉
+commodity	日用品
+horizontal	水平的（扩展）
+tight	牢固的
+simultaneous	同时的
+consensus	一致性
+algorithm	算法
+combine	整合
+syntax 语法
+In addition to	除了……之外
+clause	从句(you can specify complex joins with a FROM clause in a subquer)
+evenly	均匀的
+evaluate	评估
+regarding	关于……
+magnitude	大量级
+contiguous	邻近的
+architectural	建筑上的
+rapid	快速的
+investigae	调查
+purchase	购买
+present	现在的，提出	presentation	报告，颁奖仪式
+individual	分别的
+access patterns	访问模式
+manner	方式
+compound	复合的
+resource-intensive	资源密集型
+legacy	遗产
+obsolete	废弃
+deprecate	反对
+in favor of	支持
+respective	分别的
+diagnose	诊断
+contributor	贡献者
+odd	奇数的
+even	偶数的，公平的
+verify	证明
+alternative	备选的
+broker	中间人
+correspond	对应
+predict	预言
+predicate	判言
+desired	渴望
+shortcut	捷径
+skew	倾斜
+apparent	显然的
+spread	散布开
+perfect	完美的
+feedback	反馈
+sub second response	亚秒级响应
+retrieval	检索
+experiment	实验
+prune	修剪
+tutorial	教程
+fraud	欺诈
+detection	侦察
+risk profile
+detailed	详细的
+interactive	交互式的
+proposed	被推荐的
+potential	潜在的
+cardinality	基数
+invert	反转
+accelerate	促进
+performance tuning
+caution	警告
+trigger	触发
+cautious	小心的
+idle	空闲的
+
+regulate	控制
+preform	执行
+instrution	指导 指令
+concurrent	并发
+prototype	原型,蓝本
+nested exception	嵌套异常
+dump	倾倒 仓库
+syntax	语法
+delimited	分隔
+terminated	结束
+Hierarchy	层次
+advanced	高级
+Segment	分片
+allocate	分配
+supervise	监督
+license	许可证
+throughput	吞吐量
+durable	持久的
+won't take effect	不生效
+preemption	优先权
+permanent	永久的
+concurrent	同时发生的
+expired	到期的
+threshold	阈值
+
+Connection was aborted.
+volatile	不稳定的
+comments	注释
+duplicate	复制
+Elapsed	消逝（Elapsed Time）
+deprecated	作废的
+suspend	停止
+resume	恢复
+schema	概要
+invocate	调用
+fraction	分数; 一小部分
+archive	存档
+allocate	分派
+Composite	混合成的
+cursor	光标
+threshold	门槛
+appropriate	适当的
+binary	二进制的; 二元的
+mutex	互斥
+wrap	包装
+backup	备份文件
+dispatch	调度
+dispose	处理
+ambiguous
+candidate 申请者
+subscribe 订阅
+trigger	触发
+latency	延迟
+surprising	出人意料的
+acknowledgement	承认
+guarantee	担保
+regardless	不顾后果地
+lease	租约
+scale	规模
+background thread
+reserved.broker.max.id
+zookeeper generated broker id's
+pros and cons 
+comma-separated	逗号分隔
+boundary	边界
+daughter	女儿
+throughput	吞吐量
+entire	全部的
+pump	注入，泵
+intend	打算
+broadly	大体上
+appropriate	适当的
+utilise	利用
+scenario	方案
+intermediate	中级的
+interoperability	互用性
+mandatory	强制的
+validate	生效
+tune	协调
+
+gain	赢得
+enhance	提高
+internal	内部的
+international	国际的
+granularity	粒度
+elaborate	详细说明
+convenience	方便
+simultaneous	同时的
+omit	遗漏
+manipulation	操纵
+As mentioned above
+tied to	相关联
+be responsible for	负责
+interoperate	交互操作
+concise	简明的
+verbose	冗长的
+resilient	弹性的
+However, for local testing and unit tests, you can pass “local” to run Spark in-process.
+interpret	解释
+wildcard
+merely	仅仅
+reside	居住
+involve	涉及
+iterative	迭代的
+trade-off	权衡
+consequently	因此
+fragment	片段
+demonstrate	显示
+separately	分别地
+precedence	优先集
+aborted	流产
+mitigate	减轻
+positive	积极的
+crucial	决定性的
+sketch	简述
+vice versa	反之亦然
+react	反应
+transform	改变
+span	跨越
+retention	保留
+retain	保持
+free up space
+cheap	便宜的
+passively	被动地
+be responsible for
+exclusive	专用的
+combine	结合
+tenant	租借
+decouple from	解耦
+
+propagate	传播
+shipment	货运
+retail	零售
+primitive	原始的，原语
+piece	片，块
+facility	设备
+tutorial	教程
+permanent	永久的
+comparatively	相对的
+reusable	可重用的
+passive	被动的
+quota	指标
+exclusive	单独的，排外的，高级的
+notion	概念
+pertinent	有关的
+perception	观念
+fiddly	复杂的
+trivial	微不足道的
+perhaps	或许
+equivalent	n/adj
+deliberately	故意地
+violate	违反
+semantic	语义
+straight	直的
+quorum	 法定人数
+intervene	阻碍
+diverse	多样的
+deny	拒绝
+mitigate	减轻
+result in	导致
+intuitive	直观的
+pragmatic	实用的
+deliberate	深思熟虑的，权衡
+translate	翻译
+feasible	可行的
+constitute	构成
+precise	精确的
+stuck	卡住的
+lag	滞后
+cease	停止
+arbitrary	任意的
+preference	偏好
+stringent	严格的
+basic primitive
+fundamental	基础的
+plaintext
+
+convention	惯例，会议
+validate	验证
+verify	检查
+repository	仓库
+skeptical	怀疑
+compensate	补偿
+divergence	差异
+aggressive	积极的
+divert	转移
+convert	转变
+reclaim	回收
+is superior to	优于
+coherency	一致
+populate	居住
+invert	使反转
+panic	恐慌
+kernel	谷粒，核心
+last decade	过去十年
+penalty	惩罚
+diverge	差异
+embed	嵌入
+concise	简约的
+seamless	无缝隙的
+resemble	类似
+
+dedicate	贡献
+reserve	储备
+conclude	推断,结束
+compatible	兼容的
+comprise	包含
+anonymous	匿名的
+navigate	导航
+implicit conversion
+delegate	委派，代表
+mix	混合
+vice versa
+algebra	代数
+despite	不管
+in contrast to
+retract	缩回
+behave	表现
+characteristic	特殊
+euro	欧元
+constraint	限制
+restrict	限制
+correspond	相应
+motivation	动机
+currency	货币，传播
+intuition	直觉
+mutual	共同的
+tumble	跌倒
+vertice	顶点
+transparent	透明的
+condense	压缩
+rare	罕见的
+sustain	维持
+manipulate	操控
+overflow	溢出
+negative number
+obviate	避免
+fine-grained
+coarse-grained
+encryption	加密
+evict	驱逐
+RAM
+commission	decommission
+proportional	与……成比例
+accidental	意外的
+as a side effect	副作用
+judicious	明智的
+
+treat	处理
+entire	整个的
+embed	嵌入
+idempotent	幂等
+restrict	限定
+indefinite	无限期的
+labor	劳动
+elaborate on	详细说明
+eliminate	消除
+besides	除……之外
+spam	垃圾邮件
+commutative	交替的
+its worth highlighting	值得强调的是
+generic	一般的
+primitive	原生的
+mistake	差错
+inadvertent	不经意的
+creating a connection object has time and resource overheads
+incur	引起
+overall	全面的
+amortize	分期偿还
+respect	尊重
+implicit	隐式的
+explicit	明确的
+resilient	弹性的
+frequent	频繁的
+warm	暖和
+prime time
+graceful	优雅的
+bottleneck	瓶颈
+unify	统一
+coalesce	合并
+feasible	可行的
+sustain	维持
+conservative	保守的
+built-in	内置的
+adopted	采用
+granularity	粒度
+official	官方的
+definitive	明确的
+pertinent	有关的
+amendment	修改
+disparate	完全不同的
+restrict	限制
+expectation	预期
+prove	证明
+proof	证明
+corrupt	堕落
+extract	提取
+alternative	其它的
+transparent	显然的
+beneath	在下方
+denote	指示
+blind	失明的，弄瞎，蒙蔽
+migrate	迁移
+durable	持久的
+populate	居住于
+resilient	弹性的
+critical	关键的，批评的
+smooth	流畅的
+handy	方便的
+extensive	广泛的
+raise	增加，养育
+rough	粗糙的
+vendor	供应商
+manifestation	显示
+variant	易变的
+directive	指示
+moment	片刻
+resolve	决定，分解
+ensemble	全体
+factor in	包括
+absence	缺席
+optimal	最佳的
+confidence	信任
+boost	增加
+slight	微小的，轻蔑
+rule of thumb
+speculative	推理的
+occasional	偶尔的
+compatible	和谐的
+paragraph	段落
+capture	捕获
+interpret	翻译
+convention	公约
+obscure	昏暗的
+prompt	提示，迅速的
+approach	接近，方法
+terminology	术语
+alphabetical	按字母顺序的
+lexicographical	按字母顺序的
+alongside	在旁边
+sparse	稀疏的
+analogous	相似的
+quota	指标
+pin	针，牵制
+coarse	粗糙的
+tombstone	墓碑
+confuse	混淆
+mentione	提到
+purge	清理
+
+
+strength and weaknesses
+aim	瞄准
+traffic	流量
+negative	消极的
+navigation	导航
+phenomenon	现象
+accompany	陪伴
+freight	运输
+facilitate	帮助
+verbose	冗长的
+hex	十六进制
+conversation	交谈
+comprehensive	综合的
+regard to	至于
+bootstrap	引导程序
+voluminous	量大的
+constraint	约束
+parlance	说法
+integrity	完整性
+discourage	不鼓励
+courage	勇气
+dramatical	戏剧的
+exhaustive	详尽的
+monotonical	单调的
+lack	缺乏
+hosted on	托管在
+commodity	日用品
+out of the box
+as opposed to	而不是
+grain	谷物，纹理
+compete	竞争
+compound	复合
+lease	租约
+decompose	分解
+steady	稳定的
+drawback	缺点
+tier	等级
+deprecate	反对
+terminology	术语
+evict	驱逐
+disregard	不顾
+criteria	标准
+allergic	过敏的
+eligible	适当的
+qualify	合格
+quality	质量
+ambiguous	模棱两可的
+facade	外表
+prevailed	流行
+hinder	阻碍
+adjacent 	相邻的
+ship with	附带
+symbol	象征，符号
+contain	控制，包含
+ensemble	集合(n)
+intentional	故意的
+international	国际的
+internal	内部的
+adverse	不利的
+arbitrary	 随意的
+collision	冲突
+render	使成为
+influence	影响
+interpret	解释
+coherent	连贯的
+honor	纪念
+fragment	碎片
+thumb	拇指
+overwhelm	覆盖
+trick	技巧，欺骗
+sacrifice	牺牲
+allot	分配
+bring	引起
+retrieve	恢复
+nest	巢，嵌套
+in the sense that	在……意义上
+expert	专家
+detach	分离
+deviate	脱离
+versa	反的
+versus	对抗
+intuitive	直观的
+lightweight	轻量级的
+fashion	方式
+embrace	拥抱、采纳、包含
+license	许可证
+tremendous	极大的
+federate	联邦
+participate	参与
+universal	普遍的、全休的
+dense	稠密的
+dissect	剖析
+accurate	精准的
+balance	账户余额
+inspire	激励
+elastic	弹性的
+
+
+WebSocket 是独立的、创建在 TCP 上的协议。
+Websocket 通过HTTP/1.1 协议的101状态码进行握手。
+为了创建Websocket连接，需要通过浏览器发出请求，之后服务器进行回应，这个过程通常称为“握手”（handshaking）

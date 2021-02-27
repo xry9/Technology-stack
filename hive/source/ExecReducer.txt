@@ -1,0 +1,4 @@
+1、动态分区改名
+a. ExecReducer.close --> FileSinkOperator$FSPaths.commit
+b. Driver.launchTask --> FileSinkOperator.jobCloseOp
+c. Driver.launchTask --> MoveTask.execute --> metadata.Hive.loadDynamicPartitions

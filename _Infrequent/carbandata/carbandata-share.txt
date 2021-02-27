@@ -1,0 +1,36 @@
+http://carbondata.apache.org/introduction.html
+
+CarbonData supports Update and Delete on Big Data.CarbonData provides the syntax similar to Hive to support IUD operations on CarbonData tables.
+
+CarbonData has unique concept of segments to manage incremental loads to CarbonData tables effectively.Segment management helps to easily control the table, perform easy retention, and is also used to provide transaction capability for operations being performed.
+Lucene is popular for indexing text data which are long.CarbonData provides a lucene datamap so that text columns can be indexed using lucene and use the index result for efficient pruning of data to be retrieved during query.
+Refer to Integration with Spark, Presto for detailed information on integrating CarbonData with these execution engines.
+
+http://carbondata.apache.org/ddl-of-carbondata.html
+Inverted Index Configuration
+By default, CarbonData caches min and max values of all the columns in schema. As the load increases, the memory required to hold the min and max values increases considerably. This feature enables you to configure min and max values only for the required columns, resulting in optimized memory usage
+
+http://carbondata.apache.org/dml-of-carbondata.html
+UPDATE t3 SET (t3_salary) = (t3_salary + 9) WHERE t3_name = 'aaa1'
+UPDATE t3 SET (t3_date, t3_country) = ('2017-11-18', 'india') WHERE t3_salary < 15003
+UPDATE t3 SET (t3_country, t3_name) = (SELECT t5_country, t5_name FROM t5 WHERE t5_id = 5) WHERE t3_id < 5
+UPDATE t3 SET (t3_date, t3_serialname, t3_salary) = (SELECT '2099-09-09', t5_serialname, '9999' FROM t5 WHERE t5_id = 5) WHERE t3_id < 5
+UPDATE t3 SET (t3_country, t3_salary) = (SELECT t5_country, t5_salary FROM t5 FULL JOIN t3 u WHERE u.t3_id = t5_id and t5_id=6) WHERE t3_id >6
+
+DELETE FROM carbontable WHERE column1  = 'china'
+DELETE FROM carbontable WHERE column1 IN ('china', 'USA')
+DELETE FROM carbontable WHERE column1 IN (SELECT column11 FROM sourceTable2)
+DELETE FROM carbontable WHERE column1 IN (SELECT column11 FROM sourceTable2 WHERE column1 = 'USA')
+
+http://carbondata.apache.org/streaming-guide.html
+After the streaming segment reaches the max size, CarbonData will change the segment status to "streaming finish" from "streaming", and create new "streaming" segment to continue to ingest streaming data.
+
+http://carbondata.apache.org/bloomfilter-datamap-guide.html
+A Bloom filter is a space-efficient probabilistic data structure that is used to test whether an element is a member of a set. Carbondata introduced BloomFilter as an index datamap to enhance the performance of querying with precise value. It is well suitable for queries that do precise match on high cardinality columns(such as Name/ID). Internally, CarbonData maintains a BloomFilter per blocklet for each index column to indicate that whether a value of the column is in this blocklet. Just like the other datamaps, BloomFilter datamap is managed along with main tables by CarbonData. User can create BloomFilter datamap on specified columns with specified BloomFilter configurations such as size and probability.
+In the above example, id and name are high cardinality columns and we always query on id and name with precise value. since id is in the sort_columns and it is orderd, query on it will be fast because CarbonData can skip all the irrelative blocklets. But queries on name may be bad since the blocklet minmax may not help, because in each blocklet the range of the value of name may be the same -- all from A* to z*. In this case, user can create a BloomFilter datamap on column name. Moreover, user can also create a BloomFilter datamap on the sort_columns. This is useful if user has too many segments and the range of the value of sort_columns are almost the same.
+
+http://carbondata.apache.org/lucene-datamap-guide.html
+Lucene is a high performance, full featured text search engine. Lucene is integrated to carbon as an index datamap and managed along with main tables by CarbonData. User can create lucene datamap to improve query performance on string columns which has content of more length. So, user can search tokenized word or pattern of it using lucene query on text content.
+
+http://carbondata.apache.org/preaggregate-datamap-guide.html
+Once pre-aggregate datamaps are created, CarbonData's SparkSQL optimizer extension supports to select the most efficient pre-aggregate datamap and rewrite the SQL to query against the selected datamap instead of the main table. Since the data size of pre-aggregate datamap is smaller, user queries are much faster. In our previous experience, we have seen 5X to 100X times faster in production SQLs.

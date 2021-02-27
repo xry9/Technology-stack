@@ -1,0 +1,15 @@
+1、mkdir data
+2、vim data/myid	三台机器别为1 2 3
+3、mv zoo_sample.cfg zoo.cfg
+4、vim zoo.cfg
+	dataDir=/usr/local/app/zookeeper-3.4.5/data		| standalone 模式到此就可以线束了
+server.1=cloud01:2888:3888
+server.2=cloud02:2888:3888
+server.3=cloud03:2888:3888
+5、scp -r zookeeper-3.4.5 cloud02:/usr/local/app/	远程发送到其它两台机器，并修改myid
+6、service iptables stop
+7、bin/zkServer.sh start	bin/zkServer.sh status	bin/zkCli.sh
+----
+bin/zkServer.sh出现提示信息
+Usage: bin/zkServer.sh {start|start-foreground|stop|restart|status|upgrade|print-cmd}
+start-foreground表示以前台进程启动

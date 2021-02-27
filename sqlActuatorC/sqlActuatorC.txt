@@ -1,0 +1,8 @@
+mvn clean install -Phadoop-2,dist -DskipTests
+
+在 hadoop 脚本底部增加
+for f in /home/tyx/app/apache-hive-1.2.1-bin/lib/*.jar; do
+  CLASSPATH=${CLASSPATH}:$f;
+done
+
+hadoop jar cli/target/hive-cli-1.2.1.jar "org.apache.hadoop.hive.cli.CliDriver"

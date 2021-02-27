@@ -1,0 +1,91 @@
+1、
+DROP TABLE IF EXISTS test1;
+CREATE table test1(id int primary key not null ,title VARCHAR(10),uid VARCHAR(10));
+replace into test1(id,title,uid) select id,title,uid from test;
+INSERT into test1(id,title,uid) select id,title,uid from test;
+SELECT * FROM test1;
+无论test1是不是空表都可以插入，如果id是主键只能用replace into
+----
+CREATE TABLE `flume_meta` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `sourceName` varchar(50) NOT NULL,
+  `tableName` varchar(50) NOT NULL,
+  `currentIndex` int(11) DEFAULT NULL,
+  `partitionDate` date NOT NULL,
+  `ts` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `sp` (`sourceName`,`partitionDate`)
+) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8;
+insert into flume_meta(sourceName,tableName,currentIndex,partitionDate) VALUES('','',4,NOW()) on DUPLICATE key update currentIndex=values(currentIndex)
+------------------------
+2、
+create table usr(name varchar(10), money int);
+insert into usr values ('zs', 100);
+insert into usr values ('ls', 50);
+UPDATE usr SET money = money - 20 WHERE name = 'zs';
+UPDATE usr SET money = money + 20 WHERE name = 'ls';
+
+show variables like '%autocommit%';
+set autocommit = 0;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS p1;
+create PROCEDURE p1(  -- 创建存储过程
+    OUT p_return_code tinyint   -- out类型参数，用于返回值
+)
+BEGIN 
+  DECLARE exit handler for sqlexception  -- 捕捉错误，如果是sql错误就执行里面的
+  BEGIN 
+    set p_return_code = 1;  -- 返回值1,说明sql错误
+    rollback;   -- 回滚数据
+  END; 
+  DECLARE exit handler for sqlwarning   -- 捕捉错误，如果是sql警告就执行里面的
+  BEGIN 
+    -- WARNING 
+    set p_return_code = 2;  -- 返回值2，说明出现sql警告
+    rollback;  -- 回滚数据
+  END;  
+  START TRANSACTION;  -- 开始事务
+        -- 执行sql语句
+        UPDATE usr SET money = money - 20 WHERE name = 'zs';
+        UPDATE usr SET money = money + 20 WHERE name = 'ls';
+  COMMIT;  -- 提交
+  set p_return_code = 0; -- 返回0说明成功
+END $$
+delimiter ;
+
+CALL p1(@u); -- 执行存储过程。传参接收返回值
+SELECT @u;  -- 查看返回值
+-----------------------------------
+锁的类型
+1.共享锁：也称为读锁，可以让多个事务同时对数据进行操作时可以访问到数据，但不能修改。使用方式：select语句+LOCK IN SHARE MOD
+2.排它锁：又称为写锁。一个事务持有了一行数据的排它锁时，其他事务不能再访问和修改这行数据。innodb默认update delete insert上会加排它锁，select使用方式：
+select语句+for update
+3.意向共享锁：在事务对某一行加共享锁时，要先给该表加上意向共享锁。
+4.意向排它锁：在事务对某一行数据加排它锁时，必须要先给该表加上意向排它锁。
+	--已验证的确如此. 不这样搞, 上面的更新两个就会形成死锁呀, 但是如果自己只加行锁, 其实就行形成死锁呀
+死锁
+事务并发时，每个事务都持有锁（或者是已经在等待锁)，每个事务都需要再继续持有锁，然后事务之间产生加锁的循环等待，形成死锁。避免死锁：
+1)类似的业务逻辑以固定的顺序访问表和行。
+2)大事务拆小。大事务更倾向于死锁，如果业务允许，将大事务拆小。
+3)在同一个事务中，尽可能做到一次锁定所需要的所有资源，减少死锁概率。(我翻译一下就是加表锁呗)
+4)降低隔离级别，如果业务允许，将隔离级别调低也是较好的选择 。
+5)我的脑洞 124 我或许可以想出
+
+MVCC 多版本并发控制(Multi-Version Concurrency Control, Concurrency: 并发,同步) 
+并发访问(读或写)数据库时，对正在事务内处理的数据做 多版本的管理。以达到用来避免写操作的堵塞，从而引发读操 作的并发问题。
+新增：会给行数据添加两个隐藏列，数据版本号和删除版本号。数据版本号值为插入时的事务id，删除版本号默认为null。
+删除：会给行数据的删除版本号设一个当前事务id值。
+修改：会先拷贝一份行数据，再把原先行数据的删除版本号设值，再修改拷贝的数据，并改变数据版本号值。
+查询：必须保证当前事务ID大于等于该行数据的数据版本号，并且删除版本号必须为null或者大于当前事务ID值。
+-- 应该对隔离级别产生影响吧, 但好像又不影响, 也就是不管什么隔离级别, 怎么加锁, mvcc 都是要坚守的
+
+undo log
+undo log作用是保证了事务的原子性和普通select的快照读。当事务开启的时候会拷贝当前数据到undo log中，此时有其他事务中的select读取数据直接从undo log中获取，若事务回滚可根据undo log恢复原始数据。
+
+redo log
+redo log保证了事务的持久性。事务开启后，只要开始改变数据信息就会持续写入redo buffer中，具体落盘可以指定不同的策略。在数据库发生意外故障时，尚有修改的数据未写入磁盘，在重启mysql服务的时候，根据redo log恢复事务修改后的新数据。
+Redo buffer 持久化到Redo log的策略有三种：
+取值 0 每秒一次进行提交持久化[可能丢失一秒内 的事务数据]
+取值 1 默认值，每次事务提交执行Redo buffer --> Redo log OS cache -->flush cache to disk [最安全，性能最差的方式]
+取值 2 每次事务提交到系统缓存OS cache，再每一秒从系统缓存中执行持久化 操作

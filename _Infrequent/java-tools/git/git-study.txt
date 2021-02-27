@@ -1,0 +1,120 @@
+1、yum 方法安装 git 
+  clone xry9 的工程或者 apache 的工程时要在 https://github.com/settings/keys 先中添加 ~/.ssh/id_rsa.pub, 然后才能 clone
+2、在 xry9 的工程中创建文件 add 后, 执行 git commit 时:
+  fatal: unable to auto-detect email address (got 'tyx@pseudo.(none)')
+  然后
+  git config --global user.email "xuriyongjiu@sina.com"
+  git config --global user.name "xuriyongjiu"
+  --好像不加 global 也行, 但就不是全局了
+  再 commit push 就没问题了
+-----------------------
+yum install -y curl-devel expat-devel gettext-devel openssl-devel zlib-devel
+yum install perl-ExtUtils-Embed -y
+cd git-2.1.0
+make prefix=/usr/local all
+make prefix=/usr/local install
+--------网友版--------
+git --version    ## 查看自带的版本
+git version 1.8.3.1
+yum remove git   ## 移除原来的版本
+
+yum install curl-devel expat-devel gettext-devel openssl-devel zlib-devel 
+yum install gcc-c++ perl-ExtUtils-MakeMaker
+yum install install autoconf automake libtool --2.8.0 需要这个, 但是还会报其它错, 所以不玩儿了, 但是用 centos7 可以了, 但是要 yum remove git
+
+cd /usr/src
+wget https://www.kernel.org/pub/software/scm/git/git-2.7.3.tar.gz
+
+tar xf git-2.7.3.tar.gz
+
+cd git-2.7.3
+make configure
+./configure --prefix=/usr/git ##配置目录
+make profix=/usr/git
+make install
+
+echo "export PATH=$PATH:/usr/git/bin" >> /etc/profile
+source /etc/profile
+
+
+======================================================================================
+0、基本概念
+工作区：就是你在电脑里能看到的目录。
+暂存区：英文叫stage, 或index。一般存放在 ".git目录下" 下的index文件（.git/index）中，所以我们把暂存区有时也叫作索引（index）
+版本库：工作区有一个隐藏目录.git，这个不算工作区，而是Git的版本库
+--是不是这样 .git 叫版本库, 里面包含了 index(暂存区)
+
+
+0、配置文件在: ~/.gitconfig 
+git config --list
+git config user.name
+
+
+1、git clone 时，可以所用不同的协议，包括 ssh, git, https 等，其中最常用的是 ssh，因为速度较快，还可以配置公钥免输入密码。各种写法如下：
+
+git clone git@github.com:fsliurujie/test.git         --SSH协议
+git clone git://github.com/fsliurujie/test.git          --GIT协议
+git clone https://github.com/fsliurujie/test.git      --HTTPS协议
+
+2、
+vim a.txt
+git status -s
+	?? a.txt --红色, 当然 git 1.x 没有颜色
+git add .
+git status -s
+	A  a.txt --绿色
+vim a.txt
+git status -s
+	AM a.txt --绿红色
+git add a.txt
+git status -s
+	A  a.txt
+"AM" 状态的意思是，这个文件在我们将它添加到缓存之后又有改动
+3、
+尚未缓存的改动：git diff
+查看已缓存的改动： git diff --cached
+查看已缓存的与未缓存的所有改动：git diff HEAD
+  
+4、使用 git add 命令将想要快照的内容写入缓存区， 而执行 git commit 将缓存区内容添加到仓库中
+5、git commit -am '修改 hello.php 文件', 对于修改的文件可以这样, 新增不行
+6、git reset HEAD a.txt  命令用于取消已缓存的内容, 注意文件内容没有修改, 说白了就是 add 操作的回退
+  git rm --cached a.txt 一样的效果啊, 虽然看图他俩是不一样, 但本质真是一样的吧
+  git checkout HEAD a.txt 这个的效果可以看图
+7、如果只是简单地从工作目录中手工删除文件，运行 git status 时就会在 Changes not staged for commit 的提示。
+要从 Git 中移除某个文件，就必须要从已跟踪文件清单中移除，然后提交。可以用以下命令完成此项工作
+git rm -f <file>
+但是我感觉好像我无所谓呀, 再 add commit 一波就没事了呀
+还有 git mv README  README.md 这种操作
+
+7、git checkout -- <filename>
+此命令会使用 HEAD 中的最新内容替换掉你的工作目录中的文件。已添加到暂存区的改动不会受到影响
+想丢弃你在本地的所有改动与提交，可以到服务器上获取最新的版本历史，并将你本地主分支指向它：
+git fetch origin
+git reset --hard origin/master
+
+8、git branch b1
+git checkout b1
+git checkout -b (branchname) 命令来创建新分支并立即切换到该分支下
+git branch -d (branchname) 删除分支, commit 后没有 merge 则不能删除成功, 如果存在远程分支还要先提到远程分支后才可以
+git merge newtest
+遇到冲突好像除了手动修改文件也没什么好办法了, master 中会记冲突所在位置, 也可以用 git diff 查看
+git push origin --delete b1  -- 删除远程分支
+
+9、git log
+10、git tag -a v1.0
+我们执行 git log --decorate 时，我们可以看到我们的标签了
+假设我们发布了提交 85fc7e7(上面实例最后一行)，但是那时候忘了给它打标签。 我们现在也可以：
+git tag -a v0.9 85fc7e7 
+git tag -d v1.0
+git push origin v1.1   --推到远程
+git push origin :refs/tags/v1.0
+git show v1.1  --可以查看提交时的 id, commit cbf74af5e0c9d58ab7d68f6cce7b28c086778da6
+git reset --hard cbf74af5e0c9d58ab7d68f6cce7b28c086778da6  -- 这个操作跟在哪个 branch 没有关系
+从远程 tag 拉数据可以 clone, 但是 clone 的 repository 其实 no branch
+
+
+11、git remote -v
+12、git fetch origin feature/first --拉远程分支, 但是我真没整明白是干啥的, 既不同于 pull 也不同于 checkout
+  用 checkout 可以从远程拉分支
+  
+  

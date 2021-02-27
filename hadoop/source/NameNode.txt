@@ -1,0 +1,595 @@
+hdfs haadmin -getServiceState nn2
+
+0、NameNode 结构比 Hbase 要简单, 只有两块 NameNodeRpcServer 和 RPC:clientRpcServer, 即没有本类啥事, 除本类外的线程都是 RPC 中启动的, 
+当然说三块也可以, 在 NameNode 中还有 loadNamesystem(conf); 操作
+
+1、NameNode 内存中的数据结构, 就是用这两个 INodeDirectory#children, FSDirectory#inodeMap 东东构建的, 可以不客气的说整个 NameNode 就是围着他俩转的
+2、写操作有两级锁? writeLock(); fsd.writeLock();
+  getEditLog().logSync(); fsd.getEditLog().logMkDir(cur, newNode); logSync();
+  
+3、loadFSImage 时 NNStorage#setStorageDirectories 方法很重要
+4、如何利用 JournalNode 保证高可用, 在 JournalSet#mapJournalsAndReportErrors 方法中的, disableAndReportErrorOnJournals(badJAS); 与
+  NameNodeResourcePolicy.areResourcesAvailable(journals, minimumRedundantJournals), 还有 QuorumOutputStream#flushAndSync 
+  加载 editLog 后是三个流都写, 这样处理简单了不少
+  
+5、状态切换: NameNodeRpcServer.transitionToActive --> ha.HAState.setStateInternal --> EditLogTailer.catchupDuringFailover -->
+  EditLogTailer.doTailEdits (editLog.selectInputStreams(lastTxnId + 1, ...)) --> FSEditLogLoader.applyEditLogOp  --> FSDirMkdirOp.mkdirForEditLog
+6、BlockInfoContiguous[] INodeFile#blocks 属性是 INodeFile 创建时就初始化的, 只不过值还没有, 在 FSImageFormatPBINode.Loader#loadINodeFile
+7、BlockInfoContiguous#setStorageInfo 此处是 block 添加 datanode 信息之处, 添加到了 BlockInfoContiguous#triplets 属性里，是在 datanode 向 NameNode 
+汇报时 NameNodeRpcServer.blockReport 调用的,所以当 hdfs 客户端到 blockFile 时其实就已经带上了 datanode 信息。以前听说 report 完结束安全模式, 我就先不认证了。
+8、FSNamesystem 中有个 BlockManager 来 processReport
+
+8、SafeModeInfo#canLeave 是否可以离开安全模式, 好像只与这两个主要参数有关,getNumLiveDataNodes() nameNodeHasResourcesAvailable()
+与 block 信息上报多少没太大关系
+9、元数据的形式:
+24450===[24451, 24484]
+job_1588429922224_0070_conf.xml===30838
+
+10、EditLog 相关: EditLogTailer.EditLogTailerThread
+两个 NN 都这样走:
+NameNode(815) --> StandbyState.enterState --> NameNodeHAContext.startStandbyServices --> FSNamesystem.startStandbyServices --> EditLogTailer.<init> --> EditLogTailer$EditLogTailerThread
+然后 active 的 NN: NameNodeRpcServer.transitionToActive --> NameNode.transitionToActive --> StandbyState.setState --> HAState.setStateInternal --> ActiveState.enterState 
+
+public class org.apache.hadoop.hdfs.server.namenode.NameNode implements NameNodeStatusMXBean {
+	private String clientNamenodeAddress;
+	private NameNodeRpcServer rpcServer;
+	protected FSNamesystem namesystem;
+	public static void main(String argv[]) throws Exception {
+		StringUtils.startupShutdownMessage(NameNode.class, argv, LOG);
+		NameNode namenode = createNameNode(argv, null);
+		if (namenode != null) {
+			namenode.join();
+		}
+	}
+	public static NameNode createNameNode(String argv[], Configuration conf) throws IOException {
+		if (conf == null) conf = new HdfsConfiguration();
+		StartupOption startOpt = parseArguments(argv);// REGULAR
+		setStartupOption(conf, startOpt);
+		switch (startOpt) {
+			......
+			default: {
+				return new NameNode(conf);
+			}
+		}
+	}
+	public NameNode(Configuration conf) throws IOException {
+		this(conf, NamenodeRole.NAMENODE);
+	}
+	protected NameNode(Configuration conf, NamenodeRole role) throws IOException {
+		setClientNamenodeAddress(conf);//读静态配置对属性 clientNamenodeAddress //pseudo:9000 赋值
+		initialize(conf);
+	}
+	protected void initialize(Configuration conf) throws IOException {
+		startHttpServer(conf);
+		loadNamesystem(conf);
+		rpcServer = createRpcServer(conf);
+		httpServer.setNameNodeAddress(getNameNodeAddress());
+		httpServer.setFSImage(getFSImage());
+		pauseMonitor = new JvmPauseMonitor(conf);
+		pauseMonitor.start();
+		metrics.getJvmMetrics().setPauseMonitor(pauseMonitor);
+		startCommonServices(conf);
+	}
+	private void startCommonServices(Configuration conf) throws IOException {
+		namesystem.startCommonServices(conf, haContext); // 这里挺重要应该, 过后再看
+		rpcServer.start();
+	}
+	protected NameNodeRpcServer createRpcServer(Configuration conf) throws IOException {
+		return new NameNodeRpcServer(conf, this);
+	}
+	protected void loadNamesystem(Configuration conf) throws IOException {
+		this.namesystem = FSNamesystem.loadFromDisk(conf);
+	}
+	public FSImage getFSImage() {
+		return namesystem.getFSImage();
+	}
+}
+public class org.apache.hadoop.hdfs.server.namenode.FSNamesystem implements Namesystem, FSNamesystemMBean, NameNodeMXBean {
+	FSNamesystem(Configuration conf, FSImage fsImage, boolean ignoreRetryCache) throws IOException {
+		this.fsImage = fsImage;
+		this.blockManager = new BlockManager(this, conf);
+		this.serverDefaults = new FsServerDefaults("各种静态配置");
+		this.dir = new FSDirectory(this, conf);
+	}
+	static FSNamesystem loadFromDisk(Configuration conf) throws IOException {
+		FSImage fsImage = new FSImage(conf, FSNamesystem.getNamespaceDirs(conf), FSNamesystem.getNamespaceEditsDirs(conf));// 读配置目录想看再看吧
+		FSNamesystem namesystem = new FSNamesystem(conf, fsImage, false);// 为什么不是单例呢
+		namesystem.loadFSImage(startOpt);
+		return namesystem;
+	}
+	private void loadFSImage(StartupOption startOpt) throws IOException {
+		final FSImage fsImage = getFSImage();// this.fsImage
+		final boolean staleImage = fsImage.recoverTransitionRead(startOpt, this, recovery);
+		//fsImage.openEditLogForWrite();
+	}
+}
+public class org.apache.hadoop.hdfs.server.namenode.FSImage implements Closeable {
+	protected NNStorage storage;
+	protected FSImage(Configuration conf, Collection<URI> imageDirs, List<URI> editsDirs) throws IOException {
+		this.conf = conf;
+		storage = new NNStorage(conf, imageDirs, editsDirs);
+		this.editLog = new FSEditLog(conf, storage, editsDirs);
+		archivalManager = new NNStorageRetentionManager(conf, storage, editLog);
+	}
+	boolean recoverTransitionRead(StartupOption startOpt, FSNamesystem target, MetaRecoveryContext recovery) throws IOException {		
+		return loadFSImage(target, startOpt, recovery);
+	}
+	private boolean loadFSImage(FSNamesystem target, StartupOption startOpt, MetaRecoveryContext recovery) throws IOException {
+		final FSImageStorageInspector inspector = storage.readAndInspectDirs(nnfs, startOpt);
+		List<FSImageFile> imageFiles = inspector.getLatestImages();// 以上两行代码不进去看了, this.storage 中添加了目录
+		// [FSImageFile(file=/usr/local/app/hadoop-2.7.2/tmp/dfs/name/current/fsimage_0000000000000018728, cpktTxId=0000000000000018728)]   
+		FSImageFile imageFile = null;
+		for (int i = 0; i < imageFiles.size(); i++) {
+			imageFile = imageFiles.get(i);
+			loadFSImageFile(target, recovery, imageFile, startOpt);
+			break;
+		}
+		return needToSave;
+	}
+	void loadFSImageFile(FSNamesystem target, MetaRecoveryContext recovery, FSImageFile imageFile, StartupOption startupOption) throws IOException {
+		loadFSImage(imageFile.getFile(), target, recovery, isRollingRollback);
+	}
+	private void loadFSImage(File imageFile, FSNamesystem target, MetaRecoveryContext recovery, boolean requireSameLayoutVersion) throws IOException {
+		loadFSImage(imageFile, expectedMD5, target, recovery, requireSameLayoutVersion);
+	}  
+	void openEditLogForWrite() throws IOException {
+		editLog.openForWrite();
+		storage.writeTransactionIdFileToStorage(editLog.getCurSegmentTxId());
+	}
+	private void loadFSImage(File curFile, MD5Hash expectedMd5, FSNamesystem target, MetaRecoveryContext recovery, boolean requireSameLayoutVersion) throws IOException {
+		FSImageFormat.LoaderDelegator loader = FSImageFormat.newLoader(conf, target);
+		loader.load(curFile, requireSameLayoutVersion);
+	}
+}
+public class org.apache.hadoop.hdfs.server.namenode.NNStorage extends Storage implements Closeable, StorageErrorReporter {
+	public NNStorage(Configuration conf, Collection<URI> imageDirs, Collection<URI> editsDirs) throws IOException {
+		super(NodeType.NAME_NODE);
+		storageDirs = new CopyOnWriteArrayList<StorageDirectory>();
+		setStorageDirectories(imageDirs, Lists.newArrayList(editsDirs), FSNamesystem.getSharedEditsDirs(conf));
+	}
+	synchronized void setStorageDirectories(Collection<URI> fsNameDirs, Collection<URI> fsEditsDirs, Collection<URI> sharedEditsDirs) throws IOException {
+		this.storageDirs.clear();
+		this.removedStorageDirs.clear();
+		for (URI dirName : fsNameDirs) {
+			checkSchemeConsistency(dirName);
+			boolean isAlsoEdits = false;
+			for (URI editsDirName : fsEditsDirs) {
+				if (editsDirName.compareTo(dirName) == 0) {
+					isAlsoEdits = true;
+					fsEditsDirs.remove(editsDirName);
+					break;
+				}
+			}
+			NameNodeDirType dirType = (isAlsoEdits) ? NameNodeDirType.IMAGE_AND_EDITS : NameNodeDirType.IMAGE;
+			if(dirName.getScheme().compareTo("file") == 0) {
+				this.addStorageDir(new StorageDirectory(new File(dirName.getPath()), dirType, sharedEditsDirs.contains(dirName))); // Don't lock the dir if it's shared.
+			}
+		}
+		for (URI dirName : fsEditsDirs) {
+			checkSchemeConsistency(dirName);
+			if(dirName.getScheme().compareTo("file") == 0)
+				this.addStorageDir(new StorageDirectory(new File(dirName.getPath()), NameNodeDirType.EDITS, sharedEditsDirs.contains(dirName)));
+		}
+	}
+}
+public abstract class Storage extends StorageInfo {
+	protected List<StorageDirectory> storageDirs = new ArrayList<StorageDirectory>();
+	protected void addStorageDir(StorageDirectory sd) {
+		storageDirs.add(sd);// /usr/local/app/hadoop-2.7.2/tmp/dfs/data
+	}
+}
+public class org.apache.hadoop.hdfs.server.namenode.FSDirectory implements Closeable {
+	private final INodeId inodeId;
+	private final FSNamesystem namesystem;
+	private final INodeMap inodeMap; // Synchronized by dirLock
+	INodeDirectory rootDir;
+	private final FSEditLog editLog;
+	FSDirectory(FSNamesystem ns, Configuration conf) throws IOException {
+		this.inodeId = new INodeId();
+		rootDir = createRoot(ns);
+		inodeMap = INodeMap.newInstance(rootDir);
+		namesystem = ns;
+		this.editLog = ns.getEditLog();
+	}
+	public final void addToInodeMap(INode inode) {
+		if (inode instanceof INodeWithAdditionalFields) {
+			inodeMap.put(inode);
+			if (!inode.isSymlink()) {
+				final XAttrFeature xaf = inode.getXAttrFeature();
+				addEncryptionZone((INodeWithAdditionalFields) inode, xaf);
+			}
+		}
+	}
+}
+public class org.apache.hadoop.fs.FsServerDefaults implements Writable {
+	public FsServerDefaults(long blockSize, int bytesPerChecksum, int writePacketSize, short replication, int fileBufferSize, boolean encryptDataTransfer, long trashInterval, DataChecksum.Type checksumType) {
+		this.blockSize = blockSize;
+		this.bytesPerChecksum = bytesPerChecksum;
+		this.writePacketSize = writePacketSize;
+		this.replication = replication;
+		this.fileBufferSize = fileBufferSize;
+		this.encryptDataTransfer = encryptDataTransfer;
+		this.trashInterval = trashInterval;
+		this.checksumType = checksumType;
+	}
+}
+class org.apache.hadoop.hdfs.server.namenode.NameNodeRpcServer implements NamenodeProtocols {
+	protected final NameNode nn;
+	protected final FSNamesystem namesystem;
+	private final RPC.Server serviceRpcServer;
+	private final InetSocketAddress serviceRPCAddress;
+	protected final RPC.Server clientRpcServer;
+	protected final InetSocketAddress clientRpcAddress;
+	public NameNodeRpcServer(Configuration conf, NameNode nn) throws IOException {
+		this.nn = nn;
+		this.namesystem = nn.getNamesystem();
+		ClientNamenodeProtocolServerSideTranslatorPB clientProtocolServerTranslator = new ClientNamenodeProtocolServerSideTranslatorPB(this);
+		BlockingService clientNNPbService = ClientNamenodeProtocol.newReflectiveBlockingService(clientProtocolServerTranslator);
+		InetSocketAddress listenAddr = serviceRpcServer.getListenerAddress();
+		serviceRPCAddress = new InetSocketAddress(serviceRpcAddr.getHostName(), listenAddr.getPort());
+		nn.setRpcServiceServerAddress(conf, serviceRPCAddress);
+		InetSocketAddress rpcAddr = nn.getRpcServerAddress(conf);
+		this.clientRpcServer = new RPC.Builder(conf)
+			.setProtocol(org.apache.hadoop.hdfs.protocolPB.ClientNamenodeProtocolPB.class).setInstance(clientNNPbService).setBindAddress(bindHost)
+			.setPort(rpcAddr.getPort()).setNumHandlers(handlerCount).setVerbose(false).setSecretManager(namesystem.getDelegationTokenSecretManager())
+			.build();
+		InetSocketAddress listenAddr = clientRpcServer.getListenerAddress();
+		clientRpcAddress = new InetSocketAddress(rpcAddr.getHostName(), listenAddr.getPort());
+		nn.setRpcServerAddress(conf, clientRpcAddress);
+	}
+	void start() {
+		clientRpcServer.start();
+	}
+}
+public class org.apache.hadoop.hdfs.server.namenode.FSImageFormat {
+	static class LoaderDelegator implements AbstractLoader {
+		private AbstractLoader impl;
+		private final Configuration conf;
+		private final FSNamesystem fsn;
+		LoaderDelegator(Configuration conf, FSNamesystem fsn) {
+			this.conf = conf;
+			this.fsn = fsn;
+		}
+		public void load(File file, boolean requireSameLayoutVersion) throws IOException {
+			FileInputStream is = new FileInputStream(file);
+			FSImageFormatProtobuf.Loader loader = new FSImageFormatProtobuf.Loader(conf, fsn, requireSameLayoutVersion);
+			impl = loader;
+			loader.load(file);
+		}
+	}
+}
+public final class org.apache.hadoop.hdfs.server.namenode.FSImageFormatProtobuf {
+	public static final class Loader implements FSImageFormat.AbstractLoader {
+		Loader(Configuration conf, FSNamesystem fsn, boolean requireSameLayoutVersion) {
+			this.conf = conf;
+			this.fsn = fsn;
+			this.ctx = new LoaderContext();
+			this.requireSameLayoutVersion = requireSameLayoutVersion;
+		}
+		void load(File file) throws IOException {
+			long start = Time.monotonicNow();
+			RandomAccessFile raFile = new RandomAccessFile(file, "r");
+			FileInputStream fin = new FileInputStream(file);
+			loadInternal(raFile, fin);// file --> /usr/local/app/hadoop-2.7.2/tmp/dfs/name/current/fsimage_0000000000000018728
+		}
+		private void loadInternal(RandomAccessFile raFile, FileInputStream fin) throws IOException {
+			FileSummary summary = FSImageUtil.loadSummary(raFile);
+			FileChannel channel = fin.getChannel();
+			FSImageFormatPBINode.Loader inodeLoader = new FSImageFormatPBINode.Loader(fsn, this);
+			ArrayList<FileSummary.Section> sections = Lists.newArrayList(summary.getSectionsList());
+			Collections.sort(sections, new Comparator<FileSummary.Section>() {....});
+			for (FileSummary.Section s : sections) {
+				InputStream in = new BufferedInputStream(new LimitInputStream(fin, s.getLength()));
+				in = FSImageUtil.wrapInputStreamForCompression(conf, summary.getCodec(), in);
+				String n = s.getName();
+				switch (SectionName.fromString(n)) {
+					case INODE: {
+						inodeLoader.loadINodeSection(in);
+					}
+						break;
+					case INODE_DIR:
+						inodeLoader.loadINodeDirectorySection(in);
+						break;					
+				}
+			}
+		}
+	}
+}
+
+public final class org.apache.hadoop.hdfs.server.namenode.FSImageFormatPBINode {
+	public final static class Loader {
+		Loader(FSNamesystem fsn, final FSImageFormatProtobuf.Loader parent) {
+			this.fsn = fsn;
+			this.dir = fsn.dir;
+			this.parent = parent;
+		}
+		void loadINodeSection(InputStream in) throws IOException {
+			INodeSection s = INodeSection.parseDelimitedFrom(in);
+			fsn.dir.resetLastInodeId(s.getLastInodeId());
+			for (int i = 0; i < s.getNumInodes(); ++i) {
+				INodeSection.INode p = INodeSection.INode.parseDelimitedFrom(in);
+				if (p.getId() == INodeId.ROOT_INODE_ID) {
+					loadRootINode(p);
+				} else {
+					INode n = loadINode(p);// 这就是真正的 INODE
+					dir.addToInodeMap(n);
+				}
+			}
+		}
+		void loadINodeDirectorySection(InputStream in) throws IOException {
+			final List<INodeReference> refList = parent.getLoaderContext().getRefList();
+			while (true) {
+				INodeDirectorySection.DirEntry e = INodeDirectorySection.DirEntry.parseDelimitedFrom(in);
+				INodeDirectory p = dir.getInode(e.getParent()).asDirectory();
+				for (long id : e.getChildrenList()) {
+					INode child = dir.getInode(id);
+					addToParent(p, child);
+				}
+			}
+		}
+		
+		private void addToParent(INodeDirectory parent, INode child) {
+			if (!parent.addChild(child)) {
+				return;
+			}
+			if (child.isFile()) {
+				updateBlocksMap(child.asFile(), fsn.getBlockManager());
+			}
+		}
+		org.apache.hadoop.hdfs.server.namenode.FSImageFormatPBINode.Loader#loadINodeFile 此方法中加载 INodeFile 包括了 blockId, 原来 Image 文件中存了 blockId 
+	}
+}
+
+
+public abstract class org.apache.hadoop.hdfs.server.namenode.INode implements INodeAttributes, Diff.Element<byte[]> {
+	private INode parent = null;
+	INode(INode parent) {
+		this.parent = parent;
+	}
+}
+
+public class org.apache.hadoop.hdfs.server.namenode.INodeMap {
+	private final GSet<INode, INodeWithAdditionalFields> map;
+	static INodeMap newInstance(INodeDirectory rootDir) {
+		int capacity = LightWeightGSet.computeCapacity(1, "INodeMap");
+		GSet<INode, INodeWithAdditionalFields> map = new LightWeightGSet<INode, INodeWithAdditionalFields>(capacity);
+		map.put(rootDir);
+		return new INodeMap(map);
+	}
+	private INodeMap(GSet<INode, INodeWithAdditionalFields> map) {
+		this.map = map;
+	}
+	public final void put(INode inode) {
+		if (inode instanceof INodeWithAdditionalFields) {
+			map.put((INodeWithAdditionalFields)inode);
+		}
+	}
+}
+
+public interface org.apache.hadoop.util.GSet<K, E extends K> extends Iterable<E> {
+}
+
+public class org.apache.hadoop.util.LightWeightGSet<K, E extends K> implements GSet<K, E> {
+	private int size = 0;
+	public static interface LinkedElement {
+		public void setNext(LinkedElement next);
+		public LinkedElement getNext();
+	}
+	private final LinkedElement[] entries;
+	public LightWeightGSet(final int recommended_length) {
+		final int actual = actualArrayLength(recommended_length);
+		entries = new LinkedElement[actual];
+		hash_mask = entries.length - 1;
+	}
+	public E put(final E element) {
+		final LinkedElement e = (LinkedElement)element;
+		final int index = getIndex(element);
+		final E existing = remove(index, element);
+		size++;
+		e.setNext(entries[index]);
+		entries[index] = e;
+		return existing;
+	}
+}
+
+public abstract class org.apache.hadoop.hdfs.server.namenode.INodeWithAdditionalFields extends INode implements LinkedElement {
+	private LinkedElement next = null;
+	final private long id;
+	private byte[] name = null;
+}
+
+public class org.apache.hadoop.hdfs.server.namenode.INodeFile extends INodeWithAdditionalFields implements INodeFileAttributes, BlockCollection {
+  private BlockInfoContiguous[] blocks;
+}
+public class org.apache.hadoop.hdfs.server.namenode.INodeDirectory extends INodeWithAdditionalFields implements INodeDirectoryAttributes {
+	private List<INode> children = null;
+	public boolean addChild(INode node) {
+		final int low = searchChildren(node.getLocalNameBytes());
+		if (low >= 0) {
+			return false;
+		}
+		addChild(node, low);
+		return true;
+	}
+	private void addChild(final INode node, final int insertionPoint) {
+		if (children == null) {
+			children = new ArrayList<INode>(DEFAULT_FILES_PER_DIRECTORY);
+		}
+		node.setParent(this);
+	    // 此处应该是将所有的 inode 都加入内存的操作, 举个栗子: this.getFullPathName()+"==="+node	--> /hive1/user/hive/warehouse/db.db/dept===dept.txt
+		children.add(-insertionPoint - 1, node);
+	}
+	int searchChildren(byte[] name) {
+		return children == null? -1: Collections.binarySearch(children, name);
+	}
+}
+=========================================================================
+public class org.apache.hadoop.hdfs.server.blockmanagement.BlockManager {
+	private final Namesystem namesystem;
+	final BlocksMap blocksMap;
+	final CorruptReplicasMap corruptReplicas = new CorruptReplicasMap();
+	public final Map<String, LightWeightLinkedSet<Block>> excessReplicateMap = new TreeMap<String, LightWeightLinkedSet<Block>>();
+	public BlockManager(final Namesystem namesystem, final Configuration conf) throws IOException {
+		// Compute the map capacity by allocating 2% of total memory
+		blocksMap = new BlocksMap(LightWeightGSet.computeCapacity(2.0, "BlocksMap"));
+	}
+	private void addToExcessReplicate(DatanodeInfo dn, Block block) {
+		LightWeightLinkedSet<Block> excessBlocks = excessReplicateMap.get(dn.getDatanodeUuid());
+		if (excessBlocks == null) {
+			excessBlocks = new LightWeightLinkedSet<Block>();
+			excessReplicateMap.put(dn.getDatanodeUuid(), excessBlocks);
+		}
+		if (excessBlocks.add(block)) {
+			excessBlocksCount.incrementAndGet();
+		}
+	}
+	private LocatedBlock createLocatedBlock(final BlockInfoContiguous blk, final long pos) throws IOException {
+		final int numCorruptNodes = countNodes(blk).corruptReplicas();
+		final int numCorruptReplicas = corruptReplicas.numCorruptReplicas(blk);
+		final int numNodes = blocksMap.numNodes(blk);
+		final boolean isCorrupt = numCorruptNodes == numNodes;
+		final int numMachines = isCorrupt ? numNodes: numNodes - numCorruptNodes;
+		final DatanodeStorageInfo[] machines = new DatanodeStorageInfo[numMachines];
+		int j = 0;
+		if (numMachines > 0) {
+			for(DatanodeStorageInfo storage : blocksMap.getStorages(blk)) {
+				final DatanodeDescriptor d = storage.getDatanodeDescriptor();
+				final boolean replicaCorrupt = corruptReplicas.isReplicaCorrupt(blk, d);
+				if (isCorrupt || (!replicaCorrupt)) machines[j++] = storage;
+			}
+		}
+		final ExtendedBlock eb = new ExtendedBlock(namesystem.getBlockPoolId(), blk);
+		return new LocatedBlock(eb, machines, pos, isCorrupt);
+	}
+	public NumberReplicas countNodes(Block b) {
+		int decommissioned = 0;
+		int live = 0;
+		int corrupt = 0;
+		int excess = 0;
+		int stale = 0;
+		Collection<DatanodeDescriptor> nodesCorrupt = corruptReplicas.getNodes(b);
+		for(DatanodeStorageInfo storage : blocksMap.getStorages(b, State.NORMAL)) {
+			final DatanodeDescriptor node = storage.getDatanodeDescriptor();
+			if ((nodesCorrupt != null) && (nodesCorrupt.contains(node))) {
+				corrupt++;
+			} else if (node.isDecommissionInProgress() || node.isDecommissioned()) {
+				decommissioned++;
+			} else {
+				LightWeightLinkedSet<Block> blocksExcess = excessReplicateMap.get(node.getDatanodeUuid());
+				if (blocksExcess != null && blocksExcess.contains(b)) {
+					excess++;
+				} else {
+					live++;
+				}
+			}
+			if (storage.areBlockContentsStale()) {
+				stale++;
+			}
+		}
+		return new NumberReplicas(live, decommissioned, corrupt, excess, stale);
+	}
+
+}
+
+class org.apache.hadoop.hdfs.server.blockmanagement.BlocksMap {
+	private final int capacity;  
+	private GSet<Block, BlockInfoContiguous> blocks;
+}
+
+public class org.apache.hadoop.hdfs.protocol.ExtendedBlock {
+	private String poolId;
+	private Block block;
+}
+public class org.apache.hadoop.hdfs.protocol.Block implements Writable, Comparable<Block> {
+	private long blockId;
+	private long numBytes;
+}
+public class LocatedBlock {
+	private final ExtendedBlock b;
+	private long offset;  // offset of the first byte of the block in the file
+	private final DatanodeInfoWithStorage[] locs;
+	private String[] storageIDs;
+	private StorageType[] storageTypes;
+	private boolean corrupt;
+	private DatanodeInfo[] cachedLocs;
+}
+public enum StorageType {
+	RAM_DISK(true),
+	SSD(false),
+	DISK(false),
+	ARCHIVE(false);
+}
+public class org.apache.hadoop.hdfs.protocol.DatanodeInfo extends DatanodeID implements Node {
+	private long capacity;
+	private long dfsUsed;
+	private long remaining;
+	private long blockPoolUsed;
+	private long cacheCapacity;
+	private long cacheUsed;
+	private long lastUpdate;
+	private long lastUpdateMonotonic;
+	private int xceiverCount;
+	private String location = NetworkTopology.DEFAULT_RACK;// "/default-rack"
+	private String softwareVersion;
+	private List<String> dependentHostNames = new LinkedList<String>();
+}
+public class LocatedBlocks {
+	private final long fileLength;
+	private final List<LocatedBlock> blocks; // array of blocks with prioritized locations
+	private final LocatedBlock lastLocatedBlock;
+	private final boolean isLastBlockComplete;
+	private final FileEncryptionInfo fileEncryptionInfo;
+}
+public class BlockInfoContiguous extends Block implements LightWeightGSet.LinkedElement {
+}
+public class NumberReplicas {
+	private int liveReplicas;
+	private int decommissionedReplicas;
+	private int corruptReplicas;
+	private int excessReplicas;
+	private int replicasOnStaleNodes;
+}
+
+public class CorruptReplicasMap{
+	public static enum Reason {
+		NONE,                // not specified.
+		ANY,                 // wildcard reason
+		GENSTAMP_MISMATCH,   // mismatch in generation stamps
+		SIZE_MISMATCH,       // mismatch in sizes
+		INVALID_STATE,       // invalid state
+		CORRUPTION_REPORTED  // client or datanode reported the corruption
+	}
+	private final SortedMap<Block, Map<DatanodeDescriptor, Reason>> corruptReplicasMap = new TreeMap<Block, Map<DatanodeDescriptor, Reason>>();
+	Collection<DatanodeDescriptor> getNodes(Block blk) {
+		Map <DatanodeDescriptor, Reason> nodes = corruptReplicasMap.get(blk);
+		return nodes.keySet();
+	}
+}
+
+public class org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor extends DatanodeInfo {
+}
+public class DatanodeID implements Comparable<DatanodeID> {
+  private String ipAddr;     // IP address
+  private String hostName;   // hostname claimed by datanode
+  private String peerHostName; // hostname from the actual connection
+  private int xferPort;      // data streaming port
+  private int infoPort;      // info server port
+  private int infoSecurePort; // info server port
+  private int ipcPort;       // IPC server port
+  private String xferAddr;
+}
+
+public class org.apache.hadoop.hdfs.server.namenode.INodesInPath {
+	// 这个方法调用很频繁, 基本就是递归调用 dir.getChild(childName,...), 利用内存的 node 结构构建一个临时对象, 由此可以看出 node 在 namenode 的内存布局
+	static INodesInPath resolve(final INodeDirectory startingDir, final byte[][] components, final boolean resolveLink) throws UnresolvedLinkException {
+		......
+	}
+}
+
+public class org.apache.hadoop.hdfs.server.blockmanagement.BlockInfoContiguous extends Block implements LightWeightGSet.LinkedElement {
+	public BlockInfoContiguous(Block blk, short replication) {
+		super(blk);
+		this.triplets = new Object[3*replication];// 要存前一个块和后一个块, 有这个必要么
+		this.bc = null;
+	}
+}

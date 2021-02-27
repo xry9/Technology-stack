@@ -1,0 +1,83 @@
+0、mysql 用的 5.1.73, centos6 yum instll
+1、vim /etc/my.cnf  , 或 /usr/my.cnf
+	log-bin=mysql-bin #添加这一行就ok  
+	binlog-format=ROW #选择row模式  
+	server_id=1 #配置mysql replaction需要定义，不能和canal的slaveId重复
+2、vim conf/example/instance.properties
+	canal.instance.master.address = 127.0.0.1:3306   
+	canal.instance.dbUsername = canal    
+	canal.instance.dbPassword = canal  
+	#canal.instance.defaultDatabaseName = canal_test # 不需要
+	# canal.instance.mysql.slaveId = 1234 # 好像也不需要
+3、
+	CREATE USER canal IDENTIFIED BY 'canal';
+	GRANT SELECT, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'canal'@'%';
+	-- GRANT ALL PRIVILEGES ON *.* TO 'canal'@'%';
+	FLUSH PRIVILEGES;
+4、./startup.sh
+5、发现 2、3 中用的 canal 用户权限还是有问题, 所以用 root 吧, 如果没用权限问题解决就可以用 canal
+6、在 idea 中执行 com.alibaba.otter.canal.example.SimpleCanalClientTest 就行, 日志可以打出来
+7、高版本的 canal 好像对 mysql 版本也有要求, 5.1 应该是低了, 但是用 rpm 装高些版本的 mysql 装不上了不知道为啥. 
+  用 MySQL-server-5.6.24-1.el6.x86_64.rpm 版本 mysql, canal-1.1.2 没有 7 这个问题
+
+https://github.com/alibaba/canal/wiki/QuickStart  https://github.com/alibaba/canal/wiki/ClientExample
+
+================canal分布式===================
+vim canal/conf/canal.properties
+canal.zkServers=cloud01:2181,cloud02:2181,cloud03:2181
+vim canal/conf/example/instance.properties
+canal.instance.mysql.slaveId = 1234	--不同即可
+canal.instance.master.address = 192.168.58.1:3306
+./startup.sh，在zk中会有/otter 节点
+==============================================
+
+canal.properties  (系统根配置文件)
+instance.properties  (instance级别的配置文件，每个instance一份)
+
+1、canal.properties
+canal.destinations  #当前server上部署的instance列表 
+canal.conf.dir  #conf/目录所在的路径   
+canal.auto.scan #开启instance自动扫描
+#如果配置为true，canal.conf.dir目录下的instance配置变化会自动触发：
+#a. instance目录新增： 触发instance配置载入，lazy为true时则自动启动
+#b. instance目录删除：卸载对应instance配置，如已启动则进行关闭
+#c. instance.properties文件变化：reload instance配置，如已启动自动进行重启操作
+canal.auto.scan.interval    #instance自动扫描的间隔时间，单位秒  
+canal.instance.global.mode  #全局配置加载方式   
+canal.instance.global.lazy  #全局lazy模式   
+canal.instance.global.manager.address   #全局的manager配置方式的链接信息    无
+canal.instance.global.spring.xml    #全局的spring配置方式的组件文件 
+canal.instance.example.mode
+canal.instance.example.lazy
+canal.instance.example.spring.xml
+#instance级别的配置定义，如有配置，会自动覆盖全局配置定义模式
+#命名规则：canal.instance.{name}.xxx 无
+
+2、instance.properties
+
+canal.id    #每个canal server实例的唯一标识，暂无实际意义   
+canal.ip    #canal server绑定的本地IP信息，如果不配置，默认选择一个本机IP进行启动服务   
+canal.port  #canal server提供socket服务的端口  
+canal.zkServers #canal server链接zookeeper集群的链接信息
+#例子：10.20.144.22:2181,10.20.144.51:2181 
+canal.zookeeper.flush.period    #canal持久化数据到zookeeper上的更新频率，单位毫秒    
+canal.instance.memory.batch.mode    #canal内存store中数据缓存模式
+#1. ITEMSIZE : 根据buffer.size进行限制，只限制记录的数量
+#2. MEMSIZE : 根据buffer.size  * buffer.memunit的大小，限制缓存记录的大小  
+canal.instance.memory.buffer.size   #canal内存store中可缓存buffer记录数，需要为2的指数  
+canal.instance.memory.buf
+
+fer.memunit    #内存记录的单位大小，默认1KB，和buffer.size组合决定最终的内存使用大小  
+canal.instance.transactionn.size    最大事务完整解析的长度支持
+超过该长度后，一个事务可能会被拆分成多次提交到canal store中，无法保证事务的完整可见性
+canal.instance.fallbackIntervalInSeconds    #canal发生mysql切换时，在新的mysql库上查找binlog时需要往前查找的时间，单位秒
+#说明：mysql主备库可能存在解析延迟或者时钟不统一，需要回退一段时间，保证数据不丢
+canal.instance.detecting.enable #是否开启心跳检查
+canal.instance.detecting.sql    #心跳检查sql    insert into retl.xdual values(1,now()) on duplicate key update x=now()
+canal.instance.detecting.interval.time  #心跳检查频率，单位秒
+canal.instance.detecting.retry.threshold    #心跳检查失败重试次数
+canal.instance.detecting.heartbeatHaEnable  #心跳检查失败后，是否开启自动mysql自动切换
+#说明：比如心跳检查失败超过阀值后，如果该配置为true，canal就会自动链到mysql备库获取binlog数据
+canal.instance.network.receiveBufferSize    #网络链接参数，SocketOptions.SO_RCVBUF 
+canal.instance.network.sendBufferSize   #网络链接参数，SocketOptions.SO_SNDBUF 
+canal.instance.network.soTimeout    #网络链接参数，SocketOptions.SO_TIMEOUT

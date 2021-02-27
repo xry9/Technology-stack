@@ -1,0 +1,145 @@
+
+object WordCount {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf();conf.setAppName("WordCount");val sc = new SparkContext(conf)
+    val rdd: RDD[(String, Int)] = sc.textFile(args(1), 2).flatMap { x => println(x);x.split(" ") }.map { x => (x, 1) }.reduceByKey { (x,y) => x+y }
+    rdd.saveAsTextFile(args(2))
+  }
+}
+
+
+abstract class RDD[T: ClassTag](@transient private var _sc: SparkContext,@transient private var deps: Seq[Dependency[_]]) extends Serializable with Logging {
+	def saveAsTextFile(path: String): Unit = withScope {
+		val nullWritableClassTag = implicitly[ClassTag[NullWritable]]
+		val textClassTag = implicitly[ClassTag[Text]]
+		val r = this.mapPartitions { iter =>
+			val text = new Text()
+			iter.map { x => text.set(x.toString)(NullWritable.get(), text)
+			}
+		}
+		RDD.rddToPairRDDFunctions(r)(nullWritableClassTag, textClassTag, null).saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](path)
+	}
+}
+class PairRDDFunctions[K, V](self: RDD[(K, V)])(implicit kt: ClassTag[K], vt: ClassTag[V], ord: Ordering[K] = null) extends Logging with Serializable {
+	def saveAsHadoopFile(path: String, keyClass: Class[_], valueClass: Class[_], outputFormatClass: Class[_ <: OutputFormat[_, _]], conf: JobConf = new JobConf(self.context.hadoopConfiguration), codec: Option[Class[_ <: CompressionCodec]] = None): Unit = self.withScope {
+		val hadoopConf = conf
+		hadoopConf.setOutputKeyClass(keyClass)
+		hadoopConf.setOutputValueClass(valueClass)
+		conf.setOutputFormat(outputFormatClass)
+		FileOutputFormat.setOutputPath(hadoopConf, SparkHadoopWriterUtils.createPathFromString(path, hadoopConf))
+		saveAsHadoopDataset(hadoopConf)
+	}
+	def saveAsHadoopDataset(conf: JobConf): Unit = self.withScope {
+		val hadoopConf = conf
+		val outputFormatInstance = hadoopConf.getOutputFormat
+		val keyClass = hadoopConf.getOutputKeyClass
+		val valueClass = hadoopConf.getOutputValueClass
+		SparkHadoopUtil.get.addCredentials(hadoopConf)
+		val writer = new SparkHadoopWriter(hadoopConf)
+		val writeToFile = (context: TaskContext, iter: Iterator[(K, V)]) => {
+			val taskAttemptId = (context.taskAttemptId % Int.MaxValue).toInt
+			writer.open()
+			while (iter.hasNext) {
+				val record = iter.next()
+				writer.write(record._1.asInstanceOf[AnyRef], record._2.asInstanceOf[AnyRef])
+			}		
+		}
+		self.context.runJob(self, writeToFile)
+	}
+}
+private[spark] class org.apache.spark.internal.io.SparkHadoopWriter(jobConf: JobConf) extends Logging with Serializable {
+	def open() {
+		val outputName = "part-"  + numfmt.format(splitID)
+		val path = FileOutputFormat.getOutputPath(conf.value)
+		getOutputCommitter().setupTask(getTaskContext())
+		writer = getOutputFormat().getRecordWriter(fs, conf.value, outputName, Reporter.NULL)
+	}
+}
+class org.apache.spark.SparkContext(config: SparkConf) extends Logging {
+	private[spark] def dagScheduler: DAGScheduler = _dagScheduler
+	try {
+		_jars = Utils.getUserJars(_conf)
+		_files = _conf.getOption("spark.files").map(_.split(",")).map(_.filter(_.nonEmpty)).toSeq.flatten
+		_env = createSparkEnv(_conf, isLocal, listenerBus)
+		SparkEnv.set(_env)
+		if (jars != null) { jars.foreach(addJar) }
+		if (files != null) { files.foreach(addFile) }
+		_executorMemory = _conf.getOption("spark.executor.memory").orElse(Option(System.getenv("SPARK_EXECUTOR_MEMORY"))).orElse(Option(System.getenv("SPARK_MEM")).map(warnSparkMem)).map(Utils.memoryStringToMb).getOrElse(1024)
+		_dagScheduler = new DAGScheduler(this)
+	} catch {}
+  
+	def runJob[T, U: ClassTag](rdd: RDD[T], func: (TaskContext, Iterator[T]) => U, partitions: Seq[Int], resultHandler: (Int, U) => Unit): Unit = {
+		dagScheduler.runJob(rdd, cleanedFunc, partitions, callSite, resultHandler, localProperties.get)
+	}
+}
+private[spark] class org.apache.spark.scheduler.DAGScheduler(private[scheduler] val sc: SparkContext, private[scheduler] val taskScheduler: TaskScheduler, listenerBus: LiveListenerBus, mapOutputTracker: MapOutputTrackerMaster, blockManagerMaster: BlockManagerMaster, env: SparkEnv, clock: Clock = new SystemClock()) extends Logging {
+	def runJob[T, U](rdd: RDD[T], func: (TaskContext, Iterator[T]) => U, partitions: Seq[Int], callSite: CallSite, resultHandler: (Int, U) => Unit, properties: Properties): Unit = {
+		val waiter = submitJob(rdd, func, partitions, callSite, resultHandler, properties)
+		waiter.completionFuture.value.get match {
+			case scala.util.Success(_) => logInfo("Job %d finished: %s, took %f s".format(waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
+		}
+	}
+	def submitJob[T, U](rdd: RDD[T], func: (TaskContext, Iterator[T]) => U, partitions: Seq[Int], callSite: CallSite, resultHandler: (Int, U) => Unit, properties: Properties): JobWaiter[U] = {
+		val maxPartitions = rdd.partitions.length
+		val jobId = nextJobId.getAndIncrement()
+		val func2 = func.asInstanceOf[(TaskContext, Iterator[_]) => _]
+		val waiter = new JobWaiter(this, jobId, partitions.size, resultHandler)
+		eventProcessLoop.post(JobSubmitted(jobId, rdd, func2, partitions.toArray, callSite, waiter, SerializationUtils.clone(properties)))
+		waiter
+	}
+}
+
+
+
+
+
+private[deploy] class org.apache.spark.deploy.worker.ExecutorRunner(val appId: String, val execId: Int, val appDesc: ApplicationDescription, val cores: Int, val memory: Int, val worker: RpcEndpointRef, val workerId: String, val host: String, val webUiPort: Int, val publicAddress: String, val sparkHome: File, val executorDir: File, val workerUrl: String, conf: SparkConf, val appLocalDirs: Seq[String], @volatile var state: ExecutorState.Value) extends Logging {
+	private def fetchAndRunExecutor() {
+		val builder = CommandUtils.buildProcessBuilder(appDesc.command, new SecurityManager(conf), memory, sparkHome.getAbsolutePath, substituteVariables)
+		builder.directory(executorDir)
+		builder.environment.put("SPARK_EXECUTOR_DIRS", appLocalDirs.mkString(File.pathSeparator))
+		builder.environment.put("SPARK_LAUNCH_WITH_SCALA", "0")
+		builder.environment.put("SPARK_LOG_URL_STDERR", s"${baseUrl}stderr")
+		builder.environment.put("SPARK_LOG_URL_STDOUT", s"${baseUrl}stdout")
+		process = builder.start()
+		val stdout = new File(executorDir, "stdout")
+		stdoutAppender = FileAppender(process.getInputStream, stdout, conf)
+		val stderr = new File(executorDir, "stderr")
+		Files.write(header, stderr, StandardCharsets.UTF_8)
+		stderrAppender = FileAppender(process.getErrorStream, stderr, conf)
+		val exitCode = process.waitFor()
+		state = ExecutorState.EXITED
+		val message = "Command exited with code " + exitCode
+		worker.send(ExecutorStateChanged(appId, execId, state, Some(message), Some(exitCode)))
+	}
+}
+
+class org.apache.spark.rdd.PairRDDFunctions[K, V](self: RDD[(K, V)])(implicit kt: ClassTag[K], vt: ClassTag[V], ord: Ordering[K] = null) extends Logging with Serializable {
+	def saveAsHadoopDataset(conf: JobConf): Unit = self.withScope {
+		val hadoopConf = conf
+		val outputFormatInstance = hadoopConf.getOutputFormat
+		SparkHadoopUtil.get.addCredentials(hadoopConf)
+		val writer = new SparkHadoopWriter(hadoopConf)
+		val writeToFile = (context: TaskContext, iter: Iterator[(K, V)]) => {
+			...
+			writer.commit()
+		}
+		self.context.runJob(self, writeToFile)
+	}
+}
+
+private[spark] class org.apache.spark.deploy.client.StandaloneAppClient(rpcEnv: RpcEnv, masterUrls: Array[String], appDescription: ApplicationDescription, listener: StandaloneAppClientListener, conf: SparkConf) extends Logging {
+	private class ClientEndpoint(override val rpcEnv: RpcEnv) extends ThreadSafeRpcEndpoint with Logging {
+		private def tryRegisterAllMasters(): Array[JFuture[_]] = {
+			for (masterAddress <- masterRpcAddresses) yield {
+				registerMasterThreadPool.submit(new Runnable {
+					override def run(): Unit = {
+						val masterRef = rpcEnv.setupEndpointRef(masterAddress, Master.ENDPOINT_NAME)
+						masterRef.send(RegisterApplication(appDescription, self))
+					}
+				})
+			}
+		}
+	}
+}
+

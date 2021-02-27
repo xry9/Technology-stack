@@ -1,0 +1,73 @@
+val rdd =sc.makeRDD(List(("cat",2),("dog",3),("tiger",6),("cat",3),("tiger",4),("dog",5),("tiger",2),("cat",3)),2)
+debug.dp(rdd)
+res11.aggregateByKey(0)(math.max(_,_),(_+_)).collect
+对每个分区调用fun1,计算结果传给fun2计算，初始值参与fun1运算
+---------
+其它方法间接调用cogroup
+val rdd1 = sc.makeRDD(List(("cat",3),("dog",2),("tiger",2),("hive",1)))
+val rdd2 = sc.makeRDD(List(("cat",3),("cat",2),("pig",2),("hive",1)))
+rdd1.cogroup(rdd2)
+(hive,(CompactBuffer(1),CompactBuffer(1))), 
+(dog,(CompactBuffer(2),CompactBuffer())), 
+(pig,(CompactBuffer(),CompactBuffer(2))), 
+(cat,(CompactBuffer(3),CompactBuffer(3, 2))), 
+(tiger,(CompactBuffer(2),CompactBuffer()))
+--------
+zip
+val rdd2 = sc.makeRDD(List(1,2,3))
+val rdd1 = sc.makeRDD(List("a","b","c"))
+rdd1.zip(rdd2)
+--------
+val rdd = sc.makeRDD(List(("cat",3),("dog",2),("tiger",2),("hive",1)))
+rdd.sortBy(x=>x)
+rdd.sortBy(x=>x._2)
+rdd.sortBy(x=>x._2,false)
+排序：
+Top  ----取前n 个元素  Ordering[Int].on( x => x._2 )
+TakeOrdered ----取后n 个元素  Ordering[Int].on( x => x._2 )
+sortByKey  ----只能根据key排序  rdd.sortByKey(true)
+sortBy  ----可以根据tuple的每个元素排序
+----
+val rdd = sc.makeRDD(List(1,2,3,4,5,6),2)
+//第一个参数表示分区下标，第二个参数是分区内所有元素的迭代器
+rdd.mapPartitionsWithIndex((i,iter)=>{
+var list = List[String]()
+while(iter.hasNext){
+if(i==0) 
+list = list :+ (iter.next+"a")
+else
+list=list :+ (iter.next+"b")
+}
+list.iterator
+}).collect
+--------
+val rdd = sc.makeRDD(List(1,2,3,4,5,6,7,8),4)
+rdd.partitions.length
+rdd.coalesce(6,true)//分区由少变多，第二个参数要为true，默认是false,表示不需要suffle,repartition调用了rdd.coalesce(n,true)
+rdd.repartition(2)
+coalesce参数为false时参数由少变多无效
+------------
+val rdd1 = sc.makeRDD(List("pig","tiger","cat","dog"))
+val rdd2 = sc.makeRDD(List(1,2,3))
+rdd1.cartesian(rdd2)
+===============================================
+因为combineByKey是Spark中一个比较核心的高级函数，其他一些高阶键值对函数底层都是用它实现的。诸如 groupByKey,reduceByKey等等
+createCombiner: V => C ，这个函数把当前的值作为参数，此时我们可以对其做些附加操作(类型转换)并把它返回 (这一步类似于初始化操作)
+mergeValue: (C, V) => C，该函数把元素V合并到之前的元素C(createCombiner)上 (这个操作在每个分区内进行)
+mergeCombiners: (C, C) => C，该函数把2个元素C合并 (这个操作在不同分区间进行)
+
+val d1 = sc.parallelize(Array(("Fred", 88.0), ("Fred", 95.0), ("Fred", 91.0), ("Wilma", 93.0), ("Wilma", 96.0), ("Wilma", 98.0)),2)
+type MVType = (Int, Double) //定义一个元组类型(科目计数器,分数)
+d1.combineByKey(
+score => (1, score),
+(c1: MVType, newScore) =>{println("aa"+newScore); (c1._1 + 1, c1._2 + newScore)},
+(c1: MVType, c2: MVType) =>{println("bb"+c1._2); (c1._1 + c2._1, c1._2 + c2._2)}
+).map { case (name, (num, socre)) => (name, socre / num) }.collect
+
+参数含义的解释
+a、score => (1, score)，我们把分数作为参数,并返回了附加的元组类型。 以"Fred"为例，当前其分数为88.0 =>(1,88.0)  1表示当前科目的计数器，此时只有一个科目
+b、(c1: MVType, newScore) => (c1._1 + 1, c1._2 + newScore)，注意这里的c1就是createCombiner初始化得到的(1,88.0)。在一个分区内，我们又碰到了"Fred"的一个新的分数91.0。当然我们要把之前的科目分数和当前的分数加起来即c1._2 + newScore,然后把科目计算器加1即c1._1 + 1
+c、(c1: MVType, c2: MVType) => (c1._1 + c2._1, c1._2 + c2._2)，注意"Fred"可能是个学霸,他选修的科目可能过多而分散在不同的分区中。所有的分区都进行mergeValue后,接下来就是对分区间进行合并了,分区间科目数和科目数相加分数和分数相加就得到了总分和总科目数
+----
+val rdd =sc.makeRDD(List(("cat",2),("dog",3),("tiger",6),("cat",3),("tiger",4),("dog",5),("tiger",2),("cat",3)),2)
+rdd.groupByKey.mapValues { x => x.toList.sorted.take(1) }

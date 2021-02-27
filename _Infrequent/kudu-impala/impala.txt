@@ -1,0 +1,55 @@
+http://archive.cloudera.com/cdh5/redhat/5/x86_64/cdh/5.8.0/RPMS/x86_64/
+http://archive.cloudera.com/impala/
+
+yum install python-setuptools -y
+rpm -ivh bigtop-utils-0.7.0+cdh5.8.0+0-1.cdh5.8.0.p0.72.el6.noarch.rpm
+rpm -ivh --nodeps impala-2.6.0+cdh5.8.0+0-1.cdh5.8.0.p0.111.el6.x86_64.rpm
+rpm -ivh impala-server-2.6.0+cdh5.8.0+0-1.cdh5.8.0.p0.111.el6.x86_64.rpm（从）
+rpm -ivh impala-catalog-2.6.0+cdh5.8.0+0-1.cdh5.8.0.p0.111.el6.x86_64.rpm（主）
+rpm -ivh impala-state-store-2.6.0+cdh5.8.0+0-1.cdh5.8.0.p0.111.el6.x86_64.rpm（主）
+rpm -ivh impala-shell-2.6.0+cdh5.8.0+0-1.cdh5.8.0.p0.111.el6.x86_64.rpm
+----
+yum install redhat-lsb -y
+yum install libssl.so.6 -y（不知道不加行不行）
+	ln -sf /usr/lib64/libssl.so.10 /usr/lib64/libssl.so.6（没做）
+	ln -sf /usr/lib64/libcrypto.so.10 /usr/lib64/libcrypto.so.6（没做）
+	cp /usr/lib/impala/lib/*.so* $HADOOP_HOME/lib/native/（没做）
+core-site.xml,hdfs-site.xml,hive-site.xml,hbase-site.xml -->/etc/impala/conf.dist(不知道这个行不行/etc/impala/conf)
+hdfs-site.xml追加内容：
+<property>
+<name>dfs.datanode.hdfs-blocks-metadata.enabled</name>
+<value>true</value>
+</property>
+<property>
+<name>dfs.block.local-path-access.user</name>
+<value>impala</value>
+</property>
+<property>
+<name>dfs.client.file-block-storage-locations.timeout</name>
+<value>60000</value>
+</property>
+<property>
+<name>dfs.permissions</name>
+<value>false</value>
+</property>
+
+vim /etc/default/impala
+IMPALA_STATE_STORE_HOST=192.168.58.171
+IMPALA_CATALOG_SERVICE_HOST=192.168.58.171
+
+拷贝mysql驱动包到/var/lib/impala/
+vim /etc/default/bigtop-utils
+	export JAVA_HOME=/usr/local/app/jdk1.8.0_77
+service ntpd start && chkconfig ntpd on
+拷贝impala的jar包
+
+要把hbase也启动（不知道为什么，后来发现stop-hbase.sh，再启impala也可以了）
+hive --service metastore &
+service impala-catalog start && service impala-state-store start && service impala-server start
+service impala-catalog status && service impala-state-store status && service impala-server status
+service impala-catalog stop && service impala-state-store stop && service impala-server stop
+impala-shell
+	INVALIDATE METADATA;
+
+web: http://cloud01:25000/
+http://www.aboutyun.com/thread-7856-1-1.html

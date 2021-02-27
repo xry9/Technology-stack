@@ -1,0 +1,13 @@
+1、hive 脚本中调用了 hive-config.sh, HIVE_HOME 初始化就在这里呀, 所以更改 HIVE_HOME 就可以实现同时使用多个 hive 了
+2、
+bin/hive 脚本中 HIVE_LIB=${HIVE_HOME}/lib
+  调用了 bin/ext/util/execHiveCmd.sh 执行了
+  exec $HADOOP jar ${HIVE_LIB}/hive-cli-*.jar $CLASS $HIVE_OPTS "$@"
+hive --service hiveserver2 调用了 ext/hiveserver2.sh
+  JAR=${HIVE_LIB}/hive-service-*.jar
+  exec $HADOOP jar $JAR $CLASS $HIVE_OPTS "$@"
+hive --service metastore
+  JAR=${HIVE_LIB}/hive-service-*.jar
+  exec $HADOOP jar $JAR $CLASS "$@"
+
+2、org.apache.hadoop.hive.common.LogUtils#initHiveLog4jDefault 方法中加载 log4j 

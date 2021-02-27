@@ -1,0 +1,8 @@
+apache-tomcat-8.5.56-src
+ant
+ant ide-eclipse
+导入 eclipse 后编辑 TOMCAT_LIBS_BASE(可参考 https://www.cnblogs.com/restart30/p/9717027.html), 再改下 jre 就万事大吉了
+
+执行 output/build/bin/startup.sh 即可启动
+
+

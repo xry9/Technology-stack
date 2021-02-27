@@ -1,0 +1,287 @@
+1、最不好理解的是 method, 服务端根据 request 的方法名解析出 MethodDescriptor, 然后在 callBlockingMethod 方法中 method.getIndex() 
+2、Configuration#getClassByNameOrNull 这里用到了 WeakHashMap, 要加载很多类, 所以这样做还是有必要的
+
+
+math.proto 文件:
+option java_package="cn.gp.rpc";
+option java_outer_classname="MathServicex";
+option java_generic_services=true;
+message GPReq{
+	required int32 num1=1;
+	required int32 num2=2;
+	required string mname=3;
+}
+message GPResp{
+	required int32 result =1;
+}
+service MathService{
+	rpc add(GPReq) returns (GPResp);
+    rpc decr(GPReq) returns (GPResp);
+}
+service MathServiceAdv{
+	rpc multiply(GPReq) returns (GPResp);
+}
+--------
+public final class cn.gp.rpc.MathServicex {
+	public interface GPReqOrBuilder extends com.google.protobuf.MessageOrBuilder {
+		int getNum1();
+		int getNum2();
+	}
+	public static final class GPReq extends com.google.protobuf.GeneratedMessage implements GPReqOrBuilder {
+		private GPReq(com.google.protobuf.CodedInputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry) throws com.google.protobuf.InvalidProtocolBufferException {
+			// 根据 input 往字段中塞值
+		}
+		public static com.google.protobuf.Parser<GPReq> PARSER = new com.google.protobuf.AbstractParser<GPReq>() {
+			public GPReq parsePartialFrom(com.google.protobuf.CodedInputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry) throws com.google.protobuf.InvalidProtocolBufferException {
+				return new GPReq(input, extensionRegistry);
+			}
+		};
+		private int num1_;
+		private int num2_;
+		public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
+			// output 往字段塞值
+		}
+		public static cn.gp.rpc.MathServicex.GPReq parseFrom(com.google.protobuf.ByteString data) throws com.google.protobuf.InvalidProtocolBufferException {
+			return PARSER.parseFrom(data);
+		}
+
+		public static final class Builder extends com.google.protobuf.GeneratedMessage.Builder<Builder> implements cn.gp.rpc.MathServicex.GPReqOrBuilder {
+			private static Builder create() {
+				return new Builder();
+			}
+			public cn.gp.rpc.MathServicex.GPReq build() {
+				cn.gp.rpc.MathServicex.GPReq result = buildPartial();
+				return result;
+			}
+			public cn.gp.rpc.MathServicex.GPReq buildPartial() {
+				cn.gp.rpc.MathServicex.GPReq result = new cn.gp.rpc.MathServicex.GPReq(this);
+				result.num1_ = num1_;
+				result.num2_ = num2_;
+				return result;
+			}
+			private int num1_ ;
+			private int num2_ ;
+		}
+	}
+	public static abstract class MathService implements com.google.protobuf.Service {
+		public abstract void add(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done);
+		public abstract void decr(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done);
+		public final void callMethod(com.google.protobuf.Descriptors.MethodDescriptor method, com.google.protobuf.RpcController controller, com.google.protobuf.Message request, com.google.protobuf.RpcCallback<com.google.protobuf.Message> done) {
+			switch(method.getIndex()) {
+				case 0:
+				this.add(controller, (cn.gp.rpc.MathServicex.GPReq)request, com.google.protobuf.RpcUtil.<cn.gp.rpc.MathServicex.GPResp>specializeCallback(done));
+				return;
+				case 1:
+				this.decr(controller, (cn.gp.rpc.MathServicex.GPReq)request, com.google.protobuf.RpcUtil.<cn.gp.rpc.MathServicex.GPResp>specializeCallback(done));
+				return;
+			}
+		}
+		public interface Interface {
+			public abstract void add(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done);
+			public abstract void decr(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done);
+		}
+		public static com.google.protobuf.Service newReflectiveService(final Interface impl) {
+			return new MathService() {
+				public  void add(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done) {
+					impl.add(controller, request, done);
+				}
+				public  void decr(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done) {
+					impl.decr(controller, request, done);
+				}
+			};
+		}
+		public interface BlockingInterface {
+			public cn.gp.rpc.MathServicex.GPResp add(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request) throws com.google.protobuf.ServiceException;
+			public cn.gp.rpc.MathServicex.GPResp decr(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request) throws com.google.protobuf.ServiceException;
+		}
+		public static com.google.protobuf.BlockingService newReflectiveBlockingService(final BlockingInterface impl) {
+			return new com.google.protobuf.BlockingService() {
+				public final com.google.protobuf.Message callBlockingMethod(com.google.protobuf.Descriptors.MethodDescriptor method, com.google.protobuf.RpcController controller, com.google.protobuf.Message request) throws com.google.protobuf.ServiceException {
+					switch(method.getIndex()) {
+						case 0:
+						return impl.add(controller, (cn.gp.rpc.MathServicex.GPReq)request);
+						case 1:
+						return impl.decr(controller, (cn.gp.rpc.MathServicex.GPReq)request);
+					}
+				}
+			};
+		}
+		// =========================== 以下是 Client 相关了 ===========================
+		public static final class Stub extends cn.gp.rpc.MathServicex.MathService implements Interface {
+			private final com.google.protobuf.RpcChannel channel;
+			public static Stub newStub(com.google.protobuf.RpcChannel channel) {
+				return new Stub(channel);
+			}
+			private Stub(com.google.protobuf.RpcChannel channel) {
+				this.channel = channel;
+			}
+			public void add(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done) {
+				channel.callMethod(getDescriptor().getMethods().get(0), controller, request, cn.gp.rpc.MathServicex.GPResp.getDefaultInstance(), com.google.protobuf.RpcUtil.generalizeCallback(done, cn.gp.rpc.MathServicex.GPResp.class, cn.gp.rpc.MathServicex.GPResp.getDefaultInstance()));
+			}
+			public void decr(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request, com.google.protobuf.RpcCallback<cn.gp.rpc.MathServicex.GPResp> done) {
+				channel.callMethod(getDescriptor().getMethods().get(1), controller, request, cn.gp.rpc.MathServicex.GPResp.getDefaultInstance(), com.google.protobuf.RpcUtil.generalizeCallback(done, cn.gp.rpc.MathServicex.GPResp.class, cn.gp.rpc.MathServicex.GPResp.getDefaultInstance()));
+			}
+		}
+		public static BlockingInterface newBlockingStub(com.google.protobuf.BlockingRpcChannel channel) {
+			return new BlockingStub(channel);
+		}
+		private static final class BlockingStub implements BlockingInterface {
+			private BlockingStub(com.google.protobuf.BlockingRpcChannel channel) {
+				this.channel = channel;
+			}
+			private final com.google.protobuf.BlockingRpcChannel channel;
+			public cn.gp.rpc.MathServicex.GPResp add(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request) throws com.google.protobuf.ServiceException {
+				return (cn.gp.rpc.MathServicex.GPResp) channel.callBlockingMethod(getDescriptor().getMethods().get(0), controller, request, cn.gp.rpc.MathServicex.GPResp.getDefaultInstance());
+			}
+			public cn.gp.rpc.MathServicex.GPResp decr(com.google.protobuf.RpcController controller, cn.gp.rpc.MathServicex.GPReq request) throws com.google.protobuf.ServiceException {
+				return (cn.gp.rpc.MathServicex.GPResp) channel.callBlockingMethod(getDescriptor().getMethods().get(1), controller, request, cn.gp.rpc.MathServicex.GPResp.getDefaultInstance());
+			}
+		}
+	}
+
+}
+public interface com.google.protobuf.Service {
+    void callMethod(MethodDescriptor var1, RpcController var2, Message var3, RpcCallback<Message> var4);
+}
+public interface com.google.protobuf.BlockingService {
+    Message callBlockingMethod(MethodDescriptor var1, RpcController var2, Message var3) throws ServiceException;
+}
+
+public interface com.google.protobuf.RpcChannel {
+    void callMethod(MethodDescriptor var1, RpcController var2, Message var3, Message var4, RpcCallback<Message> var5);
+}
+public interface com.google.protobuf.BlockingRpcChannel {
+    Message callBlockingMethod(MethodDescriptor var1, RpcController var2, Message var3, Message var4) throws ServiceException;
+}
+
+
+public class GPServer {
+	public static void main(String[] args) throws Exception {
+		ServerSocket ss = new ServerSocket();
+		ss.bind(new InetSocketAddress(9988));
+		final Socket socket = ss.accept();
+		InputStream in = socket.getInputStream();
+		GPReq req = GPReq.parseFrom(in);
+		socket.shutdownInput();
+//		===========================================
+		BlockingService biService = MathService.newReflectiveBlockingService(new MyBlockingInterfaceMathService());
+		MethodDescriptor bimd = biService.getDescriptorForType().findMethodByName(req.getMname());
+		GPResp resp = (GPResp) biService.callBlockingMethod(bimd, null, req);
+		OutputStream out = socket.getOutputStream();
+		resp.writeTo(out);
+		socket.shutdownOutput();
+		out.close();
+//		===========================================
+		Service iService = MathService.newReflectiveService(new MyInterfaceMathService());
+		MethodDescriptor imd = iService.getDescriptorForType().findMethodByName(req.getMname());
+		iService.callMethod(imd, null, req, new RpcCallback<Message>() {
+			@Override
+			public void run(Message message) {
+				try {
+					OutputStream out = socket.getOutputStream();
+					message.writeTo(out);
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		});
+//		===========================================		
+		in.close();
+		socket.close();
+		ss.close();
+	}
+}
+
+class MyInterfaceMathService implements MathService.Interface {
+	@Override
+	public void add(RpcController controller, GPReq request, RpcCallback<GPResp> done) {
+		int result = request.getNum1() + request.getNum2();
+		GPResp resp = GPResp.newBuilder().setResult(result).build();
+		done.run(resp);
+	}
+	
+	@Override
+	public void decr(RpcController controller, GPReq request, RpcCallback<GPResp> done) {
+		int result = request.getNum1() - request.getNum2();
+		GPResp resp = GPResp.newBuilder().setResult(result).build();
+		done.run(resp);
+	}
+}
+
+class MyBlockingInterfaceMathService implements MathService.BlockingInterface {
+	@Override
+	public GPResp add(RpcController controller,GPReq request) throws ServiceException {
+		int result = request.getNum1() + request.getNum2();
+		GPResp resp = GPResp.newBuilder().setResult(result).build();
+		return resp;
+	}
+
+	@Override
+	public GPResp decr(RpcController controller, GPReq request) throws ServiceException {
+		int result = request.getNum1() - request.getNum2();
+		GPResp resp = GPResp.newBuilder().setResult(result).build();
+		return resp;
+	}
+}
+
+
+public class GPClient {
+	public static void main(String[] args) throws ServiceException {
+		// =====================================
+//		MyChannel1 channel1 = new MyChannel1();
+//		BlockingInterface stub = MathService.newBlockingStub(channel1);
+//		GPReq req = GPReq.newBuilder().setNum1(9).setNum2(7).setMname("decr").build();
+//		GPResp resp = stub.add(null, req);
+//		System.out.println(resp.getResult());
+		// =====================================
+		MyChannel channel = new MyChannel();
+		MathService stub = MathService.newStub(channel);
+		GPReq req = GPReq.newBuilder().setNum1(9).setNum2(7).setMname("add").build();
+		stub.add(null, req, new RpcCallback<GPResp>() {
+			@Override
+			public void run(GPResp resp) {
+				System.out.println("远程调用的结果：" + resp.getResult());
+			}
+		});
+	}
+}
+class MyChannel1 implements BlockingRpcChannel {
+	@Override
+	public Message callBlockingMethod(MethodDescriptor method, RpcController controller, Message req, Message responsePrototype) throws ServiceException {
+		try {
+			Socket s = new Socket();
+			s.connect(new InetSocketAddress("127.0.0.1", 9988));
+			OutputStream out = s.getOutputStream();
+			byte[] bs = req.toByteArray();
+			out.write(bs);
+			s.shutdownOutput();
+			InputStream in = s.getInputStream();
+			GPResp respx = GPResp.parseFrom(in);
+			s.shutdownInput();
+			return respx;
+		} catch (Exception e) {
+			e.printStackTrace();
+			throw new RuntimeException(e);
+		}
+	}
+}
+
+class MyChannel implements RpcChannel {
+	public void callMethod(MethodDescriptor md, RpcController cont, Message req, Message resp, RpcCallback<Message> cb) {
+		try {
+			Socket s = new Socket();
+			s.connect(new InetSocketAddress("127.0.0.1", 9988));
+			OutputStream out = s.getOutputStream();
+			byte[] bs = req.toByteArray();
+			out.write(bs);
+			s.shutdownOutput();
+			InputStream in = s.getInputStream();
+			GPResp respx = GPResp.parseFrom(in);
+			s.shutdownInput();
+			cb.run(respx);
+		} catch (Exception e) {
+			e.printStackTrace();
+			throw new RuntimeException(e);
+		}
+	}
+}

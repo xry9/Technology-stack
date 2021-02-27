@@ -1,0 +1,39 @@
+https://cassandra.apache.org/doc/latest/cql/ddl.html
+By default, keyspace and table names are case insensitive (myTable is equivalent to mytable) but case sensitivity can be forced by using double-quotes ("myTable" is different from mytable).
+CQL defines the notion of a partition. A partition is simply the set of rows that share the same value for their partition key. Note that if the partition key is composed of multiple columns, then rows belong to the same partition only they have the same values for all those partition key column.
+The clustering columns of a table defines the clustering order for the partition of that table. For a given partition, all the rows are physically ordered inside Cassandra by that clustering order. 
+then the rows (which all belong to the same partition) are all stored internally in the order of the values of their b column (the order they are displayed above). So where the partition key of the table allows to group rows on the same replica set, the clustering columns controls how those rows are stored on the replica. That sorting allows the retrieval of a range of rows within a partition (for instance, in the example above, SELECT * FROM t WHERE a = 0 AND b > 1 and b <= 3) to be very efficient.
+Amongst those options, two important ones cannot be changed after creation and influence which queries can be done against the table: the COMPACT STORAGE option and the CLUSTERING ORDER option. Those, as well as the other options of a table are described in the following sections.
+......及其下
+
+https://cassandra.apache.org/doc/latest/cql/dml.html
+https://cassandra.apache.org/doc/latest/cql/indexes.html
+https://cassandra.apache.org/doc/latest/cql/mvs.html
+
+https://cassandra.apache.org/doc/latest/cql/functions.html
+The minTimeuuid (resp. maxTimeuuid) function takes a timestamp value t (which can be either a timestamp or a date string <timestamps>) and return a fake timeuuid corresponding to the smallest (resp. biggest) possible timeuuid having for timestamp t. So for instance:
+Blob conversion functions
+Note that you can use the double-quoted string syntax to enclose the UDF source code. For example:
+The implicitly available udfContext field (or binding for script UDFs) provides the necessary functionality to create new UDT and tuple values:
+Creating a new user-defined function uses the CREATE FUNCTION statement:
+User-Defined Aggregates
+CREATE AGGREGATE
+https://cassandra.apache.org/doc/latest/cql/triggers.html
+
+https://www.jianshu.com/p/b970876ee3cf
+https://www.datastax.com/dev/blog/lightweight-transactions-in-cassandra-2-0
+
+=============================================================
+
+https://cassandra.apache.org/doc/latest/architecture/dynamo.html
+https://cassandra.apache.org/doc/latest/architecture/storage_engine.html
+https://cassandra.apache.org/doc/latest/cql/types.html#
+Counters
+User-Defined Types
+Tuples
+https://cassandra.apache.org/doc/latest/cql/ddl.html
+Whether to use the commit log for updates on this keyspace (disable this option at your own risk!).
+Dropping a keyspace results in the immediate, irreversible removal of that keyspace, including all the tables, UTD and functions in it, and all the data contained in those tables.
+it declares the column as being a static column.
+
+https://cassandra.apache.org/doc/latest/configuration/cassandra_config_file.html

@@ -1,0 +1,230 @@
+1、一个 get 请求, client 首次请求时要写 4 次, 以后当然每次请求写一次, 已经在 server 验证, 收到的字节大小是对得上的
+writeConnectionHeaderPreamble===810===6
+writeConnectionHeader===821===239
+write===277===89===17===70, 在 writeRequest 中写的, scan 请求
+write===277===90===15===73, 在 writeRequest 中写的, get 请求
+
+
+Client.proto:
+	option java_package = "org.apache.hadoop.hbase.protobuf.generated";
+	option java_outer_classname = "ClientProtos";
+	service ClientService {
+	  rpc Get(GetRequest)
+		returns(GetResponse);
+	  rpc Scan(ScanRequest)
+		returns(ScanResponse);
+	}
+RPC.proto
+	message ConnectionHeader {
+		optional UserInformation user_info = 1;
+		optional string service_name = 2;
+		optional string cell_block_codec_class = 3;
+		optional string cell_block_compressor_class = 4;
+		optional VersionInfo version_info = 5;
+	}
+	message RequestHeader {
+		optional string method_name = 3;
+		optional bool request_param = 4;
+	}
+--------------------------------
+public final class ClientProtos {
+	public static abstract class ClientService implements com.google.protobuf.Service {
+		private static final class BlockingStub implements BlockingInterface {
+			private BlockingStub(com.google.protobuf.BlockingRpcChannel channel) {
+				this.channel = channel;
+			}
+			private final com.google.protobuf.BlockingRpcChannel channel;
+			public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse get(com.google.protobuf.RpcController controller, org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetRequest request) throws com.google.protobuf.ServiceException {
+				return (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse) channel.callBlockingMethod(getDescriptor().getMethods().get(0), controller, request, org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse.getDefaultInstance());
+			}
+			public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanResponse scan(com.google.protobuf.RpcController controller, org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanRequest request) throws com.google.protobuf.ServiceException {
+				return (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanResponse) channel.callBlockingMethod(getDescriptor().getMethods().get(2), controller, request, org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanResponse.getDefaultInstance());
+			}
+		}
+	}
+}
+
+public interface org.apache.hadoop.hbase.ipc.RpcClient extends Closeable {
+  public BlockingRpcChannel createBlockingRpcChannel(ServerName sn, User user, int rpcTimeout) throws IOException;
+}
+public abstract class org.apache.hadoop.hbase.ipc.AbstractRpcClient implements RpcClient {
+	public AbstractRpcClient(Configuration conf, String clusterId, SocketAddress localAddr, MetricsConnection metrics) {
+		this.localAddr = localAddr; // null 
+		this.ipcUtil = new IPCUtil(conf);
+	}
+	public BlockingRpcChannel createBlockingRpcChannel(final ServerName sn, final User ticket, int defaultOperationTimeout) throws UnknownHostException {
+		return new BlockingRpcChannelImplementation(this, sn, ticket, defaultOperationTimeout);// 在 Client 中被调用
+	}
+	Message callBlockingMethod(Descriptors.MethodDescriptor md, PayloadCarryingRpcController pcrc, Message param, Message returnType, final User ticket, final InetSocketAddress isa) throws ServiceException {
+		Pair<Message, CellScanner> val = call(pcrc, md, param, returnType, ticket, isa, cs);
+		pcrc.setCellScanner(val.getSecond());// Shove the results into controller so can be carried across the proxy/pb service void.
+		return val.getFirst();
+	}
+  
+	public static class BlockingRpcChannelImplementation implements BlockingRpcChannel {
+		private final InetSocketAddress isa;
+		private final AbstractRpcClient rpcClient;
+		protected BlockingRpcChannelImplementation(final AbstractRpcClient rpcClient, final ServerName sn, final User ticket, int channelOperationTimeout) throws UnknownHostException {
+			this.isa = new InetSocketAddress(sn.getHostname(), sn.getPort());
+			this.rpcClient = rpcClient;// RpcClientImpl
+		}
+		public Message callBlockingMethod(Descriptors.MethodDescriptor md, RpcController controller, Message param, Message returnType) throws ServiceException {
+			PayloadCarryingRpcController pcrc = (PayloadCarryingRpcController) controller;
+			return this.rpcClient.callBlockingMethod(md, pcrc, param, returnType, this.ticket, this.isa);
+		}	
+	}
+}
+public class RpcClientImpl extends AbstractRpcClient {
+	protected final SocketFactory socketFactory;
+	protected final PoolMap<ConnectionId, Connection> connections;
+	RpcClientImpl(Configuration conf, String clusterId, SocketFactory factory, SocketAddress localAddr, MetricsConnection metrics) { // 反射进来的
+		super(conf, clusterId, localAddr, metrics);
+		this.socketFactory = factory;// 通过配置解析出来的, hadoop 中的工具类，没必要细究了
+		this.connections = new PoolMap<ConnectionId, Connection>(getPoolType(conf), getPoolSize(conf));
+		this.failedServers = new FailedServers(conf);
+	}
+	protected Pair<Message, CellScanner> call(PayloadCarryingRpcController pcrc, MethodDescriptor md, Message param, Message returnType, User ticket, InetSocketAddress addr, MetricsConnection.CallStats callStats) throws IOException, InterruptedException {
+		CellScanner cells = pcrc.cellScanner();
+		final Call call = new Call(this.callIdCnt.getAndIncrement(), md, param, cells, returnType, pcrc.getCallTimeout(), MetricsConnection.newCallStats());
+		final Connection connection = getConnection(ticket, call, addr);
+		final CallFuture cts;
+		connection.tracedWriteRequest(call, pcrc.getPriority(), Trace.currentSpan());
+		while (!call.done) {
+			if (call.checkAndSetTimeout()) {
+				if (cts != null) connection.callSender.remove(cts);
+					break;
+			}
+			if (call.done) break;
+			call.wait(Math.min(call.remainingTime(), 1000) + 1);// 客户端调用就是在这里阻塞呀
+		}
+		return new Pair<Message, CellScanner>(call.response, call.cells);
+	}
+	protected Connection getConnection(User ticket, Call call, InetSocketAddress addr) throws IOException {
+		Connection connection;
+		ConnectionId remoteId = new ConnectionId(ticket, call.md.getService().getName(), addr);// call.md.getService() Client.proto:ClientService
+		connection = connections.get(remoteId);
+		if (connection == null) {
+			connection = createConnection(remoteId, this.codec, this.compressor);
+			connections.put(remoteId, connection);
+		}
+		return connection;
+	}
+	protected Connection createConnection(ConnectionId remoteId, final Codec codec, final CompressionCodec compressor) throws IOException {
+		return new Connection(remoteId, codec, compressor);
+	}
+	protected class Connection extends Thread {
+		private ConnectionHeader header;
+	    protected ConnectionId remoteId;
+		protected Socket socket = null;                 // connected socket
+		protected DataInputStream in;
+		protected DataOutputStream out;
+		private InetSocketAddress server;             // server ip:port
+		protected final ConcurrentSkipListMap<Integer, Call> calls = new ConcurrentSkipListMap<Integer, Call>();
+		// 此处的 connection 线程似乎与 ConnectionManager 中的线程池啥关系
+		Connection(ConnectionId remoteId, final Codec codec, final CompressionCodec compressor) throws IOException {
+			this.server = remoteId.getAddress();
+			ConnectionHeader.Builder builder = ConnectionHeader.newBuilder();
+			builder.setServiceName(remoteId.getServiceName());
+			this.header = builder.build();
+		}
+		public void run() {
+			while (waitForWork()) {
+				readResponse();
+			}
+		}
+		protected void readResponse() {// 服务端可能会返回异常, 应该就是在这处理的, 代码从略了
+			Call call = null;
+			boolean expectedCall = false;
+			int totalSize = in.readInt();
+			ResponseHeader responseHeader = ResponseHeader.parseDelimitedFrom(in);
+			int id = responseHeader.getCallId();
+			call = calls.remove(id); // call.done have to be set before leaving this method
+			Message value = null;
+			if (call.responseDefaultType != null) {
+				Builder builder = call.responseDefaultType.newBuilderForType();
+				ProtobufUtil.mergeDelimitedFrom(builder, in);// 这里是读取 Server 数据呀
+				value = builder.build();
+			}
+			CellScanner cellBlockScanner = null;
+			if (responseHeader.hasCellBlockMeta()) {
+				int size = responseHeader.getCellBlockMeta().getLength();
+				byte [] cellBlock = new byte[size];
+				IOUtils.readFully(this.in, cellBlock, 0, cellBlock.length);
+				cellBlockScanner = ipcUtil.createCellScanner(this.codec, this.compressor, cellBlock);
+			}
+			call.setResponse(value, cellBlockScanner);// 往里走会解除阻塞
+			call.callStats.setResponseSizeBytes(totalSize);
+			cleanupCalls(false);
+		}
+		protected void tracedWriteRequest(Call call, int priority, Span span) throws IOException {
+			writeRequest(call, priority, span);
+		}
+		private void writeRequest(Call call, final int priority, Span span) throws IOException {
+			RequestHeader.Builder builder = RequestHeader.newBuilder();
+			builder.setCallId(call.id);
+			builder.setMethodName(call.md.getName());
+			builder.setRequestParam(call.param != null);// bool
+			ByteBuffer cellBlock = ipcUtil.buildCellBlock(this.codec, this.compressor, call.cells);
+			RequestHeader header = builder.build();
+			setupIOstreams();
+			calls.put(call.id, call); // We put first as we don't want the connection to become idle.
+			call.callStats.setRequestSizeBytes(IPCUtil.write(this.out, header, call.param, cellBlock));
+			doNotify();
+		}
+		protected synchronized void setupIOstreams() throws IOException {
+			if (socket != null) {
+				return;
+			}
+			while (true) {
+				setupConnection();
+				InputStream inStream = NetUtils.getInputStream(socket);
+				OutputStream outStream = NetUtils.getOutputStream(socket, writeTO);
+				this.in = new DataInputStream(new BufferedInputStream(inStream));
+				this.out = new DataOutputStream(new BufferedOutputStream(outStream));
+				writeConnectionHeader();// 写 serviceName, 看这意思一个连接只写一次?
+				start();
+				return;
+			}
+		}
+		private synchronized void writeConnectionHeader() throws IOException {
+			int size = this.header.getSerializedSize();
+			this.out.writeInt(size);
+			this.header.writeTo(this.out);
+			this.out.flush();
+		}
+		protected synchronized void setupConnection() throws IOException {
+			while (true) {
+				this.socket = socketFactory.createSocket();
+				NetUtils.connect(this.socket, remoteId.getAddress(), connectTO);
+				return;
+			}
+		}
+	}
+}
+
+public class org.apache.hadoop.hbase.ipc.Call {
+	final int id;                                 // call id
+	final Message param;                          // rpc request method param object
+	CellScanner cells;
+	Message response;                             // value, null if error
+	Message responseDefaultType;
+	volatile boolean done;                                 // true when call is done
+	final Descriptors.MethodDescriptor md;
+	protected Call(int id, final Descriptors.MethodDescriptor md, Message param, final CellScanner cells, final Message responseDefaultType, int timeout, MetricsConnection.CallStats callStats) {
+		this.param = param;
+		this.md = md;
+		this.cells = cells;
+		this.callStats = callStats;
+		this.callStats.setStartTime(EnvironmentEdgeManager.currentTime());
+		this.responseDefaultType = responseDefaultType;
+	}
+	protected synchronized void callComplete() {
+		this.done = true;
+		notify();// 这里太重要了
+	}
+	public void setResponse(Message response, final CellScanner cells) {
+		this.response = response;
+		this.cells = cells;
+		callComplete();
+	}
+}

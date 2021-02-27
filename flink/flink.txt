@@ -1,0 +1,13 @@
+1、bin/start-cluster.sh
+2、web端口8081
+----分部式----
+vim flink-conf.yaml
+jobmanager.rpc.address: cloud01
+vim slaves
+bin/start-cluster.sh
+
+flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target/FlinkSimple-1.0-SNAPSHOT.jar -p 2	--xx 
+	-p 大于 1 的话需要调大 taskmanager.numberOfTaskSlots
+flink list
+flink cancel f7e146f55594c9fe97e9a8ee3c6e9bd3
+flink list --all

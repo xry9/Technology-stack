@@ -1,0 +1,486 @@
+
+6、聊架构: 
+HRegionServer:
+initializeThreads
+startHeapMemoryManager
+createMyEphemeralNode
+CompactionChecker
+PeriodicMemstoreFlusher
+startServiceThreads
+putUpWebUI
+addToMovedRegions
+MovedRegionsCleaner
+storefileRefresher
+flushThroughputController
+
+HMaster:
+InitializationMonitor
+login
+createServerManager
+assignMeta
+startServiceThreads
+stopChores
+balance
+normalizeRegions
+createTable
+startActiveMasterManager
+disableTable
+modifyTable
+createNamespace
+----------------------------------
+1、HRegionServer HMaster 之间 RegionServerStatusService
+2、HRegionServer 是个线程, 在 run 中的 while 循环里好像就 tryRegionServerReport 这一个正经事
+
+
+
+
+public class org.apache.hadoop.hbase.master.HMaster extends HRegionServer implements MasterServices, Server {
+	volatile ServerManager serverManager;// server manager to deal with region server info
+	private final ActiveMasterManager activeMasterManager;
+	private ProcedureExecutor<MasterProcedureEnv> procedureExecutor;
+	private WALProcedureStore procedureStore;
+	public static void main(String [] args) {
+		VersionInfo.logVersion();
+		new HMasterCommandLine(HMaster.class).doMain(args);// startMaster 方法中创建 HMaster 并 start
+	}
+	public static HMaster constructMaster(Class<? extends HMaster> masterClass, final Configuration conf, final CoordinatedStateManager cp)  {
+		Constructor<? extends HMaster> c = masterClass.getConstructor(Configuration.class, CoordinatedStateManager.class);// org.apache.hadoop.hbase.master.HMaster
+		return c.newInstance(conf, cp);
+	}
+	public HMaster(final Configuration conf, CoordinatedStateManager csm) throws IOException, KeeperException, InterruptedException {
+		super(conf, csm);
+		activeMasterManager = new ActiveMasterManager(zooKeeper, this.serverName, this);
+		int infoPort = putUpJettyServer();
+		startActiveMasterManager(infoPort);
+	}
+	private void startActiveMasterManager(int infoPort) throws KeeperException {
+		String backupZNode = ZKUtil.joinZNode(zooKeeper.backupMasterAddressesZNode, serverName.toString());
+		if (!MasterAddressTracker.setMasterAddress(zooKeeper, backupZNode, serverName, infoPort)) { LOG.warn("Failed create of " + backupZNode + " by " + serverName); }
+		activeMasterManager.setInfoPort(infoPort);
+		Threads.setDaemonThreadRunning(new Thread(new Runnable() {// setDaemonThreadRunning 里面调用了 start
+			public void run() {
+				int timeout = conf.getInt(HConstants.ZK_SESSION_TIMEOUT, HConstants.DEFAULT_ZK_SESSION_TIMEOUT);
+				if (conf.getBoolean(HConstants.MASTER_TYPE_BACKUP, HConstants.DEFAULT_MASTER_TYPE_BACKUP)) {
+					while (!activeMasterManager.hasActiveMaster()) {// 检查是否存在相应的节点
+						Threads.sleep(timeout);
+					}
+				}
+				MonitoredTask status = TaskMonitor.get().createStatus("Master startup");
+				status.setDescription("Master startup");
+				if (activeMasterManager.blockUntilBecomingActiveMaster(timeout, status)) {
+					finishActiveMasterInitialization(status);
+				}
+			}
+		}, getServerName().toShortString() + ".activeMasterManager"));
+	}
+	private void finishActiveMasterInitialization(MonitoredTask status) throws IOException, InterruptedException, KeeperException, CoordinatedStateException {
+		isActiveMaster = true;
+		Thread zombieDetector = new Thread(new InitializationMonitor(this), "ActiveMasterInitializationMonitor-" + System.currentTimeMillis());
+		zombieDetector.start();
+		this.fileSystemManager = new MasterFileSystem(this, this);
+		this.serverManager = createServerManager(this, this);
+		this.cpHost = new MasterCoprocessorHost(this, this.conf);
+		startServiceThreads();
+		this.serverManager.waitForRegionServers(status);
+		for (ServerName sn: this.regionServerTracker.getOnlineServers()) {
+			if (!this.serverManager.isServerOnline(sn)&& serverManager.checkAndRecordNewServer(sn, ServerLoad.EMPTY_SERVERLOAD)) { LOG.info("Registered server found up in zk but who has not yet reported in: " + sn); }
+		}
+		Set<ServerName> previouslyFailedServers = this.fileSystemManager.getFailedServersFromLogFolders();
+		ServerName oldMetaServerLocation = metaTableLocator.getMetaRegionLocation(this.getZooKeeper());
+		if (oldMetaServerLocation != null && previouslyFailedServers.contains(oldMetaServerLocation)) {
+			splitMetaLogBeforeAssignment(oldMetaServerLocation);
+		}
+		Set<ServerName> previouslyFailedMetaRSs = getPreviouselyFailedMetaServersFromZK();
+		previouslyFailedMetaRSs.addAll(previouslyFailedServers);
+		this.initializationBeforeMetaAssignment = true;
+		if (BaseLoadBalancer.tablesOnMaster(conf)) {
+			waitForServerOnline();
+		}
+		this.balancer.setClusterStatus(getClusterStatus());
+		this.balancer.setMasterServices(this);
+		this.balancer.initialize();
+		if (isStopped()) return;
+		assignMeta(status, previouslyFailedMetaRSs, HRegionInfo.DEFAULT_REPLICA_ID);
+		if (isStopped()) return;
+		status.setStatus("Submitting log splitting work for previously failed region servers");
+		for (ServerName tmpServer : previouslyFailedServers) {
+			this.serverManager.processDeadServer(tmpServer, true);
+		}
+		if (this.conf.getBoolean("hbase.MetaMigrationConvertingToPB", true)) {
+			MetaMigrationConvertingToPB.updateMetaIfNecessary(this);
+		}
+		this.assignmentManager.joinCluster();
+		this.balancer.setClusterStatus(getClusterStatus());
+		this.clusterStatusChore = new ClusterStatusChore(this, balancer);
+		getChoreService().scheduleChore(clusterStatusChore);
+		this.balancerChore = new BalancerChore(this);
+		getChoreService().scheduleChore(balancerChore);
+		this.normalizerChore = new RegionNormalizerChore(this);
+		getChoreService().scheduleChore(normalizerChore);
+		this.catalogJanitorChore = new CatalogJanitor(this, this);
+		getChoreService().scheduleChore(catalogJanitorChore);
+		periodicDoMetricsChore = new PeriodicDoMetrics(msgInterval, this);
+		getChoreService().scheduleChore(periodicDoMetricsChore);
+		initNamespace();
+		configurationManager.registerObserver(this.balancer);
+		setInitialized(true);
+		initQuotaManager();
+		for (int i = 1; i < numReplicas; i++) {
+			assignMeta(status, EMPTY_SET, i);
+		}
+		unassignExcessMetaReplica(zooKeeper, numReplicas);
+		this.serverManager.clearDeadServersWithSameHostNameAndPortOfOnlineServer();
+		zooKeeper.checkAndSetZNodeAcls();
+		zombieDetector.interrupt();
+	}
+	private void startServiceThreads() throws IOException{
+		this.service.startExecutorService(ExecutorType.MASTER_OPEN_REGION, conf.getInt("hbase.master.executor.openregion.threads", 5));
+		this.service.startExecutorService(ExecutorType.MASTER_CLOSE_REGION, conf.getInt("hbase.master.executor.closeregion.threads", 5));
+		this.service.startExecutorService(ExecutorType.MASTER_SERVER_OPERATIONS, conf.getInt("hbase.master.executor.serverops.threads", 5));
+		this.service.startExecutorService(ExecutorType.MASTER_META_SERVER_OPERATIONS, conf.getInt("hbase.master.executor.serverops.threads", 5));
+		this.service.startExecutorService(ExecutorType.M_LOG_REPLAY_OPS, conf.getInt("hbase.master.executor.logreplayops.threads", 10));
+		this.service.startExecutorService(ExecutorType.MASTER_TABLE_OPERATIONS, 1);
+		startProcedureExecutor();
+		this.logCleaner = new LogCleaner(cleanerInterval, this, conf, getMasterFileSystem().getFileSystem(), getMasterFileSystem().getOldLogDir());
+		getChoreService().scheduleChore(logCleaner);
+		this.hfileCleaner = new HFileCleaner(cleanerInterval, this, conf, getMasterFileSystem().getFileSystem(), archiveDir);
+		getChoreService().scheduleChore(hfileCleaner);
+		serviceStarted = true;
+		if (!conf.getBoolean(HConstants.ZOOKEEPER_USEMULTI, true)) {
+			replicationZKLockCleanerChore = new ReplicationZKLockCleanerChore(this, this, cleanerInterval, this.getZooKeeper(), this.conf);
+			getChoreService().scheduleChore(replicationZKLockCleanerChore);
+		}
+	}
+	private void startProcedureExecutor() throws IOException {
+		final MasterProcedureEnv procEnv = new MasterProcedureEnv(this);
+		final Path logDir = new Path(fileSystemManager.getRootDir(),
+		MasterProcedureConstants.MASTER_PROCEDURE_LOGDIR);
+		// WALProcedureStore 没看明白
+		procedureStore = new WALProcedureStore(conf, fileSystemManager.getFileSystem(), logDir, new MasterProcedureEnv.WALStoreLeaseRecovery(this));
+		procedureStore.registerListener(new MasterProcedureEnv.MasterProcedureStoreListener(this));
+		procedureExecutor = new ProcedureExecutor(conf, procEnv, procedureStore, procEnv.getProcedureQueue());// 也没看明白
+		procedureStore.start(numThreads);
+		procedureExecutor.start(numThreads, abortOnCorruption);
+	}
+	protected void handleReportForDutyResponse(final RegionServerStartupResponse c) throws IOException {
+		startServiceThreads();
+		startHeapMemoryManager();		
+	}
+	private void startHeapMemoryManager() {
+		this.hMemManager = HeapMemoryManager.create(this.conf, this.cacheFlusher, this, this.regionServerAccounting);
+		if (this.hMemManager != null) { this.hMemManager.start(getChoreService()); }
+	}
+
+	protected RSRpcServices createRpcServices() throws IOException {
+		return new MasterRpcServices(this);
+	}
+}
+public class org.apache.hadoop.hbase.master.HMasterCommandLine extends ServerCommandLine {
+	public HMasterCommandLine(Class<? extends HMaster> masterClass) {
+		this.masterClass = masterClass;
+	}
+	public int run(String args[]) throws Exception {
+		if ("start".equals(command)) {
+			return startMaster();
+		}
+	}
+	private int startMaster() {
+    Configuration conf = getConf();
+      if (LocalHBaseCluster.isLocal(conf)) {
+		...
+	  } else {
+        logProcessInfo(getConf());
+        CoordinatedStateManager csm = CoordinatedStateManagerFactory.getCoordinatedStateManager(conf);
+        HMaster master = HMaster.constructMaster(masterClass, conf, csm);
+        master.start();
+        master.join();
+      }
+    return 0;
+  }
+
+}
+public abstract class org.apache.hadoop.hbase.util.ServerCommandLine extends Configured implements Tool {
+	public void doMain(String args[]) {
+		int ret = ToolRunner.run(HBaseConfiguration.create(), this, args);// 接下来是执行 run 方法
+	}
+}
+// HasThread 几乎就是个Runnable
+public class org.apache.hadoop.hbase.regionserver.HRegionServer extends HasThread implements RegionServerServices, LastSequenceId, ConfigurationObserver {
+	protected ZooKeeperWatcher zooKeeper;
+	private final RegionServerAccounting regionServerAccounting;
+	protected final RSRpcServices rpcServices;
+	protected ExecutorService service;
+	protected TableLockManager tableLockManager;// Table level lock manager for locking for region operations
+	private MasterAddressTracker masterAddressTracker;// master address tracker
+	protected HeapMemoryManager hMemManager;
+	protected ReplicationSourceService replicationSourceHandler;// Replication services. If no replication, this handler will be null.
+	protected final ConfigurationManager configurationManager;// Configuration manager is used to register/deregister and notify the configuration observers when the regionserver is notified that there was a change in the on disk configs.
+	public HRegionServer(Configuration conf) throws IOException, InterruptedException { this(conf, CoordinatedStateManagerFactory.getCoordinatedStateManager(conf)); }
+	public HRegionServer(Configuration conf, CoordinatedStateManager csm) throws IOException, InterruptedException {
+		rpcServices = createRpcServices();
+		ZKUtil.loginClient(this.conf, HConstants.ZK_CLIENT_KEYTAB_FILE, HConstants.ZK_CLIENT_KERBEROS_PRINCIPAL, hostName);
+		regionServerAccounting = new RegionServerAccounting();// 还是挺重要的
+		this.fs = new HFileSystem(this.conf, useHBaseChecksum);
+		service = new ExecutorService(getServerName().toShortString());// 负责 openHRegion 
+		zooKeeper = new ZooKeeperWatcher(conf, getProcessName() + ":" + rpcServices.isa.getPort(), this, canCreateBaseZNode());
+		tableLockManager = TableLockManager.createTableLockManager(conf, zooKeeper, serverName);// split merge 时后用到
+		masterAddressTracker = new MasterAddressTracker(getZooKeeper(), this);// 应该 HMaster HA 时用到
+		masterAddressTracker.start();
+		this.configurationManager = new ConfigurationManager();
+		rpcServices.start();
+		putUpWebUI();
+		this.walRoller = new LogRoller(this, this);// 没细研究
+		this.choreService = new ChoreService(getServerName().toString(), true);// 里面有个线程池
+	}
+	protected RSRpcServices createRpcServices() throws IOException {
+		return new RSRpcServices(this);
+	}
+	public RegionServerAccounting getRegionServerAccounting() {
+		return regionServerAccounting;
+	}
+	public void run() {
+		preRegistrationInitialization();// 很多初始化工作
+		ShutdownHook.install(conf, fs, this, Thread.currentThread());
+		createMyEphemeralNode();// 在 /hbase/rs 下建的, 对 HMaster 应该有用
+		this.rsHost = new RegionServerCoprocessorHost(this, this.conf);// 知道这个属性是挂在 RS 下的就行了
+		handleReportForDutyResponse(w);//  startServiceThreads();
+		rspmHost.start();// 没太懂这东西干啥的
+		if (this.rsQuotaManager != null) {
+			rsQuotaManager.start(getRpcServer().getScheduler());// 内容可以, 但是默认不开启
+		}
+		while (!isStopped() && isHealthy()) {        
+			tryRegionServerReport(lastMsg, now);// 每 1s 向 HMaster 汇报一次
+			if (!isStopped() && !isAborted()) { this.sleeper.sleep(); }
+		}
+		// 下面就是各种 close stop cancel 操作了, 所以 HRegionServe/HMaster 的 stop 操作就在这里, 只要 this.stopped = true; 就行了
+	}
+	private void preRegistrationInitialization(){
+		setupClusterConnection();// 没太明白干啥的
+		if (isHealthCheckerConfigured()) {// 默认不开户
+			healthCheckChore = new HealthCheckChore(sleepTime, this, getConfiguration());// 传 this 很厉害, 几次检查不通过就把 HRegionServe stop 了
+		}
+		this.pauseMonitor = new JvmPauseMonitor(conf);//调用 ManagementFactory.getGarbageCollectorMXBeans(); 打了些日志, 别的没干什么
+		pauseMonitor.start();
+		initializeZooKeeper();
+		initializeThreads();
+	}
+	private void initializeZooKeeper() throws IOException, InterruptedException {
+		rspmHost = new RegionServerProcedureManagerHost();
+		rspmHost.loadProcedures(conf);
+		rspmHost.initialize(this);
+		this.recoveringRegionWatcher = new RecoveringRegionWatcher(this.zooKeeper, this);// 暂时先不理他了
+	}
+	private void initializeThreads() throws IOException {// 这是一种设计模式么, 很多属性都在一个方法中完成初始化
+		this.cacheFlusher = new MemStoreFlusher(conf, this);
+		this.compactSplitThread = new CompactSplitThread(this);
+		this.compactionChecker = new CompactionChecker(this, this.threadWakeFrequency, this);
+		this.periodicFlusher = new PeriodicMemstoreFlusher(this.threadWakeFrequency, this);
+		this.leases = new Leases(this.threadWakeFrequency);// 好像只有 scan 操作时需要这个
+		movedRegionsCleaner = MovedRegionsCleaner.create(this);
+		rsQuotaManager = new RegionServerQuotaManager(this);// 没有真正 start
+		// 这个 rpcClient 用不着多说了吧
+		rpcClient = RpcClientFactory.createClient(conf, clusterId, new InetSocketAddress(rpcServices.isa.getAddress(), 0), clusterConnection.getConnectionMetrics());
+		registerConfigurationObservers();// 这个观察者模式用得 6, 带递归的
+	}
+	protected void handleReportForDutyResponse(final RegionServerStartupResponse c) throws IOException {
+		startServiceThreads();
+		startHeapMemoryManager();
+	}
+	private void startHeapMemoryManager() {// 还是挺重要的, 没细看
+		this.hMemManager = HeapMemoryManager.create(this.conf, this.cacheFlusher, this, this.regionServerAccounting);
+		if (this.hMemManager != null) {
+			this.hMemManager.start(getChoreService());
+		}
+	}
+	private void startServiceThreads() throws IOException {
+		this.service.startExecutorService(ExecutorType.RS_OPEN_REGION, conf.getInt("hbase.regionserver.executor.openregion.threads", 3));
+		this.service.startExecutorService(ExecutorType.RS_OPEN_META, conf.getInt("hbase.regionserver.executor.openmeta.threads", 1));
+		this.service.startExecutorService(ExecutorType.RS_OPEN_PRIORITY_REGION, conf.getInt("hbase.regionserver.executor.openpriorityregion.threads", 3));
+		this.service.startExecutorService(ExecutorType.RS_CLOSE_REGION, conf.getInt("hbase.regionserver.executor.closeregion.threads", 3));
+		this.service.startExecutorService(ExecutorType.RS_CLOSE_META, conf.getInt("hbase.regionserver.executor.closemeta.threads", 1));
+		if (conf.getBoolean(StoreScanner.STORESCANNER_PARALLEL_SEEK_ENABLE, false)) {
+			this.service.startExecutorService(ExecutorType.RS_PARALLEL_SEEK, conf.getInt("hbase.storescanner.parallel.seek.threads", 10));
+		}
+		this.service.startExecutorService(ExecutorType.RS_LOG_REPLAY_OPS, conf.getInt("hbase.regionserver.wal.max.splitters", SplitLogWorkerCoordination.DEFAULT_MAX_SPLITTERS));
+		this.service.startExecutorService(ExecutorType.RS_COMPACTED_FILES_DISCHARGER, conf.getInt(CompactionConfiguration.HBASE_HFILE_COMPACTION_DISCHARGER_THREAD_COUNT, 10));
+		if (ServerRegionReplicaUtil.isRegionReplicaWaitForPrimaryFlushEnabled(conf)) {
+		this.service.startExecutorService(ExecutorType.RS_REGION_REPLICA_FLUSH_OPS, conf.getInt("hbase.regionserver.region.replica.flusher.threads", conf.getInt("hbase.regionserver.executor.openregion.threads", 3)));
+		}
+		this.cacheFlusher.start(uncaughtExceptionHandler);
+		if (this.compactionChecker != null) choreService.scheduleChore(compactionChecker);
+		if (this.periodicFlusher != null) choreService.scheduleChore(periodicFlusher);
+		if (this.healthCheckChore != null) choreService.scheduleChore(healthCheckChore);
+		if (this.nonceManagerChore != null) choreService.scheduleChore(nonceManagerChore);
+		if (this.storefileRefresher != null) choreService.scheduleChore(storefileRefresher);
+		if (this.movedRegionsCleaner != null) choreService.scheduleChore(movedRegionsCleaner);
+
+		this.replicationSourceHandler.startReplicationService();// 这里没太懂啊
+		this.splitLogWorker = new SplitLogWorker(this, sinkConf, this, this, walFactory);
+		splitLogWorker.start();
+	}
+	public static void main(String[] args) throws Exception {
+		Configuration conf = HBaseConfiguration.create();
+		Class<? extends HRegionServer> regionServerClass = (Class<? extends HRegionServer>) conf.getClass(HConstants.REGION_SERVER_IMPL, HRegionServer.class);
+		new HRegionServerCommandLine(regionServerClass).doMain(args);// 实例化, 并执行 start 方法, 别忘了 HRegionServe 是个线程
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.RSRpcServices implements HBaseRPCErrorHandler, AdminService.BlockingInterface, ClientService.BlockingInterface, PriorityFunction, ConfigurationObserver {
+	final RpcServerInterface rpcServer;
+	final InetSocketAddress isa;
+	private final HRegionServer regionServer;
+	public RSRpcServices(HRegionServer rs) throws IOException {
+		regionServer = rs;
+		RpcSchedulerFactory rpcSchedulerFactory;
+		Class<?> rpcSchedulerFactoryClass = rs.conf.getClass(REGION_SERVER_RPC_SCHEDULER_FACTORY_CLASS, SimpleRpcSchedulerFactory.class);
+		rpcSchedulerFactory = ((RpcSchedulerFactory) rpcSchedulerFactoryClass.newInstance());
+		InetSocketAddress initialIsa;
+		InetSocketAddress bindAddress;
+		if(this instanceof MasterRpcServices) {
+			String hostname = getHostname(rs.conf, true);
+			int port = rs.conf.getInt(HConstants.MASTER_PORT, HConstants.DEFAULT_MASTER_PORT);
+			initialIsa = new InetSocketAddress(hostname, port);
+			bindAddress = new InetSocketAddress(rs.conf.get("hbase.master.ipc.address", hostname), port);
+		} else {
+			String hostname = getHostname(rs.conf, false);
+			int port = rs.conf.getInt(HConstants.REGIONSERVER_PORT, Constants.DEFAULT_REGIONSERVER_PORT);
+			initialIsa = new InetSocketAddress(hostname, port);
+			bindAddress = new InetSocketAddress(rs.conf.get("hbase.regionserver.ipc.address", hostname), port);
+		}
+		rpcServer = new RpcServer(rs, name, getServices(), bindAddress, rs.conf, rpcSchedulerFactory.create(rs.conf, this, rs));
+		rpcServer.setRsRpcServices(this);
+		InetSocketAddress address = rpcServer.getListenerAddress();
+		isa = new InetSocketAddress(initialIsa.getHostName(), address.getPort());
+		rs.setName(name);
+	}
+	void start() {
+		rpcServer.start();
+	}
+	protected List<BlockingServiceAndInterface> getServices() {
+		List<BlockingServiceAndInterface> bssi = new ArrayList<BlockingServiceAndInterface>(2);
+		bssi.add(new BlockingServiceAndInterface(ClientService.newReflectiveBlockingService(this), ClientService.BlockingInterface.class));
+		bssi.add(new BlockingServiceAndInterface(AdminService.newReflectiveBlockingService(this), AdminService.BlockingInterface.class));
+		return bssi;
+	}
+	
+	public OpenRegionResponse openRegion(final RpcController controller, final OpenRegionRequest request) throws ServiceException {
+		OpenRegionResponse.Builder builder = OpenRegionResponse.newBuilder();
+		final int regionCount = request.getOpenInfoCount();
+		final Map<TableName, HTableDescriptor> htds = new HashMap<TableName, HTableDescriptor>(regionCount);
+		final boolean isBulkAssign = regionCount > 1;
+		for (RegionOpenInfo regionOpenInfo : request.getOpenInfoList()) {
+			final HRegionInfo region = HRegionInfo.convert(regionOpenInfo.getRegion());
+			HTableDescriptor htd;			
+			htd = htds.get(region.getTable());
+			final Boolean previous = regionServer.regionsInTransitionInRS.putIfAbsent(region.getEncodedNameAsBytes(), Boolean.TRUE);
+			regionServer.removeFromMovedRegions(region.getEncodedName());
+			if (previous == null) {
+				if (ZKSplitLog.isRegionMarkedRecoveringInZK(regionServer.getZooKeeper(), region.getEncodedName())) {
+					if (!regionOpenInfo.hasOpenForDistributedLogReplay() || regionOpenInfo.getOpenForDistributedLogReplay()) {
+						regionServer.recoveringRegions.put(region.getEncodedName(), null);
+					} else {
+						List<String> tmpRegions = new ArrayList<String>();
+						tmpRegions.add(region.getEncodedName());
+						ZKSplitLog.deleteRecoveringRegionZNodes(regionServer.getZooKeeper(), tmpRegions);
+					}
+				}
+				// 以下三种 submit 都用到了，但是 OpenMetaHandler, OpenPriorityRegionHandler 好像也没干啥事就 super 到 OpenRegionHandler 了
+				if (region.isMetaRegion()) {
+					regionServer.service.submit(new OpenMetaHandler(regionServer, regionServer, region, htd, masterSystemTime, coordination, ord));
+				} else {
+					regionServer.updateRegionFavoredNodesMapping(region.getEncodedName(),
+					regionOpenInfo.getFavoredNodesList());
+					if (htd.getPriority() >= HConstants.ADMIN_QOS || region.getTable().isSystemTable()) {
+						regionServer.service.submit(new OpenPriorityRegionHandler(regionServer, regionServer, region, htd, masterSystemTime, coordination, ord));
+					} else {
+						regionServer.service.submit(new OpenRegionHandler(regionServer, regionServer, region, htd, masterSystemTime, coordination, ord));
+					}
+				}
+			}
+			builder.addOpeningState(RegionOpeningState.OPENED);
+		}
+		return builder.build();
+	}
+}
+public class org.apache.hadoop.hbase.master.MasterRpcServices extends RSRpcServices implements MasterService.BlockingInterface, RegionServerStatusService.BlockingInterface {
+	public MasterRpcServices(HMaster m) throws IOException {
+		super(m);
+		master = m;
+	}
+	protected List<BlockingServiceAndInterface> getServices() {
+		List<BlockingServiceAndInterface> bssi = new ArrayList<BlockingServiceAndInterface>(4);
+		bssi.add(new BlockingServiceAndInterface(MasterService.newReflectiveBlockingService(this), MasterService.BlockingInterface.class));
+		bssi.add(new BlockingServiceAndInterface(RegionServerStatusService.newReflectiveBlockingService(this), RegionServerStatusService.BlockingInterface.class));
+		bssi.addAll(super.getServices());
+		return bssi;
+	}
+}
+public class org.apache.hadoop.hbase.regionserver.handler.OpenRegionHandler extends EventHandler {
+	public OpenRegionHandler(final Server server, final RegionServerServices rsServices, HRegionInfo regionInfo, HTableDescriptor htd, long masterSystemTime, OpenRegionCoordination coordination, OpenRegionCoordination.OpenRegionDetails ord) {
+		this(server, rsServices, regionInfo, htd, EventType.M_RS_OPEN_REGION, masterSystemTime, coordination, ord);
+	}
+	protected OpenRegionHandler(final Server server, final RegionServerServices rsServices, final HRegionInfo regionInfo, final HTableDescriptor htd, EventType eventType, long masterSystemTime, OpenRegionCoordination coordination, OpenRegionCoordination.OpenRegionDetails ord) {
+		super(server, eventType);
+		this.rsServices = rsServices;
+		this.regionInfo = regionInfo;
+		this.htd = htd;
+	}
+	public void process() throws IOException {
+		HRegion region = openRegion();
+		this.rsServices.addToOnlineRegions(region);
+	}
+	HRegion openRegion() {
+		HRegion region = null;
+		// openHRegion 中重点是 regionInfo, regionInfo 的重点是 wal 
+		region = HRegion.openHRegion(this.regionInfo, this.htd, this.rsServices.getWAL(this.regionInfo), this.server.getConfiguration(), this.rsServices,
+			new CancelableProgressable() {
+				public boolean progress() {
+					if (useZKForAssignment) {
+						return coordination.tickleOpening(ord, regionInfo, rsServices, "open_region_progress");
+					}
+					if (!isRegionStillOpening()) {
+						return false;
+					}
+					return true;
+				}
+			}
+		);
+		return region;
+	}
+}
+public class org.apache.hadoop.hbase.regionserver.RegionServerAccounting {
+	private final AtomicLong atomicGlobalMemstoreSize = new AtomicLong(0);  
+	private final ConcurrentMap<byte[], AtomicLong> replayEditsPerRegion = new ConcurrentSkipListMap<byte[], AtomicLong>(Bytes.BYTES_COMPARATOR);
+	public long getGlobalMemstoreSize() {
+		return atomicGlobalMemstoreSize.get();
+	}
+	public long addAndGetGlobalMemstoreSize(long memStoreSize) {
+		return atomicGlobalMemstoreSize.addAndGet(memStoreSize);
+	}
+	public long addAndGetRegionReplayEditsSize(byte[] regionName, long memStoreSize) {
+		AtomicLong replayEdistsSize = replayEditsPerRegion.get(regionName);
+		if (replayEdistsSize == null) {
+			replayEdistsSize = new AtomicLong(0);
+			replayEditsPerRegion.put(regionName, replayEdistsSize);
+		}
+		return replayEdistsSize.addAndGet(memStoreSize);
+	}
+}
+
+public class org.apache.hadoop.hbase.executor.ExecutorService {
+	private final ConcurrentHashMap<String, Executor> executorMap = new ConcurrentHashMap<String, Executor>();
+	public void startExecutorService(final ExecutorType type, final int maxThreads) {
+		startExecutorService(name, maxThreads);
+	}
+	public void startExecutorService(String name, int maxThreads) {
+		Executor hbes = new Executor(name, maxThreads, this.eventHandlerListeners);
+		if (this.executorMap.putIfAbsent(name, hbes) != null) {
+			throw new RuntimeException("An executor service with the name " + name + " is already running (2)!");
+		}
+	}
+	public void submit(final EventHandler eh) {
+		Executor executor = getExecutor(eh.getEventType().getExecutorServiceType());
+		executor.submit(eh);
+	}
+
+}

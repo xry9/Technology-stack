@@ -1,0 +1,12 @@
+public class org.apache.hadoop.hive.metastore.HiveMetaStore extends ThriftHiveMetastore {
+	public static class HMSHandler extends FacebookBase implements IHMSHandler {
+		private static ThreadLocal<String> threadLocalIpAddress = new ThreadLocal<String>() {
+			protected synchronized String initialValue() {
+				return null;
+			}
+		};
+		public static String getIpAddress() {// 此方法在 metastore 的 server 端执行, 所以我在 quarn 没有必要改 rpc 的源码了
+			return threadLocalIpAddress.get();
+		}
+	}
+}

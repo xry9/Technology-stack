@@ -1,0 +1,216 @@
+1、RM 分配 container 是在 CapacityScheduler#allocate --> SchedulerApplicationAttempt#updateResourceRequests --> AppSchedulingInfo#updateResourceRequests this.requests.put
+  然后在 LeafQueue#assignContainers 中被查询是否要分配 container, 此方法是被 NM 的 heartbeat 例行调用的(这里有个 RM 分配资源的灵魂, NM 上报时会 提供
+  node.getAvailableResource()), 再往下是 LeafQueue#assignContainersOnNode ... FiCaSchedulerApp#allocate newlyAllocatedContainers.add(rmContainer); 完成分配
+当然着重要说下 CapacityScheduler#allocate 是怎么被调用的, 第一次是在 ApplicationAttemptEventDispatcher#handle(往前不用多说), 而后调用是 AM rpc allocate 
+2、RM 端不维护每个 App 还有多少 container 没分配, 近似: app-ask-container-num = app-ask-container-num-last - app-return-container-num-last,
+  每次请求覆盖 RM 端的 app-ask-container-num,
+总结一下, 就是 RM 端不维护状态, 包括 app 端还有多少请求资源没分配, 和 RM 本身还有多少资源, 当然严格说可能会维护, 但是分配资源时是根据 Clien 上报/请求的
+情况, 而且这种架构还有个非常大的好处, 就是 Server 挂了, Client 上的任务可以继续执行, 主立即启动即可
+  灵魂在 ParentQueue#assignContainers 的 while (canAssign(clusterResource, node))
+  还有个疑问, 怎么给不同队列分配资源, 已知的是提交 app 时会指定队列, 可以留意一下这里 CapacityScheduler#addApplication
+3、解读 server 端的事件机制, org.apache.hadoop.yarn.event.AsyncDispatcher#register 是牛耳
+4、启动 AM ,AMLauncher#launch
+5、Client 端提交到 Server 端的方法, ClientRMService#submitApplication, 中的 request.getApplicationSubmissionContext().getAMContainerSpec().getCommands()
+  包含是启动命令
+6、container 执行完成是在 CapacityScheduler#nodeUpdate 的 completedContainers.addAll(containerInfo.getCompletedContainers()); 被处理的
+
+public class org.apache.hadoop.yarn.server.resourcemanager.ResourceManager extends CompositeService implements Recoverable { // CompositeService 在 nodemanager
+	protected RMActiveServices activeServices;
+	private ClientRMService clientRM;
+	private Dispatcher rmDispatcher;
+	public ResourceManager() {
+		super("ResourceManager");
+	}
+	public static void main(String argv[]) {
+		Configuration conf = new YarnConfiguration();
+		ResourceManager resourceManager = new ResourceManager();
+		resourceManager.init(conf);// 略过
+		resourceManager.start();// 回调 serviceStart
+	}
+	protected void serviceInit(Configuration conf) throws Exception {
+		this.conf = conf;
+		this.rmContext = new RMContextImpl();
+		rmDispatcher = setupDispatcher();// new AsyncDispatcher();
+		rmContext.setDispatcher(rmDispatcher);
+		addIfService(rmDispatcher);
+		createAndInitActiveServices();
+		webAppAddress = WebAppUtils.getWebAppBindURL(this.conf, YarnConfiguration.RM_BIND_HOST, WebAppUtils.getRMWebAppURLWithoutScheme(this.conf));
+		super.serviceInit(this.conf);
+	}
+	protected void serviceStart() throws Exception {
+		transitionToActive();
+		startWepApp();
+		super.serviceStart();
+	}
+	synchronized void transitionToActive() throws Exception {
+		startActiveServices();
+	}
+	void startActiveServices() throws Exception {
+		activeServices.start();
+	}
+	protected void createAndInitActiveServices() throws Exception {
+		activeServices = new RMActiveServices(this);
+		activeServices.init(conf);
+	}
+	// 这应该是 RM 的灵魂
+	public class RMActiveServices extends CompositeService {
+		private ResourceManager rm;
+		RMActiveServices(ResourceManager rm) {
+			super("RMActiveServices");
+			this.rm = rm;
+		}
+		protected void serviceInit(Configuration configuration) throws Exception {
+			// Register event handler for NodesListManager
+			nodesListManager = new NodesListManager(rmContext);
+			rmDispatcher.register(NodesListManagerEventType.class, nodesListManager);
+			addService(nodesListManager);
+			rmContext.setNodesListManager(nodesListManager);
+			DefaultMetricsSystem.initialize("ResourceManager");
+			JvmMetrics.initSingleton("ResourceManager", null);
+			masterService = createApplicationMasterService();
+			addService(masterService) ;
+			rmContext.setApplicationMasterService(masterService);
+			rmAppManager = createRMAppManager();
+			rmDispatcher.register(RMAppManagerEventType.class, rmAppManager);
+			clientRM = createClientRMService();
+			addService(clientRM);
+			rmContext.setClientRMService(clientRM);
+			applicationMasterLauncher = createAMLauncher();
+			rmDispatcher.register(AMLauncherEventType.class, applicationMasterLauncher);
+			addService(applicationMasterLauncher);
+		}
+		protected void serviceStart() throws Exception {
+			RMStateStore rmStore = rmContext.getStateStore();
+			rmStore.start();
+			super.serviceStart();
+		}
+	}
+	protected ClientRMService createClientRMService() {
+		return new ClientRMService(this.rmContext, scheduler, this.rmAppManager, this.applicationACLsManager, this.queueACLsManager, this.rmContext.getRMDelegationTokenSecretManager());
+	}
+	protected RMAppManager createRMAppManager() {
+		return new RMAppManager(this.rmContext, this.scheduler, this.masterService, this.applicationACLsManager, this.conf);
+	}
+}
+
+public class org.apache.hadoop.yarn.server.resourcemanager.ClientRMService extends AbstractService implements ApplicationClientProtocol {
+	private final RecordFactory recordFactory = RecordFactoryProvider.getRecordFactory(null);
+	public ClientRMService(RMContext rmContext, YarnScheduler scheduler, RMAppManager rmAppManager, ApplicationACLsManager applicationACLsManager, QueueACLsManager queueACLsManager, RMDelegationTokenSecretManager rmDTSecretManager) {
+		this(rmContext, scheduler, rmAppManager, applicationACLsManager, queueACLsManager, rmDTSecretManager, new UTCClock());
+	}
+	protected void serviceStart() throws Exception {
+		Configuration conf = getConfig();
+		YarnRPC rpc = YarnRPC.create(conf);
+		// 将 this 传入, 即 org.apache.hadoop.yarn.api.impl.pb.service.ApplicationClientProtocolPBServiceImpl#real
+		this.server = rpc.getServer(ApplicationClientProtocol.class, this, clientBindAddress, conf, this.rmDTSecretManager, conf.getInt(YarnConfiguration.RM_CLIENT_THREAD_COUNT, YarnConfiguration.DEFAULT_RM_CLIENT_THREAD_COUNT));    
+		this.server.start();// 移步到 rpc 吧
+		super.serviceStart();
+	}
+	public GetNewApplicationResponse getNewApplication(GetNewApplicationRequest request) throws YarnException {
+		GetNewApplicationResponse response = recordFactory.newRecordInstance(GetNewApplicationResponse.class);
+		response.setApplicationId(getNewApplicationId());
+		response.setMaximumResourceCapability(scheduler.getMaximumResourceCapability());       
+		return response;
+	}
+	public SubmitApplicationResponse submitApplication(SubmitApplicationRequest request) throws YarnException {
+		ApplicationSubmissionContext submissionContext = request.getApplicationSubmissionContext();
+		ApplicationId applicationId = submissionContext.getApplicationId();
+		rmAppManager.submitApplication(submissionContext, System.currentTimeMillis(), user);
+		SubmitApplicationResponse response = recordFactory.newRecordInstance(SubmitApplicationResponse.class);
+		return response;
+	}
+	// 此方法并不简单啊, 但是暂时没有精力研究了
+	public GetApplicationReportResponse getApplicationReport(GetApplicationReportRequest request) throws YarnException {
+		ApplicationId applicationId = request.getApplicationId();
+		RMApp application = this.rmContext.getRMApps().get(applicationId);
+		ApplicationReport report = application.createAndGetApplicationReport(callerUGI.getUserName(),allowAccess);
+		GetApplicationReportResponse response = recordFactory.newRecordInstance(GetApplicationReportResponse.class);
+		response.setApplicationReport(report);
+		return response;
+	}
+	ApplicationId getNewApplicationId() {
+		ApplicationId applicationId = org.apache.hadoop.yarn.server.utils.BuilderUtils.newApplicationId(recordFactory, ResourceManager.getClusterTimeStamp(), applicationCounter.incrementAndGet());
+		return applicationId;
+	}
+}
+
+public class org.apache.hadoop.yarn.event.AsyncDispatcher extends AbstractService implements Dispatcher {
+	protected final Map<Class<? extends Enum>, EventHandler> eventDispatchers;
+	private final BlockingQueue<Event> eventQueue;
+	public AsyncDispatcher() {
+		this(new LinkedBlockingQueue<Event>());
+	}
+	public AsyncDispatcher(BlockingQueue<Event> eventQueue) {
+		super("Dispatcher");
+		this.eventQueue = eventQueue;
+		this.eventDispatchers = new HashMap<Class<? extends Enum>, EventHandler>();
+	}
+	Runnable createThread() {
+		return new Runnable() {
+			public void run() {
+				while (!stopped && !Thread.currentThread().isInterrupted()) {
+					Event event = eventQueue.take();
+					dispatch(event);
+				}
+			}
+		};
+	}
+	protected void dispatch(Event event) {
+		Class<? extends Enum> type = event.getType().getDeclaringClass();
+		EventHandler handler = eventDispatchers.get(type);
+		handler.handle(event);
+	}
+	public void register(Class<? extends Enum> eventType, EventHandler handler) {
+		EventHandler<Event> registeredHandler = (EventHandler<Event>) eventDispatchers.get(eventType);
+		if (registeredHandler == null) {
+			eventDispatchers.put(eventType, handler);
+		} else if (!(registeredHandler instanceof MultiListenerHandler)){
+			MultiListenerHandler multiHandler = new MultiListenerHandler();
+			multiHandler.addHandler(registeredHandler);
+			multiHandler.addHandler(handler);
+			eventDispatchers.put(eventType, multiHandler);
+		} else {
+			MultiListenerHandler multiHandler = (MultiListenerHandler) registeredHandler;
+			multiHandler.addHandler(handler);
+		}
+	}
+	public EventHandler getEventHandler() {
+		if (handlerInstance == null) {
+			handlerInstance = new GenericEventHandler();
+		}
+		return handlerInstance;
+	}
+	protected void serviceStart() throws Exception {
+		eventHandlingThread = new Thread(createThread());
+		eventHandlingThread.start();
+	}
+	class GenericEventHandler implements EventHandler<Event> {
+		public void handle(Event event) {
+			eventQueue.put(event);
+		}
+	}
+}
+public class org.apache.hadoop.yarn.server.resourcemanager.RMAppManager implements EventHandler<RMAppManagerEvent>, Recoverable {
+	private final RMContext rmContext;
+	public RMAppManager(RMContext context, YarnScheduler scheduler, ApplicationMasterService masterService, ApplicationACLsManager applicationACLsManager, Configuration conf) {
+		this.rmContext = context;
+	}
+	protected void submitApplication(ApplicationSubmissionContext submissionContext, long submitTime, String user) throws YarnException {
+		ApplicationId applicationId = submissionContext.getApplicationId();
+		this.rmContext.getDispatcher().getEventHandler().handle(new RMAppEvent(applicationId, RMAppEventType.START));
+	}
+}
+public abstract class org.apache.hadoop.yarn.ipc.YarnRPC {
+	public static YarnRPC create(Configuration conf) {
+		return (YarnRPC) Class.forName(clazzName).newInstance();// org.apache.hadoop.yarn.ipc.HadoopYarnProtoRPC
+	}
+	public Server getServer(Class protocol, Object instance, InetSocketAddress addr, Configuration conf, SecretManager<? extends TokenIdentifier> secretManager, int numHandlers) {
+		return getServer(protocol, instance, addr, conf, secretManager, numHandlers, null);
+	}
+}
+public class org.apache.hadoop.yarn.ipc.HadoopYarnProtoRPC extends YarnRPC {
+	public Server getServer(Class protocol, Object instance, InetSocketAddress addr, Configuration conf, SecretManager<? extends TokenIdentifier> secretManager, int numHandlers, String portRangeConfig) {
+		// org.apache.hadoop.ipc.ProtobufRpcEngine.Server
+		return RpcFactoryProvider.getServerFactory(conf).getServer(protocol, instance, addr, conf, secretManager, numHandlers, portRangeConfig);
+	}
+}

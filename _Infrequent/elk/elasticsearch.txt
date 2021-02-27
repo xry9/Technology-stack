@@ -1,0 +1,12 @@
+https://www.elastic.co/guide/en/elasticsearch/reference/current/getting-started-update-documents.html
+POST /customer/_update/1?pretty
+{
+  "script" : "ctx._source.age += 5"
+}
+
+https://www.elastic.co/guide/en/elasticsearch/reference/current/targz.html#setup-installation-daemon
+To run Elasticsearch as a daemon, specify -d on the command line, and record the process ID in a file using the -p option:
+
+https://www.elastic.co/guide/en/elasticsearch/reference/current/path-settings.html
+If these important folders are left in their default locations, there is a high risk of them being deleted while upgrading Elasticsearch to a new version.
+	In production use, you will almost certainly want to change the locations of the data and log folder

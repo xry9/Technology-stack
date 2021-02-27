@@ -1,0 +1,7 @@
+https://www.cnblogs.com/houss/p/11296285.html-- 这个不好用啊
+
+https://blog.csdn.net/qq_41671415/article/details/102787132
+https://blog.csdn.net/qq_41170899/article/details/80696200
+systemctl stop nginx
+centos7 中 nginx 与 apache 的默认目录都是 /var/www/html
+https://blog.csdn.net/Hu_wen/article/details/85260818

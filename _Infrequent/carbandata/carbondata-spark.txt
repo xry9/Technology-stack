@@ -1,0 +1,91 @@
+编译时没装thrift 也能编译成功，但过程中报了不少Exception。 mvn -DskipTests -Pspark-2.2 -Dspark.version=2.2.0 clean package
+
+
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.CarbonSession._
+import org.apache.spark.SparkConf
+
+val conf = new SparkConf().setMaster("spark://192.168.58.126:7077").set("spark.cores.max", "4")
+val carbon = SparkSession.builder().config(conf).config("hive.metastore.uris","thrift://192.168.58.126:9083").getOrCreateCarbonSession("hdfs://192.168.58.126:9000/opt")
+val carbon = SparkSession.builder().getOrCreateCarbonSession("hdfs://192.168.58.126:9000/opt")
+
+create table emp (id int,name string ,age int) ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+carbon.sql("CREATE TABLE IF NOT EXISTS emp_car(id int,name string, age Int)STORED AS carbondata")
+
+==============================================
+import java.io.File
+import org.apache.spark.sql.{CarbonEnv, SparkSession}
+import org.apache.spark.sql.CarbonSession._
+import org.apache.spark.sql.streaming.{ProcessingTime, StreamingQuery}
+import org.apache.carbondata.core.util.path.CarbonTablePath
+import org.apache.carbondata.streaming.parser.CarbonStreamParser
+
+val warehouse = new File("./warehouse").getCanonicalPath
+val metastore = new File("./metastore").getCanonicalPath
+val spark = SparkSession.builder().master("local").appName("StreamExample").config("spark.sql.warehouse.dir", warehouse).getOrCreateCarbonSession(warehouse, metastore)
+//val spark = SparkSession.builder().getOrCreateCarbonSession
+spark.sparkContext.setLogLevel("ERROR")
+spark.sql(s"DROP TABLE IF EXISTS carbon_table")
+spark.sql(s"""CREATE TABLE carbon_table (col1 INT,col2 STRING)STORED AS carbondata TBLPROPERTIES('streaming'='true')""".stripMargin)
+val carbonTable = CarbonEnv.getCarbonTable(Some("default"), "carbon_table")(spark)
+val tablePath = carbonTable.getTablePath
+
+var qry: StreamingQuery = null
+val readSocketDF = spark.readStream.format("socket").option("host", "localhost").option("port", 9999).load()
+qry = readSocketDF.writeStream.format("carbondata").trigger(ProcessingTime("5 seconds")).option("checkpointLocation", CarbonTablePath.getStreamingCheckpointDir(tablePath)).option("dbName", "default").option("tableName", "carbon_table").option(CarbonStreamParser.CARBON_STREAM_PARSER, CarbonStreamParser.CARBON_STREAM_PARSER_CSV).start()
+
+new Thread() {
+override def run(): Unit = {
+do {
+spark.sql("select * from carbon_table").show(false)
+Thread.sleep(10000)
+} while (true)
+}
+}.start()
+
+qry.awaitTermination()
+==============================================
+case class FileElement(school: Array[String], age: Int)
+case class StreamData(id: Int, name: String, city: String, salary: Float, file: FileElement)
+var qry: StreamingQuery = null
+val readSocketDF = spark.readStream.format("socket").option("host", "localhost").option("port", 9999).load().as[String]
+.map(_.split(",")).map { fields => {
+val tmp = fields(4).split("\\$")
+val file = FileElement(tmp(0).split(":"), tmp(1).toInt)
+StreamData(fields(0).toInt, fields(1), fields(2), fields(3).toFloat, file)
+}}
+qry = readSocketDF.writeStream.format("carbondata").trigger(ProcessingTime("5 seconds")).option("checkpointLocation", tablePath.getStreamingCheckpointDir).option("dbName", "default").option("tableName", "carbon_table").start()
+==============================================
+import java.io.File
+import org.apache.spark.sql.{CarbonEnv, SparkSession}
+import org.apache.spark.sql.CarbonSession._
+import org.apache.spark.sql.streaming.{ProcessingTime, StreamingQuery}
+import org.apache.carbondata.core.util.path.CarbonTablePath
+import org.apache.carbondata.streaming.parser.CarbonStreamParser
+
+val spark = SparkSession.builder().getOrCreateCarbonSession
+spark.sql(s"DROP TABLE IF EXISTS carbon_table")
+spark.sql(s"""CREATE TABLE carbon_table (col1 STRING,col2 STRING)STORED AS carbondata TBLPROPERTIES('streaming'='true','carbon.streaming.segment.max.size'='1024000')""".stripMargin)
+val carbonTable = CarbonEnv.getCarbonTable(Some("default"), "carbon_table")(spark)
+val tablePath = carbonTable.getTablePath
+
+var qry: StreamingQuery = null
+val readSocketDF = spark.readStream.format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("kafka.startingoffsets", "earliest").option("subscribe", "kt01").load().selectExpr("CAST(value AS STRING)","CAST(value AS STRING)")
+qry = readSocketDF.writeStream.format("carbondata").trigger(ProcessingTime("5 seconds")).option("checkpointLocation", CarbonTablePath.getStreamingCheckpointDir(tablePath)).option("dbName", "default").option("tableName", "carbon_table").option(CarbonStreamParser.CARBON_STREAM_PARSER, CarbonStreamParser.CARBON_STREAM_PARSER_CSV).start()
+
+new Thread() {
+override def run(): Unit = {
+do {
+spark.sql("select * from carbon_table").show(false)
+Thread.sleep(10000)
+} while (true)
+}
+}.start()
+spark.sql("select count(1) from carbon_table").show
+spark.sql("select col1 from carbon_table where col1='223000'").show
+spark.sql("SHOW SEGMENTS FOR TABLE carbon_table").show
+spark.sql("ALTER TABLE carbon_table COMPACT 'streaming'").show
+spark.sql("ALTER TABLE carbon_table FINISH STREAMING").show
+
+java -cp "./:jars/kafka_2.11-1.0.0.jar:jars/kafka-clients-1.0.0.jar:jars_kafka/slf4j-api-1.7.25.jar" TestProducer
+javac -cp "jars/kafka_2.11-1.0.0.jar:jars/kafka-clients-1.0.0.jar" TestProducer.java

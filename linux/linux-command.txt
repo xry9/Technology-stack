@@ -1,0 +1,46 @@
+
+1、这些命令应该有必要知道干啥的
+	env, unset, ls -lS, natapp 外网域名, grep --color, 
+	ps -ef | grep SparkSubmit | grep realtime_tag.tyx | awk '{print $2}' | xargs sudo kill  -9
+	fsdisk: 可显示分区的设定信息,并检查分区是否正常,也可用来建立分区
+	ps -ef 和 ps aux 每个字段含义要搞懂
+	22 端口映射怎么做
+	FTP 端口 https://www.jianshu.com/p/9b6389a26336
+	执行kill命令, 系统会发送一个 SIGNTERM(15) 信号给对应的程序. SIGTERM多半是会被阻塞的. kill -9命令,系统给对应程序发送的信号是 SIGNKILL(9)	 
+	echo 'derby.log' | xargs cat , 要知道 xargs 的作用
+2、通过inode删除乱码文件 find ./* -inum 1839498 -delete ; 查找大于X文件: find ./ -size +120M
+3、ssh user@host 'mkdir -p .ssh && cat >> .ssh/authorized_keys' < ~/.ssh/id_rsa.pub
+(1)"$ ssh user@host",表示登录远程主机；
+(2)单引号中的mkdir .ssh && cat >> .ssh/authorized_keys,表示登录后在远程shell上执行的命令：
+(3)"$ mkdir -p .ssh"的作用是,如果用户主目录中的.ssh目录不存在,就创建一个；
+(4)'cat >> .ssh/authorized_keys' < ~/.ssh/id_rsa.pub的作用是,将本地的公钥文件~/.ssh/id_rsa.pub,重定向追加到远程文件 authorized_keys的末尾
+4、
+	接收端执行： nc -l 8888 | tar zxf -
+	发送端：tar zcf - xxx | nc 接收端ip 8888
+	# xxxx可以是目录也可以是任意文件甚至多个文件
+5、cpu 相关
+	查看CPU个数 cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l
+	查看CPU核数 cat /proc/cpuinfo | grep "cpu cores" | uniq
+	查看所有逻辑CPU的个数 cat /proc/cpuinfo | grep "processor" | wc -l  总的逻辑CPU数 = 物理CPU个数 * 每颗物理CPU的核数 * 超线程数
+	查询CPU是否启用超线程: cat /proc/cpuinfo | grep -e "cpu cores" -e "siblings" | sort | uniq  看到cpu cores数量是siblings数量一半,说明启动了超线程. 
+	查看 Linux 系统版本 cat /proc/version, uname -a
+	lscpu
+6、开放端口的方法：
+	a. 开放端口命令： /sbin/iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+	b.保存：/etc/rc.d/init.d/iptables save
+	c.重启服务：/etc/init.d/iptables restart
+	d.查看端口是否开放：/sbin/iptables -L -n
+7、linux下ssh到其他机器执行命令	ssh cloud02 /root/b.sh
+8、yum install telnet-server -y	yum install telnet -y
+9、yum install openssh-server yum install openssh-client
+10、rpm -ivh http://nginx.org/packages/centos/6/noarch/RPMS/nginx-release-centos-6-0.el6.ngx.noarch.rpm  2. yum install nginx
+11、服务端：nc -l 9999 客户端：nc localhost 9999
+12、grep -l '查找的文本内容' */*/*.log   -- -l表示列出文件名
+13、zip -r 目录 不加-r会只打空目录,而 tar -czf z.tar.gz tt 则不用. 对多个文件直接打包时没有区别
+14、清linux缓存 sync && echo 3 > /proc/sys/vm/drop_caches
+15、tar -czf txt.tar.gz *.xtx   //将目录里所有txt文件打包成txt.tar后,并且将其用gzip压缩,生成一个gzip压缩过的包,命名为txt.tar.gz
+16、command >out.file 2>&1 &
+	command >out.file是将command的输出重定向到out.file文件,即输出内容不打印到屏幕上,而是输出到out.file文件中.  
+	2>&1 是将标准出错重定向到标准输出,这里的标准输出已经重定向到了out.file文件,即将标准出错也输出到out.file文件中. 最后一个& , 是让该命令在后台执行
+17、配置了一下vim /etc/resolv.conf中的nameserver 202.106.0.20,即可连通了外网
+18、rsync -r ./apache-maven-3.3.9 cluster02:/tmp, rsync -r 172.16.10.5:/etc /tmp

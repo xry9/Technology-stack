@@ -1,0 +1,10 @@
+org.apache.hadoop.ipc.FairCallQueue, 感觉挺这烂的, 出于尊重 hadoop 还是看看吧
+--------
+public class org.apache.hadoop.metrics2.lib.MetricsRegistry {
+  private final Map<String, MutableMetric> metricsMap = Maps.newLinkedHashMap();
+  private final Map<String, MetricsTag> tagsMap = Maps.newLinkedHashMap();
+}
+public class NNStorage extends Storage implements Closeable,StorageErrorReporter {
+	storageDirs = new CopyOnWriteArrayList<StorageDirectory>();
+}
+org.apache.hadoop.net.unix.DomainSocket#receiveFileDescriptors0 居然是 native 的

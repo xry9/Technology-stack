@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+  <!-- WARNING!!! This file is auto generated for documentation purposes ONLY! -->
+  <!-- WARNING!!! Any changes you make to this file will be ignored by Hive.   -->
+  <!-- WARNING!!! You must make your changes in hive-site.xml instead.         -->
+  <!-- Hive Execution Parameters -->
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:mysql://192.168.58.1/hive121?createDatabaseIfNotExist=true</value>
+    <description/>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>com.mysql.jdbc.Driver</value>
+    <description/>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>root</value>
+    <description/>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>root</value>
+    <description/>
+  </property>
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/hive1/user/hive/warehouse</value>
+    <description/>
+  </property>
+  <property>
+    <name>hive.exec.scratchdir</name>
+    <value>/hive1/tmp/hive</value>
+    <description/>
+  </property>
+</configuration>

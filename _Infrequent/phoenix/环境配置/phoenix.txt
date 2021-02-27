@@ -1,0 +1,83 @@
+--区分大小写时好像是"而不是`
+cp phoenix-4.12.0-HBase-1.3-server.jar /usr/local/app/hbase-1.3.0/lib/
+psql.py 192.168.58.171:2181 examples/STOCK_SYMBOL.sql examples/STOCK_SYMBOL.csv
+http://phoenix.apache.org/faq.html
+
+yum install python-argparse -y
+sqlline.py pseudo:2181
+
+================================
+<!--注，如遇到如下报错-->
+org.apache.phoenix.exception.PhoenixIOException: org.apache.hadoop.hbase.DoNotRetryIOException: Class org.apache.phoenix.coprocessor.MetaDataEndpointImpl cannot be loaded Set hbase.table.sanity.checks to false at conf or table descriptor if you want to bypass sanity checks
+在hbase-site.xml中加入
+<property>
+<name>hbase.table.sanity.checks</name>
+<value>false</value>
+</property>
+===============================
+select * from STOCK_SYMBOL;
+select symbol,company from STOCK_SYMBOL;
+upsert into STOCK_SYMBOL values ('ds','jd');
+select symbol,count(*) from STOCK_SYMBOL group by symbol;
+
+create table test (mykey integer not null primary key, mycolumn varchar);
+upsert into test values (1,'Hello');
+upsert into test values (2,'World!');
+select * from test;
+==================================
+1、!tables	upsert into
+2、create table tab1(id integer primary key,"info"."name" varchar,"info"."gender" varchar);如果不指定列族，默认为0列族
+upsert into "tab1" values (1,'zs','female');
+3、如想和hbase已有的表关联，创建和hbase结构相同的表即可，删除该表hbase中的表也删除，创建视图无所谓
+4、bin/psql.py storm:2181 /root/WEB_STAT.sql /root/WEB_STAT.csv
+===============================================
+
+CREATE TABLE phoeinx_emp (
+empno integer PRIMARY KEY ,
+ename varchar ,
+age integer ,
+sal double ,
+deptno integer
+);
+
+create table "tab1"(
+pk VARCHAR PRIMARY KEY
+,"f"."name" varchar
+,"f"."age" varchar
+)column_encoded_bytes=0;
+
+
+create table "TAB2" ("ROW" varchar primary key,"f"."name" varchar)column_encoded_bytes=0;
+
+ALTER TABLE "stu" ADD "f"."sal" varchar(10);
+ALTER TABLE "stu" DROP COLUMN "f"."sal" ;
+upsert into SYSTEM.CATALOG(TENANT_ID,TABLE_SCHEM,TABLE_NAME,COLUMN_NAME,COLUMN_FAMILY,COLUMN_SIZE) values('','','stu','sal','f',4);
+
+create table "SKU"(
+pk VARCHAR PRIMARY KEY
+,"info"."big_retailprice" VARCHAR
+,"info"."big_unit_code" VARCHAR
+,"info"."isdel" VARCHAR
+,"info"."price_new" VARCHAR
+,"info"."retailprice" VARCHAR
+,"info"."sale_count" VARCHAR
+,"info"."sku_no" varchar
+,"info"."spu_id" VARCHAR
+,"info"."stock" VARCHAR
+,"info"."ts" varchar
+,"info"."unit_transfer" VARCHAR
+)column_encoded_bytes=0;
+
+
+column=info:big_retailprice, timestamp=1533692450545, value=1363.56                                                                            
+column=info:big_unit_code, timestamp=1533692450545, value=e224vykuxlcrfaykqalprazouhudno                                                       
+column=info:isdel, timestamp=1533692450545, value=0                                                                                            
+column=info:price_new, timestamp=1533692450545, value=1451.86                                                                                  
+column=info:retailprice, timestamp=1533692450545, value=1473.68                                                                                
+column=info:sale_count, timestamp=1533692450545, value=77962                                                                                   
+column=info:sku_no, timestamp=1533692450545, value=qieskdpnb3xj324faagui2zl3cvjq4                                                              
+column=info:small_unit_code, timestamp=1533692450545, value=uukrqwwqa14z3vvxvamxiyxxllxutf                                                     
+column=info:spu_id, timestamp=1533692450545, value=66539                                                                                       
+column=info:stock, timestamp=1533692450545, value=10007                                                                                        
+column=info:ts, timestamp=1533692450545, value=2017-12-31 20:03:52.0                                                                           
+column=info:unit_transfer, timestamp=1533692450545, value=16627                                                                                

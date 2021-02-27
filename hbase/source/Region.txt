@@ -1,0 +1,80 @@
+1、MemStoreFlusher#flushRegion, 此方法中有个 flushResult, 根据这个值判断 shouldSplit/shouldCompact
+  a. shouldSplit --> SplitRequest 这个很自然, 还有一个居然是 CompactionRunner.run --> SplitRequest, 有点奇怪啊, 因为 region.compact 后会
+    有个判断
+  b. shouldCompact --> CompactionRunner, 还有一处产生 CompactionRunner 是由 HRegionServer#postOpenDeployTasks 中 s.needsCompaction() 
+    还有一处是在 SplitTransactionImpl#openDaughters services.postOpenDeployTasks(a/b); 
+  c. MemStoreFlusher 中拿到 server.getCopyOfOnlineRegionsSortedBySize(), 并没有根据全局内存大小而是根文件本身大小个数来决定要不要 flush
+
+2、最难把控的是 compact 操作, 触发的点比较多, region split 时好像不需要 compact 完, Client 端连续写时触发 region split 应该是最复杂的, 但是
+  我基本搞懂了
+  
+3、openHRegion 时 创建一个 DefaultMemStore, flush 后也不创建, 疑惑的是 region split 时怎么处理。看了一下 flush 的代码, 是这样的
+region.flush(forceFlushAllStores); 
+
+4、为啥 hbase 建议单列簇, 因为 flush, split, compact 都是 region 级的, 而判断条件是 store 级的. 这两个操作是很耗性能的, 中间文件文件句柄, 多一个
+  store 就相当于加了一倍的性能消耗，而且对性能最苛刻的缓存也有影响。至于增加 namenode 压力这个倒不是非常主要的原因
+5、HRegion#shouldFlushStore 方法是用来在 region flush 时判断该 store 是否要参加
+
+6、minor compaction 与 major compaction 真正操作起来是 ScanQueryMatcher 在起作用
+
+7、FlushHandler 中会循环调用 flushOneForGlobalPressure(), 规则有点复杂, 但是这个操作好像和全局内存没啥关系, 也能理解
+   put 操作时会 isFlushSize, 只判断 memstoreFlushSize, 不是全局的内存
+   
+8、两个 64M 左右的文件 flush 后变成了 194M, 是不是可以说明 flush 时 memstore 一块 compact 了
+9、每次关闭都会在 /hbase/oldWALs 生成文件, 重启时在 /hbase/WALs 生成新文件, 说明 hdfs 文件是不可追加的, 必须创建新文件, 每次 put 都会实时更新到 DN
+中, 但是我用 hdfs api flush 却没做到
+
+public class IncreasingToUpperBoundRegionSplitPolicy extends ConstantSizeRegionSplitPolicy {
+	// 分隔点是取最大 file 的 this.reader.midkey();
+	protected boolean shouldSplit() {
+		boolean force = region.shouldForceSplit();
+		boolean foundABigStore = false;
+		int tableRegionsCount = getCountOfCommonTableRegions();
+		long sizeToCheck = getSizeToCheck(tableRegionsCount);
+		for (Store store : region.getStores()) {
+			if (!store.canSplit()) {// 判断一下是否 hasReferences()
+				return false;
+			}
+			long size = store.getSize();// 此 store 所有 file 的和
+			if (size > sizeToCheck) {// 说明只要有一个 store 满足条件就 split
+				foundABigStore = true;
+			}
+		}
+		return foundABigStore | force;
+	}
+	protected long getSizeToCheck(final int tableRegionsCount) {// 说明了一个 region 时容易分裂, 多了不太容易
+		return tableRegionsCount == 0 || tableRegionsCount > 100 ? getDesiredMaxFileSize() : 
+		  Math.min(getDesiredMaxFileSize(), initialSize * tableRegionsCount * tableRegionsCount * tableRegionsCount);// initialSize: 2 * DEFAULT_MEMSTORE_FLUSH_SIZE 即 256M
+	}
+}
+
+public class RatioBasedCompactionPolicy extends SortedCompactionPolicy {
+	// HRegion#internalFlushCacheAndCommit 方法中 flush.flushCache(status); 是 store 级的
+	public boolean needsCompaction(final Collection<StoreFile> storeFiles, final List<StoreFile> filesCompacting) {
+		int numCandidates = storeFiles.size() - filesCompacting.size();
+		return numCandidates >= comConf.getMinFilesToCompact();// 3
+	}
+}
+
+
+6、HRegionServer.tryRegionServerReport --> HRegionServer.getWAL --> FSHLog.FSHLog --> FSHLog.replaceWriter this.writer = nextWriter
+  HRegionServer.getWAL 说明一个 regionserver 一个 wal。HRegion.openHRegion 会直接拿上面创建的 wal, this.rsServices.getWAL, put 等操作
+  用的就是此 Region 中的 wal. 还要说明一下 FSHLog 用到了 lmax 这个框架, 消费者按照生产者的顺序来消费数据, 必须保证有序呀, put + delete 操作
+  a. 写操作是在 HRegion#doMiniBatchMutation 方法中 txid = this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey, walEdit, true);
+  b. 消费者自然是在 FSHLog.RingBufferEventHandler#onEvent --> RingBufferEventHandler#append --> ProtobufLogWriter#append 真正把数据写出去了
+    需要注意在 RingBufferEventHandler#append 中写之前还调用 stampRegionSequenceId() 这个方法很重要, 厉害之处有两点
+	 b1. we = mvcc.begin();
+	 b2. key.setWriteEntry(we); this.seqNumAssignedLatch.countDown(); 因为 c 操作中 this.seqNumAssignedLatch.await();
+  c. HRegion#doMiniBatchMutation 方法中 writeEntry = walKey.getWriteEntry(); 通过上面 b2 的分析也就是消费者处理过后, 这里才能停止阻塞
+  d. HRegion#doMiniBatchMutation 方法中 Sync wal 之后 mvcc.completeAndWait(writeEntry); 通过名字可以猜到已经完成, 但是要等别处确认一下
+  e. 经过验证 HRegion#doMiniBatchMutation 方法中 mvcc.completeAndWait(writeEntry); 之后新值才能被读到
+     RegionScannerImpl 初始化时会 this.readPt = getReadpoint(isolationLevel); 而且 MemStoreScanner#getNext 中有 Cell v = null; 
+	  if (v.getSequenceId() <= this.readPoint)
+	 HRegion#doMiniBatchMutation 方法中 rollbackMemstore(cells);
+  f. 大概感觉 mvcc 的作用是保证 doMiniBatchMutation 方法的有序性, 感觉是个写锁不是乐观锁, 由于上面申请了行锁，如果可重入的话，这里版本控制很重要了
+    好像还是个全局版本号，应该是我想多了，跟锁应该扯不上关系, 应该是个事务 id 递增的
+7、wal sysn 那套机制有太大的漏洞啊, 但是在 writer 是同一个对象的前提下应该不会有问题。而且线程也是同一个, 这也就是用 lmax 的原因吧(用 lmax 最重要的原因是保证数据入内存和写日志顺序相同吧)
+  主是要感觉没有必要 sysn 一下, 现在明白了, flush 数据才能写入磁盘, 只 write 还是在内存缓冲当中
+  分析一下 wal 为什么不每个 region 一个呢, 因为如果此 regionserver 是单块盘, 多个句柄/多线程没有意义
+  我好像有点明白了, sysn 过程为什么用多线程, 如果单线程则会每个 sequence 都走一遍 flush, 那样对硬盘不友好, 本质就是为了在高并发条件下放下水, write 不
+  太耗性能, flush 则是真正写磁盘的操作

@@ -1,0 +1,437 @@
+
+1、lockInterruptibly 相比 lock 只是略有不同(acquireQueued <--> doAcquireInterruptibly), 挂起前后都会检查是否 interrupt, 如果 interrupt 则抛异常, 
+  线程 park 挂起时, interrupt 肯定是没有问题的, unpark 时出问题
+2、tryLock() 只是判断可不可以得到锁, 返回 boolean 值, 逻辑非常简单, 并不会阻塞, 所以 unlock 时会在 ReentrantLock.Sync#tryRelease 中 
+  throw new IllegalMonitorStateException();
+3、tryLock(long timeout, TimeUnit unit) 底层逻辑是 doAcquireNanos  与 acquireQueued 也是略有不同, 不同在哪简单脑补就可以了, 
+4、condition 也是与一把锁关联, lock 获得锁之后, 再 await/signal 
+  如果是我应该怎么设计 condition 呢, 无非是新建一个 Node 队列, 我想对了, 进去看下挺简单的
+5、参见 AbstractQueuedSynchronizer#transferForSignal 我的注释, 然后我感觉 ThreadPoolExecutor#awaitTermination 方法好像不太对头
+5、https://mp.weixin.qq.com/s?__biz=MzI3NzE0NjcwMg==&mid=2650122072&idx=1&sn=63690ad2cbf2b5390c3d8e1953ffbacf&chksm=f36bba79c41c336fbea8b56289fc2a71e829042f6c3616e3ba051c2542b48f0a3936e3d852f6&mpshare=1&scene=1&srcid=0225xcUOCP6bBS8aCrcd1jBd#rd
+  这篇文章感觉好高端, 但是我觉得不是自旋而是挂起
+6、Semaphore CountDownLatch 站在设计模式的调度看这个事, 其实设计很巧妙
+7、ReentrantReadWriteLock 还是很复杂, 不要轻易碰了
+  简单说一下吧, Node 的 mode 分两种:SHARED/EXCLUSIVE, readLock 用的是 SHARED, 当 writeLock.unlock 时, 会 propagate 即每 unpark 一个线程, 会向下传递
+8、https://blog.csdn.net/qq_18297675/article/details/106700094
+9、ReentrantLock 比 synchronized 灵活之处: 
+    tryLock 检查可不可以得到锁, 可以避免死锁
+    读写锁 公平锁 Condition 
+    CountDownLatch Semaphore 
+    state cas 获取锁减小开销 
+  不足之处是: 即便线程 throw Exception(); lock 也不会自动 unlock, 所以其它锁住的线程也不会触到释放, 这个坑太隐蔽了
+
+
+unsafe.park(isAbsolute, time); 绝对时间后面的参数单位是毫秒, 相对时间后面的参数单位是纳秒, time=0 表示一直阻塞
+unsafe.unpark(thread);
+其实这两个方法一个传线程一个不传线程挺合理的, 只有当前线程才能把自己 park, 而 unpark 只能由别的线程帮助, 所以要把 park 的线程传入
+Lock 锁的底层不过是 unsafe.park/unpark 和 CAS 
+先 unsafe.unpark(currThread); 再 unsafe.park(false, 5000000000l);居然锁不住
+
+public final class sun.misc.Unsafe {
+	public final int getAndAddInt(Object var1, long var2, int var4) {
+		int var5;
+		do {
+			var5 = this.getIntVolatile(var1, var2);
+		} while(!this.compareAndSwapInt(var1, var2, var5, var5 + var4));
+		return var5;
+	}
+	public native int getIntVolatile(Object var1, long var2);
+}
+
+public class AtomicReference<V> implements java.io.Serializable {
+	private static final Unsafe unsafe = Unsafe.getUnsafe();
+	private static final long valueOffset;
+	private volatile V value;
+	static { // value 值明明是后赋的呀
+		valueOffset = unsafe.objectFieldOffset(AtomicReference.class.getDeclaredField("value"));
+	}
+	public final void set(V newValue) {
+		value = newValue;
+	}
+	public final boolean compareAndSet(V expect, V update) {
+		return unsafe.compareAndSwapObject(this, valueOffset, expect, update);
+	}
+}
+
+public class java.util.concurrent.locks.ReentrantLock implements Lock, java.io.Serializable {
+    private final Sync sync;
+	public ReentrantLock() {
+        sync = new NonfairSync();
+    }
+    public ReentrantLock(boolean fair) {
+        sync = fair ? new FairSync() : new NonfairSync();
+    }
+    public void lock() {
+        sync.lock();
+    }
+    public void unlock() {
+        sync.release(1);
+    }
+	static final class NonfairSync extends Sync {
+        final void lock() {
+            if (compareAndSetState(0, 1)) setExclusiveOwnerThread(Thread.currentThread());// 如果恰好在线程释放锁时新线程进来, 就直接得到锁了
+            else acquire(1);
+        }
+        protected final boolean tryAcquire(int acquires) {
+            return nonfairTryAcquire(acquires);
+        }
+    }
+	static final class FairSync extends Sync {
+        final void lock() { acquire(1); }
+        protected final boolean tryAcquire(int acquires) {
+            final Thread current = Thread.currentThread();
+            int c = getState();
+            if (c == 0) {
+                if (!hasQueuedPredecessors() && compareAndSetState(0, acquires)) {
+                    setExclusiveOwnerThread(current); return true;
+                }
+            }else if (current == getExclusiveOwnerThread()) {
+                int nextc = c + acquires;
+                setState(nextc);
+                return true;
+            }
+            return false;
+        }
+    }
+	abstract static class Sync extends AbstractQueuedSynchronizer {
+        abstract void lock();
+        final boolean nonfairTryAcquire(int acquires) {
+            final Thread current = Thread.currentThread();
+            int c = getState();
+            if (c == 0) { // 调 unlock 后 tryRelease 中会把 state 设成 0 
+                if (compareAndSetState(0, acquires)) { // 非公平锁有两次机会不入队列就能直接得到锁, 这是第二次, 其实本质是一样, cas(state, 0, 1) --> setExclusiveOwnerThread(Thread.currentThread()
+                    setExclusiveOwnerThread(current);
+                    return true;
+                }
+            }else if (current == getExclusiveOwnerThread()) { // 此处进来表示多次调用 lock ？
+                int nextc = c + acquires; // 加也不是没有意义, 加几次释放时就得减几次呀
+                setState(nextc);
+                return true;
+            }
+            return false;
+        }
+		protected final boolean tryRelease(int releases) {
+            int c = getState() - releases;// 一般情况这两个值都是 1 
+			if (Thread.currentThread() != getExclusiveOwnerThread()) throw new IllegalMonitorStateException();// 
+            boolean free = false;
+            if (c == 0) {
+                free = true;
+                setExclusiveOwnerThread(null);// 没唤醒之前先把独占设成 null
+            }
+            setState(c);// 往往要把 state 值设成 0 了, 太关键了, 但是还是没有唤醒, 此操作造成新线程会趁虚而入 
+            return free;
+        }
+    }
+}
+public class java.util.concurrent.locks.ReentrantReadWriteLock implements ReadWriteLock, java.io.Serializable {
+    private final ReentrantReadWriteLock.ReadLock readerLock;
+    private final ReentrantReadWriteLock.WriteLock writerLock;
+	final Sync sync;
+	public ReentrantReadWriteLock() {
+        this(false);
+    }
+    public ReentrantReadWriteLock(boolean fair) {
+        sync = fair ? new FairSync() : new NonfairSync();
+        readerLock = new ReadLock(this);
+        writerLock = new WriteLock(this);
+    }
+	public static class WriteLock implements Lock, java.io.Serializable {
+        private final Sync sync;
+        protected WriteLock(ReentrantReadWriteLock lock) {
+            sync = lock.sync;
+        }
+        public void lock() { // 所以写锁的 lock 与 ReentrantLock 好像无异
+            sync.acquire(1);
+        }
+	}
+	
+    public static class ReadLock implements Lock, java.io.Serializable {
+        private final Sync sync;
+        protected ReadLock(ReentrantReadWriteLock lock) {
+            sync = lock.sync;
+        }
+        public void lock() {
+            sync.acquireShared(1);
+        }
+	}
+	abstract static class Sync extends AbstractQueuedSynchronizer {
+	    protected final int tryAcquireShared(int unused) {
+            Thread current = Thread.currentThread();
+            int c = getState();
+            if (exclusiveCount(c) != 0 && getExclusiveOwnerThread() != current) return -1;
+            int r = sharedCount(c);
+            if (!readerShouldBlock() && r < MAX_COUNT && compareAndSetState(c, c + SHARED_UNIT)) {
+                if (r == 0) {
+                    firstReader = current; firstReaderHoldCount = 1;
+                } else if (firstReader == current) {
+                    firstReaderHoldCount++;
+                } else {
+                    HoldCounter rh = cachedHoldCounter;
+                    if (rh == null || rh.tid != getThreadId(current)) cachedHoldCounter = rh = readHolds.get();
+                    else if (rh.count == 0) readHolds.set(rh);
+                    rh.count++;
+                }
+                return 1;
+            }
+            return fullTryAcquireShared(current);
+        }
+	}
+    static final class NonfairSync extends Sync {
+        final boolean writerShouldBlock() { return false; }
+        final boolean readerShouldBlock() { return apparentlyFirstQueuedIsExclusive(); }
+    }
+	public class ConditionObject implements Condition, java.io.Serializable {
+        private transient Node firstWaiter;
+        private transient Node lastWaiter;
+		public final void await() throws InterruptedException { // 这里好像很简单, 创建一个 CONDITION 节点, 属于一个新链表, 与 lock 链表没发生关联
+            if (Thread.interrupted()) throw new InterruptedException();
+            Node node = addConditionWaiter();
+            int savedState = fullyRelease(node);// 完全 Release 一个节点的意思, 如果一个线程被加了多个锁, 此处应该会抛异常
+            int interruptMode = 0;
+            while (!isOnSyncQueue(node)) {
+                LockSupport.park(this);// 上面 release 一个节点, 这里又 park, 但是没有加入原链表, 所以唤醒不走原逻辑了
+                if ((interruptMode = checkInterruptWhileWaiting(node)) != 0) break;
+            }
+            if (acquireQueued(node, savedState) && interruptMode != THROW_IE) interruptMode = REINTERRUPT;
+            if (node.nextWaiter != null) unlinkCancelledWaiters();// clean up if cancelled
+            if (interruptMode != 0) reportInterruptAfterWait(interruptMode);
+        }
+        private Node addConditionWaiter() {
+            Node t = lastWaiter;
+            if (t != null && t.waitStatus != Node.CONDITION) { unlinkCancelledWaiters(); t = lastWaiter; }
+            Node node = new Node(Thread.currentThread(), Node.CONDITION);// CONDITION 节点
+            if (t == null) firstWaiter = node;
+            else t.nextWaiter = node;
+            lastWaiter = node;
+            return node;
+        }
+        public final void signal() {
+            if (!isHeldExclusively()) throw new IllegalMonitorStateException();
+            Node first = firstWaiter;
+            if (first != null) doSignal(first);
+        }
+        private void doSignal(Node first) {
+            do {
+                if ((firstWaiter = first.nextWaiter) == null) lastWaiter = null;
+                first.nextWaiter = null;
+            } while (!transferForSignal(first) && (first = firstWaiter) != null);
+        }
+		final boolean transferForSignal(Node node) {
+			if (!compareAndSetWaitStatus(node, Node.CONDITION, 0)) return false;
+			// enq 相当于把 node 加到队尾了, 只有这样才使 node 有被唤醒的可能, 因为下面 unpark 几乎是不被执行的, signal 线程 unlock 后触发原队列唤醒
+			机制
+			// 所以 await 是使 head --> new Node(..., Node.CONDITION), 并挂起并 release 一个节点, signal 使此结节入队列, 所以同 synchronized 语法
+			// 对上了, 但是应该入队首才对呀, 所以呀如果原队列中存在 Node(lock.lock(); 或 condition.await()), 会释放前面的 Node, 所以说应该是如果用 
+			// condition , 就不要再用 lock.lock();这种锁了
+			Node p = enq(node);// node 其实是 firstWaiter
+			int ws = p.waitStatus;
+			if (ws > 0 || !compareAndSetWaitStatus(p, ws, Node.SIGNAL)) LockSupport.unpark(node.thread);
+			return true;
+		}
+	}
+}
+public abstract class java.util.concurrent.locks.AbstractQueuedSynchronizer extends AbstractOwnableSynchronizer implements java.io.Serializable {
+	private static final Unsafe unsafe = Unsafe.getUnsafe();
+    private transient volatile Node head;
+    private transient volatile Node tail;
+	private volatile int state;
+    protected final void setState(int newState) {
+        state = newState;
+    }
+	public final void acquire(int arg) { // tryAcquire 返回 true 也是获得了锁
+        if (!tryAcquire(arg) && acquireQueued(addWaiter(Node.EXCLUSIVE), arg)) selfInterrupt();
+    }
+    protected boolean tryAcquire(int arg) {
+        throw new UnsupportedOperationException();
+    }
+	final boolean acquireQueued(final Node node, int arg) { // 此方法应该是 lock 而被挂线的地方, 所以被唤醒也是在这里
+        boolean failed = true;
+		boolean interrupted = false;
+		try {
+			for (;;) {
+				final Node p = node.predecessor();
+				// unlock 之后被唤醒的是 head.next 节点, 而再 tryAcquire 往往也返回 true, 因为 tryRelease 中把 state 设成了 0
+				//但是 tryAcquire 也有不返回 true 的情况, 新线程抢占肯定返回 false, 所以又会被挂起, 但是没有事, 因为每次 unlock 是唤醒 head.next, 
+				//虽然可能有人趁虚而入, 但是原来队列结构没有改变, 虽然 head 还是原线程不是趁虚而入者
+				if (p == head && tryAcquire(arg)) { // 好像是 p == head 时去 tryAcquire(arg), 如果有线程转空子, 其实是拿不到锁的
+					// head.next 切换成了 head, 原 head 相当于丢弃了, head 应该是第一个阻塞的线程前面的结节, 也不一定和当前非阻塞线程对应, 
+					// 如果只有一个阻塞线程, 即只有 head 和 tail, 且 head==tail
+					setHead(node);
+					p.next = null; // help GC
+					failed = false;
+					return interrupted;// 看线程自身是否 调用过 interrupt, 没调过还是返回 false
+				}
+				if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt()) interrupted = true;
+			}
+		} finally { // 什么情况会失败呢, 不管什么原因吧这个线程不会被挂起了
+            if (failed) cancelAcquire(node);
+        }
+    }
+	public final boolean release(int arg) {
+        if (tryRelease(arg)) {
+            Node h = head;
+            if (h != null && h.waitStatus != 0) unparkSuccessor(h);
+            return true;
+        }
+        return false;
+    }
+    final int fullyRelease(Node node) {
+        boolean failed = true;
+        try {
+            int savedState = getState();
+            if (release(savedState)) {
+                failed = false;
+                return savedState;
+            } else {
+                throw new IllegalMonitorStateException();
+            }
+        } finally {
+            if (failed) node.waitStatus = Node.CANCELLED;
+        }
+    }
+    public final void acquireShared(int arg) {
+        if (tryAcquireShared(arg) < 0) doAcquireShared(arg);
+    }
+	private void doAcquireShared(int arg) { // 要是阻塞是在这里
+        final Node node = addWaiter(Node.SHARED);
+        boolean failed = true;
+		boolean interrupted = false;
+		for (;;) {
+			final Node p = node.predecessor();
+			if (p == head) {
+				int r = tryAcquireShared(arg);
+				if (r >= 0) {
+					setHeadAndPropagate(node, r);
+					p.next = null; // help GC
+					if (interrupted) selfInterrupt();// 因为 parkAndCheckInterrupt 中会清除状态, 所以还要 interrupt 一下
+					failed = false;
+					return;
+				}
+			}
+			if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt()) interrupted = true;
+		}
+    }
+	private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {// 我觉得这个方法的目的是找到 tail 前面的第一个非 CANCELLED 节点, 并给 waitStatus =0 的 Node 赋值为 SIGNAL
+        int ws = pred.waitStatus;
+        if (ws == Node.SIGNAL) return true;// SIGNAL = -1
+        if (ws > 0) { // 应该是只有 CANCELLED = 1 是大于 0 的, 所以这相当于 抛弃所有 CANCELLED 的 Node 吧, 但是 tail 节点怎么处理了呢
+            do { node.prev = pred = pred.prev; } while (pred.waitStatus > 0);
+            pred.next = node;
+        } else { // 好像是说加进来一个节点, 就要把他前面的节点 waitStatus 设成 Node.SIGNAL, 无非表示我后面有人等呗
+            compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
+        }
+        return false;
+    }
+    private final boolean parkAndCheckInterrupt() {
+        LockSupport.park(this);
+        return Thread.interrupted();// 如果被 interrupt 了返回 true, 并会清除状态, 当然清除也没事, 返回 true 后外面还会 interrupt
+    }
+	private Node enq(final Node node) {
+        for (;;) {
+            Node t = tail;
+            if (t == null) { // Must initialize
+                if (compareAndSetHead(new Node())) tail = head;
+            } else {
+                node.prev = t;
+                if (compareAndSetTail(t, node)) { t.next = node; return t; }
+            }
+        }
+    }
+    private Node addWaiter(Node mode) { // 这一套走下来之后产生一个队列, 至少有 head, tail 两个节点, 返回 tail
+        Node node = new Node(Thread.currentThread(), mode);
+        Node pred = tail;
+        if (pred != null) {
+            node.prev = pred;
+            if (compareAndSetTail(pred, node)) { pred.next = node; return node; }
+        }
+        enq(node);
+        return node;
+    }
+	public final boolean hasQueuedPredecessors() {
+        Node t = tail; // Read fields in reverse initialization order
+        Node h = head;
+        Node s;
+        return h != t && ((s = h.next) == null || s.thread != Thread.currentThread());
+    }
+	private void unparkSuccessor(Node node) {// 传进来的居然是 head, 要知道 head 往往是正在执行的非阻塞线程, 要唤醒的是 head.next
+        int ws = node.waitStatus;
+        if (ws < 0) compareAndSetWaitStatus(node, ws, 0);// 如果被新线程趁虚而入, 这里就修改不成功了
+        Node s = node.next;
+		//Thread to unpark is held in successor, which is normally just the next node. But if cancelled or apparently null, traverse backwards from tail to find the actual non-cancelled successor.
+        if (s == null || s.waitStatus > 0) {
+            s = null;
+            for (Node t = tail; t != null && t != node; t = t.prev)
+                if (t.waitStatus <= 0) s = t;
+        }
+        if (s != null) LockSupport.unpark(s.thread);// head.next 节点装的线程就是要唤醒的线程呀
+    }
+	static void selfInterrupt() {
+        Thread.currentThread().interrupt();
+    }
+	protected final boolean compareAndSetState(int expect, int update) {
+		return unsafe.compareAndSwapInt(this, stateOffset, expect, update);
+	}
+	static final class Node {
+        static final Node SHARED = new Node();
+        static final Node EXCLUSIVE = null;
+        static final int CANCELLED = 1; static final int SIGNAL = -1; static final int CONDITION = -2; static final int PROPAGATE = -3;
+        volatile int waitStatus;
+        volatile Node prev; volatile Node next;
+        volatile Thread thread;
+        Node nextWaiter;
+        final Node predecessor() throws NullPointerException {
+            Node p = prev; return p;
+        }
+        Node() { }
+        Node(Thread thread, Node mode) {     // Used by addWaiter
+            this.nextWaiter = mode;
+            this.thread = thread;
+        }
+    }
+	private void cancelAcquire(Node node) {
+        if (node == null) return;
+        node.thread = null;
+        Node pred = node.prev;
+        while (pred.waitStatus > 0) node.prev = pred = pred.prev;
+        Node predNext = pred.next;
+        node.waitStatus = Node.CANCELLED;// 暂时就这里看懂了
+        if (node == tail && compareAndSetTail(node, pred)) {
+            compareAndSetNext(pred, predNext, null);
+        } else {
+            int ws;
+            if (pred != head && ((ws = pred.waitStatus) == Node.SIGNAL || (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) && pred.thread != null) {
+                Node next = node.next;
+                if (next != null && next.waitStatus <= 0) compareAndSetNext(pred, predNext, next);
+            } else {
+                unparkSuccessor(node);
+            }
+            node.next = node; // help GC
+        }
+    }
+}
+public abstract class java.util.concurrent.locks.AbstractOwnableSynchronizer implements java.io.Serializable {
+	private transient Thread exclusiveOwnerThread;
+    protected final void setExclusiveOwnerThread(Thread thread) { exclusiveOwnerThread = thread; }
+    protected final Thread getExclusiveOwnerThread() { return exclusiveOwnerThread; }
+}
+public interface java.util.concurrent.locks.Lock {
+    void lock();
+    void lockInterruptibly() throws InterruptedException;
+    boolean tryLock();
+    boolean tryLock(long time, TimeUnit unit) throws InterruptedException;
+    void unlock();
+    Condition newCondition();
+}
+public interface ReadWriteLock {
+    Lock readLock();
+    Lock writeLock();
+}
+public interface java.util.concurrent.locks.Condition {
+    void await() throws InterruptedException;
+    void awaitUninterruptibly();
+    long awaitNanos(long nanosTimeout) throws InterruptedException;
+    boolean await(long time, TimeUnit unit) throws InterruptedException;
+    boolean awaitUntil(Date deadline) throws InterruptedException;
+    void signal();
+    void signalAll();
+}

@@ -1,0 +1,163 @@
+1、vim hadoop-env.sh
+	export JAVA_HOME=/usr/local/app/jdk1.8.0_77
+2、vim core-site.xml
+<configuration>
+	<!-- 指定hdfs的nameservice为ns1 ,给zookeeper用-->
+	<property>
+		<name>fs.defaultFS</name>
+		<value>hdfs://ns1</value>
+	</property>
+	<!-- 指定hadoop临时目录 -->
+	<property>
+		<name>hadoop.tmp.dir</name>
+		<value>/usr/local/app/hadoop-2.6.0/tmp</value>
+	</property>
+	<!-- 指定zookeeper地址 -->
+	<property>
+		<name>ha.zookeeper.quorum</name>
+		<value>cloud01:2181,cloud02:2181,cloud03:2181</value>
+	</property>
+</configuration>
+3、vim hdfs-site.xml
+	<configuration>
+		<!--指定hdfs的nameservice为ns1，需要和core-site.xml中的保持一致 -->
+		<property>
+			<name>dfs.nameservices</name>
+			<value>ns1</value>
+		</property>
+		<!-- ns1下面有两个NameNode，分别是nn1，nn2 -->
+		<property>
+			<name>dfs.ha.namenodes.ns1</name>
+			<value>nn1,nn2</value>
+		</property>
+		<!-- nn1的RPC通信地址 -->
+		<property>
+			<name>dfs.namenode.rpc-address.ns1.nn1</name>
+			<value>cloud01:9000</value>
+		</property>
+		<!-- nn1的http通信地址 -->
+		<property>
+			<name>dfs.namenode.http-address.ns1.nn1</name>
+			<value>cloud01:50070</value>
+		</property>
+		<!-- nn2的RPC通信地址 -->
+		<property>
+			<name>dfs.namenode.rpc-address.ns1.nn2</name>
+			<value>cloud02:9000</value>
+		</property>
+		<!-- nn2的http通信地址 -->
+		<property>
+			<name>dfs.namenode.http-address.ns1.nn2</name>
+			<value>cloud02:50070</value>
+		</property>
+		<!-- 指定NameNode的元数据在JournalNode上的存放位置 -->
+		<property>
+			<name>dfs.namenode.shared.edits.dir</name>
+			<value>qjournal://cloud01:8485;cloud02:8485;cloud03:8485/ns1</value>
+		</property>
+		<!-- 指定JournalNode在本地磁盘存放数据的位置 -->
+		<property>
+			<name>dfs.journalnode.edits.dir</name>
+			<value>/usr/local/app/hadoop-2.6.0/journal</value>
+		</property>
+		<!-- 开启NameNode失败自动切换 -->
+		<property>
+			<name>dfs.ha.automatic-failover.enabled</name>
+			<value>true</value>
+		</property>
+		<!-- 配置失败自动切换实现方式 -->
+		<property>
+			<name>dfs.client.failover.proxy.provider.ns1</name>
+			<value>org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider</value>
+		</property>
+		<!-- 配置隔离机制方法，多个机制用换行分割，即每个机制暂用一行-->
+		<property>
+			<name>dfs.ha.fencing.methods</name>
+			<value>
+				sshfence
+				shell(/bin/true)
+			</value>
+		</property>
+		<!-- 使用sshfence隔离机制时需要ssh免登陆 -->
+		<property>
+			<name>dfs.ha.fencing.ssh.private-key-files</name>
+			<value>/root/.ssh/id_rsa</value>
+		</property>
+		<!-- 配置sshfence隔离机制超时时间 -->
+		<property>
+			<name>dfs.ha.fencing.ssh.connect-timeout</name>
+			<value>30000</value>
+		</property>
+	</configuration>
+2.2.4、vim mapred-site.xml
+	<configuration>
+		<!-- 指定mr框架为yarn方式 -->
+		<property>
+			<name>mapreduce.framework.name</name>
+			<value>yarn</value>
+		</property>
+	</configuration>	
+			
+2.2.5、vim yarn-site.xml
+	<configuration>
+			<!-- 开启RM高可靠 -->
+			<property>
+			   <name>yarn.resourcemanager.ha.enabled</name>
+			   <value>true</value>
+			</property>
+			<!-- 指定RM的cluster id -->
+			<property>
+			   <name>yarn.resourcemanager.cluster-id</name>
+			   <value>yrc</value>
+			</property>
+			<!-- 指定RM的名字 -->
+			<property>
+			   <name>yarn.resourcemanager.ha.rm-ids</name>
+			   <value>rm1,rm2</value>
+			</property>
+			<!-- 分别指定RM的地址 -->
+			<property>
+			   <name>yarn.resourcemanager.hostname.rm1</name>
+			   <value>cloud01</value>
+			</property>
+			<property>
+			   <name>yarn.resourcemanager.hostname.rm2</name>
+			   <value>cloud02</value>
+			</property>
+			<!-- 指定zk集群地址 -->
+			<property>
+			   <name>yarn.resourcemanager.zk-address</name>
+			   <value>cloud01:2181,cloud02:2181,cloud03:2181</value>
+			</property>
+			<property>
+			   <name>yarn.nodemanager.aux-services</name>
+			   <value>mapreduce_shuffle</value>
+			</property>
+	</configuration>
+			
+				
+6、slaves(slaves是指定子节点的位置，因为要在hadoop01上启动HDFS、在hadoop03启动yarn，所以hadoop01上的slaves文件指定的是datanode的位置，hadoop03上的slaves文件指定的是nodemanager的位置)
+	cloud01
+	cloud02
+	cloud03
+==============================================
+2.6	三台机器	hadoop-daemon.sh start journalnode
+	#运行jps命令检验多了JournalNode进程
+
+2.7格式化HDFS
+	#在hadoop01上执行命令:
+	hdfs namenode -format
+	#格式化后会在根据core-site.xml中的hadoop.tmp.dir配置生成个文件，这里我配置的是/hadoop/hadoop-2.4.1/tmp，然后将/hadoop/hadoop-2.4.1/tmp拷贝到hadoop02的/hadoop/hadoop-2.4.1/下。
+	scp -r tmp/ hadoop02:/hadoop/hadoop-2.4.1/
+
+2.8格式化ZK(在hadoop01上执行即可,相当于在zookepper注册节点)
+	hdfs zkfc -formatZK
+
+2.9启动HDFS(在hadoop01上执行)
+	start-dfs.sh
+
+2.11启动zkfc
+	hadoop-daemon.sh start zkfc
+
+2.10启动YARN(#####注意#####：是在hadoop03上执行start-yarn.sh，把namenode和resourcemanager分开是因为性能问题，因为他们都要占用大量资源，所以把他们分开了，他们分开了就要分别在不同的机器上启动)
+	sbin/start-yarn.sh

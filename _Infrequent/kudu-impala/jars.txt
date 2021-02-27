@@ -1,0 +1,60 @@
+mkdir /usr/lib/avro
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/common/lib/avro-1.7.6-cdh5.12.0.jar /usr/lib/avro/avro.jar
+mkdir /usr/lib/hadoop
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/common/lib/hadoop-annotations-2.6.0-cdh5.12.0.jar /usr/lib/hadoop/hadoop-annotations.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/common/lib/hadoop-auth-2.6.0-cdh5.12.0.jar /usr/lib/hadoop/hadoop-auth.jar
+mkdir /usr/lib/hadoop/client
+cp hbase-1.2.0-cdh5.12.0/lib/hadoop-aws-2.6.0-cdh5.12.0.jar /usr/lib/hadoop/client/hadoop-aws.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/tools/lib/hadoop-azure-datalake-2.6.0-cdh5.12.0.jar /usr/lib/hadoop/client/hadoop-azure-datalake.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/common/hadoop-common-2.6.0-cdh5.12.0.jar /usr/lib/hadoop/hadoop-common.jar
+mkdir /usr/lib/hadoop-hdfs
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/hdfs/hadoop-hdfs-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-hdfs/hadoop-hdfs.jar
+mkdir /usr/lib/hadoop-mapreduce
+cp hbase-1.2.0-cdh5.12.0/lib/hadoop-mapreduce-client-common-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-mapreduce/hadoop-mapreduce-client-common.jar
+cp hbase-1.2.0-cdh5.12.0/lib/hadoop-mapreduce-client-core-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-mapreduce/hadoop-mapreduce-client-core.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/mapreduce2/hadoop-mapreduce-client-jobclient-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-mapreduce/hadoop-mapreduce-client-jobclient.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/mapreduce2/hadoop-mapreduce-client-shuffle-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-mapreduce/hadoop-mapreduce-client-shuffle.jar
+mkdir /usr/lib/hadoop-yarn
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-api-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-api.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-client-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-client.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-common-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-common.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-server-applicationhistoryservice-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-server-applicationhistoryservice.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-server-common-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-server-common.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-server-nodemanager-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-server-nodemanager.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-server-resourcemanager-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-server-resourcemanager.jar
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/yarn/hadoop-yarn-server-web-proxy-2.6.0-cdh5.12.0.jar /usr/lib/hadoop-yarn/hadoop-yarn-server-web-proxy.jar
+mkdir /usr/lib/hbase
+cp hbase-1.2.0-cdh5.12.0/lib/hbase-annotations-1.2.0-cdh5.12.0.jar /usr/lib/hbase/hbase-annotations.jar
+cp hbase-1.2.0-cdh5.12.0/lib/hbase-client-1.2.0-cdh5.12.0.jar /usr/lib/hbase/hbase-client.jar
+cp hbase-1.2.0-cdh5.12.0/lib/hbase-common-1.2.0-cdh5.12.0.jar /usr/lib/hbase/hbase-common.jar
+cp hbase-1.2.0-cdh5.12.0/lib/hbase-protocol-1.2.0-cdh5.12.0.jar /usr/lib/hbase/hbase-protocol.jar
+mkdir -p /usr/lib/hive/lib
+cp hive-1.1.0-cdh5.12.0/lib/hive-ant-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-ant.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-beeline-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-beeline.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-common-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-common.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-exec-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-exec.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-hbase-handler-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-hbase-handler.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-metastore-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-metastore.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-serde-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-serde.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-service-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-service.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-shims-common-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-shims-common.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-shims-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-shims.jar
+cp hive-1.1.0-cdh5.12.0/lib/hive-shims-scheduler-1.1.0-cdh5.12.0.jar /usr/lib/hive/lib/hive-shims-scheduler.jar
+mkdir /usr/lib/parquet
+cp hive-1.1.0-cdh5.12.0/lib/parquet-hadoop-bundle-1.5.0-cdh5.12.0.jar /usr/lib/parquet/parquet-hadoop-bundle.jar
+mkdir /usr/lib/zookeeper
+cp hadoop-2.6.0-cdh5.12.0/share/hadoop/common/lib/zookeeper-3.4.5-cdh5.12.0.jar /usr/lib/zookeeper/zookeeper.jar
+
+mkdir -p /usr/lib/sentry/lib
+cp sentry-binding-hive-1.8.0.jar /usr/lib/sentry/lib/sentry-binding-hive.jar
+cp sentry-core-common-1.8.0.jar /usr/lib/sentry/lib/sentry-core-common.jar
+cp sentry-core-model-db-1.8.0.jar /usr/lib/sentry/lib/sentry-core-model-db.jar
+cp sentry-core-model-kafka-1.7.0.jar /usr/lib/sentry/lib/sentry-core-model-kafka.jar
+cp sentry-core-model-search-1.8.0.jar /usr/lib/sentry/lib/sentry-core-model-search.jar
+cp sentry-policy-common-1.8.0.jar /usr/lib/sentry/lib/sentry-policy-common.jar
+cp sentry-policy-db-1.7.0.jar /usr/lib/sentry/lib/sentry-policy-db.jar
+cp sentry-policy-kafka-1.7.0.jar /usr/lib/sentry/lib/sentry-policy-kafka.jar
+cp sentry-policy-search-1.7.0.jar /usr/lib/sentry/lib/sentry-policy-search.jar
+cp sentry-provider-common-1.8.0.jar /usr/lib/sentry/lib/sentry-provider-common.jar
+cp sentry-provider-file-1.7.0.jar /usr/lib/sentry/lib/sentry-provider-file.jar
+cp sentry-provider-cache-1.8.0.jar /usr/lib/sentry/lib/sentry-provider-cache.jar

@@ -1,0 +1,18 @@
+https://blog.csdn.net/xiefu5hh/article/details/78577545
+https://www.jianshu.com/p/46d89a05d7bd
+
+用以上两篇文章都没搞定，是tez-ui的问题，干脆不编译这两个子工程就可以了，即：
+<!--module>tez-ui</module>
+<module>tez-ui2</module-->
+
+mvn clean package -DskipTests=true
+
+https://blog.csdn.net/zhoudetiankong/article/details/73089225
+
+
+https://blog.csdn.net/qingzhenli/article/details/72688539
+Slider
+确定pom.xml中hadoop版本和集群的一致
+mvn clean site:site site:stage package -DskipTests
+https://blog.csdn.net/qingzhenli/article/details/72688539
+

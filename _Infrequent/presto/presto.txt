@@ -1,0 +1,90 @@
+https://blog.csdn.net/zyj8170/article/details/60954885
+https://blog.csdn.net/zzq900503/article/details/79403949
+
+1、mkdir etc
+2、vim etc/node.properties
+	node.environment=test
+	node.id=ffffffff-ffff-ffff-ffff-ffffffffff01
+	node.data-dir=/usr/local/app/presto-server-0.100/data
+3、vim etc/jvm.config
+	-server
+	-Xmx4G
+	-XX:+UseConcMarkSweepGC
+	-XX:+ExplicitGCInvokesConcurrent
+	-XX:+CMSClassUnloadingEnabled
+	-XX:+AggressiveOpts
+	-XX:+HeapDumpOnOutOfMemoryError
+	-XX:OnOutOfMemoryError=kill -9 %p
+	-XX:ReservedCodeCacheSize=150M
+4、vim etc/config.properties
+	coordinator=true
+	node-scheduler.include-coordinator=true
+	http-server.http.port=9001
+	task.max-memory=1GB
+	discovery-server.enabled=true
+	discovery.uri=http://192.169.58.171:9001
+5、make etc/catalog 
+vim hive.properties
+	connector.name=hive-hadoop2
+	hive.metastore.uri=thrift://pseudo:9083
+	hive.config.resources=/usr/local/app/hadoop-2.7.2/etc/hadoop/core-site.xml,/usr/local/app/hadoop-2.7.2/etc/hadoop/hdfs-site.xml
+	hive.allow-drop-table=true
+vim jmx.properties
+	connector.name=jmx
+
+6、bin/launcher start (launcher run前台启动 看日志)
+hive --service metastore & 
+./presto.jar --server 192.168.58.171:9001 --catalog hive --schema default
+
+
+--------
+新版本中
+config.properties
+task.max-memory=1GB 改为
+query.max-memory=50GB
+query.max-memory-per-node=1GB
+即：
+coordinator=true
+node-scheduler.include-coordinator=true
+http-server.http.port=9001
+query.max-memory=50GB
+query.max-memory-per-node=1GB
+discovery-server.enabled=true
+discovery.uri=http://cloud01:9001
+=================================
+分布式（新版本）
+coordinator节点不变
+worker节点：
+coordinator=false
+http-server.http.port=9001
+query.max-memory=50GB
+query.max-memory-per-node=1GB
+discovery.uri=http://cloud01:9001
+node.properties也要相应更改一下
+
+===========================kafka============================
+https://prestodb.io/docs/current/connector/kafka-tutorial.html
+1、vim etc/catalog/kafka.properties
+connector.name=kafka
+kafka.nodes=localhost:9092
+kafka.table-names=tpch.customer,tpch.orders,tpch.lineitem,tpch.part,tpch.partsupp,tpch.supplier,tpch.nation,tpch.region
+kafka.hide-internal-columns=false
+
+curl -o kafka-tpch https://repo1.maven.org/maven2/de/softwareforge/kafka_tpch_0811/1.0/kafka_tpch_0811-1.0.sh
+755 kafka_tpch_0811-1.0.sh
+./kafka_tpch_0811-1.0.sh load --brokers localhost:9092 --prefix tpch. --tpch-type tiny
+./presto-cli-0.200-executable.jar --server 192.168.58.171:9001  --catalog kafka --schema tpch
+SELECT count(*) FROM customer;
+
+========================================================
+discovery-server.enabled：Presto 通过Discovery 服务来找到集群中所有的节点。为了能够找到集群中所有的节点，每一个Presto实例都会在启动的时候将自己注册到discovery服务。Presto为了简化部署，并且也不想再增加一个新的服务进程，Presto coordinator 可以运行一个内嵌在coordinator 里面的Discovery 服务。这个内嵌的Discovery 服务和Presto共享HTTP server并且使用同样的端口。
+discovery.uri：Discovery server的URI。由于启用了Presto coordinator内嵌的Discovery 服务，因此这个uri就是Presto coordinator的uri。修改example.net:8080， 根据你的实际环境设置该URI。注意：这个URI一定不能以“/“结尾。
+==========================presto技术内幕==============================
+1、性能略有提升：group by 时将值多的字段放左边
+2、or like 改成 regexp_like
+3、用orc存储，相比其它格式，随着数据量增大，orc效率更高。orc文件头存了文件的元信息，尤其在count时效率特别高
+4、默认 distributed hash join ，join时左表会发达右表数据所在结点，出于内存的考虑，大表要在左边
+5、数据倾斜时在session中关闭 distributed hash join ，小表放右边。
+6、maven 编译时加-T2C参数，一个CPU启动两个线程
+7、datanucleus.fixedDatastore，hive的配置，是否固定元数据库，默认false，设置为true时效率会高，不进行元数据结构的检查。启动metastore时好像可以用 -p 指定端口号
+8、6.2.2

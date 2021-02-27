@@ -1,0 +1,34 @@
+之前集合过，文档找不到了，这版还有不少问题，根本原因应该是版本不匹配，如果用cdf5.12什么都不用
+https://www.iteblog.com/archives/1718.html
+
+--hiveconf hive.root.logger=DEBUG,console
+set hive.zookeeper.quorum=pseudo:2181;
+
+create 'some_existing_table2','cf1'
+put 'some_existing_table','k1','cf1:val','v1'
+
+create table hive_hbase_test(key int,value string) 
+stored by 'org.apache.hadoop.hive.hbase.HBaseStorageHandler' 
+with serdeproperties("hbase.columns.mapping"=":key,cf1:val") 
+tblproperties("hbase.table.name"="hive_hbase_test");
+
+create table personas(username string,card string,tel string,gender string,age int , profession string,orderNum string,ticketNum string,isStudent string,uns string,un_num int,address string)row format delimited fields terminated by ',';
+rowkey名好你要叫key,
+CREATE TABLE portait(username string,card string,tel string,gender string,age int ,profession string,orderNum string,ticketNum string,isStudent string,uns string,un_num int,address string)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,cf:card,cf:tel,cf:gender,cf:age,cf:profession,cf:orderNum,cf:ticketNum,cf:isStudent,cf:uns,cf:un_num,cf:address")
+TBLPROPERTIES ("hbase.table.name" = "portait", "hbase.mapred.output.outputtable" = "portait");
+===========================
+spark读取该表时除了$HIVE_HOME/lib/*hbase*jar外，还要导入$HBASE_HOME/lib下的如下包
+[root@pseudo lib]# cp hbase-server-1.2.0-cdh5.12.0.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars
+[root@pseudo lib]# cp hbase-client-1.2.0-cdh5.12.0.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars
+[root@pseudo lib]# cp htrace-core-3.2.0-incubating.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars
+[root@pseudo lib]# cp htrace-core-3.2.0-incubating.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars/me
+[root@pseudo lib]# cp htrace-core-3.2.0-incubating.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars/me
+[root@pseudo lib]# cp metrics-core-2.2.0.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars/
+[root@pseudo lib]# cp hbase-server-1.2.0-cdh5.12.0.jar /usr/local/app/spark-2.2.0-bin-hadoop2.6/jars
+
+============================
+在hive中执行 where rowkey= 操作时非常快，但是执行where rowkey in 操作时，特别慢甚至远慢于普通表，我想应该是走了全表扫描。
+用sparksql读时即便是where rowkey=也是异常的慢
+

@@ -1,0 +1,183 @@
+1、mvn assembly:assembly -DskipTests
+2、添加阿里云镜像，有时在 settings.xml 的<mirrors> 中改了全局配置不完全生效，还要在 pom.xml 的<repositorys>中加些配置
+<mirror>
+<id>nexus-aliyun</id>
+<mirrorOf>central</mirrorOf>
+<name>Nexus aliyun</name>
+<url>http://maven.aliyun.com/nexus/content/groups/public</url>
+</mirror>
+
+  <repository>
+  <id>alimaven</id>
+  <name>aliyun maven</name>
+  <url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+  <releases>
+  <enabled>true</enabled>
+  </releases>
+  <snapshots>
+  <enabled>false</enabled>
+  </snapshots>
+  </repository>
+3、maven打包，有时configuration要放开，再不行就新建工程吧
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>2.3</version>
+				<!-- <configuration>
+					<source>1.7</source>
+					<target>1.7</target>
+					<compilerId>eclipse</compilerId>
+				</configuration> -->
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+						<configuration>
+							<transformers>
+								<transformer
+									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+									<mainClass>com.xryj.Url2Json</mainClass>
+								</transformer>
+							</transformers>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+用正下面这个好像更简单诶
+	<build>
+		<plugins>
+			<plugin>
+				<artifactId>maven-assembly-plugin</artifactId>
+				<configuration>
+					<appendAssemblyId>false</appendAssemblyId>
+					<descriptorRefs>
+						<descriptorRef>jar-with-dependencies</descriptorRef>
+					</descriptorRefs>
+				</configuration>
+				<executions>
+					<execution>
+						<id>make-assembly</id>
+						<phase>package</phase>
+						<goals>
+							<goal>assembly</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+打包时加主类：
+	<plugin>
+		<groupId>org.apache.maven.plugins</groupId>
+		<artifactId>maven-jar-plugin</artifactId>
+		<configuration>
+			<archive>
+				<manifest>
+					<mainClass>org.apache.hadoop.WordCountSimple</mainClass>
+				</manifest>
+			</archive>
+		</configuration>
+	</plugin>
+
+
+16、mavrn 打包时打入依赖
+  <build>
+    <sourceDirectory>${basedir}/src</sourceDirectory>
+    <plugins>
+      <plugin>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <configuration>
+          <descriptorRefs>
+            <descriptorRef>jar-with-dependencies</descriptorRef>
+          </descriptorRefs>
+        </configuration>
+        <executions>
+          <execution>
+            <id>make-assembly</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+<dependency>标签中加入 <scope>compile</scope>或<scope>provided</scope>可以控制是否加入此依赖包
+
+17、
+<build>
+	<plugins>
+		<plugin>
+			<artifactId>maven-assembly-plugin</artifactId>
+			<configuration>
+				<appendAssemblyId>false</appendAssemblyId>
+				<descriptorRefs>
+					<descriptorRef>jar-with-dependencies</descriptorRef>
+				</descriptorRefs>
+			</configuration>
+			<executions>
+				<execution>
+					<id>make-assembly</id>
+					<phase>package</phase>
+					<goals>
+						<goal>assembly</goal>
+					</goals>
+				</execution>
+			</executions>
+		</plugin>
+
+	</plugins>
+</build>
+18、既加 main 又加依赖
+<build>
+
+        <plugins>
+            <!--(start) for package jar with dependencies -->
+            <plugin>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.0.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>org.apache.hadoop.WordCountSimple</mainClass>
+                        </manifest>
+                    </archive>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id> <!-- this is used for inheritance merges -->
+                        <phase>package</phase> <!-- bind to the packaging phase -->
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!--(end) for package jar with dependencies -->
+        </plugins>
+    </build>
+19. 经测试这个插件可以实现 scala, java 文件都打包
+<plugin>
+	<groupId>org.scala-tools</groupId>
+	<artifactId>maven-scala-plugin</artifactId>
+	<version>2.15.2</version>
+	<executions>
+		<execution>
+			<goals>
+				<goal>compile</goal>
+				<goal>testCompile</goal>
+			</goals>
+		</execution>
+	</executions>
+</plugin>

@@ -1,0 +1,332 @@
+mvn clean package -DskipTests -Pdist,native -Dtar -Dmaven.javadoc.skip=true
+
+1、getJobReport 方法使用反射, 也好理解, 相当于一种代理/解藕, 如同 pb 中的 callBlockingMethod 或 java 动态代理
+  话说回来这种处理方式就如同 java 动态代理, 只不过不是通过动态生成字节码而是配置实现类
+  但是实现类内部用的却是动态代理. 即便是 protocolEngine, 也不是用 stub 那种方式,见 MRClientProtocolPBClientImpl 说明之, 不用 stub 也好理解, 
+  因为两种 engine 用同一套 client.call 接口, 基于这一点一切都好理解了, 而且说真的, stub 似乎没有 java 动态代理简单
+
+2、submitJob 用动态代理, 似乎只是因为 RetryInvocationHandler 看名字就知道了, 即两层动态代理, 第一层同上. 当然如果为实现 Retry 功能 hbase 的方式也挺好的但是好像用起来没这样方便
+3、nameNode client api 同样两层代理, 略有不同
+4、namenode.getBlockLocations(src, start, length);返回值为 LocatedBlocks, read 操作要先获取 block 信息
+
+public class WordCountSimple {
+    private static final Log LOG = LogFactory.getLog(WordCountSimple.class);
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        conf.set("fs.defaultFS", "hdfs://192.168.58.130:9000");
+        Job job = Job.getInstance(conf, "WordCountSimple");
+        job.setJarByClass(WordCountSimple.class);// 本质是写到 job.getConfiguration() 中了, 切记呀和 conf 可不是一个
+        job.setMapperClass(MyMapper.class);
+        job.setReducerClass(MyReduce.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        job.setNumReduceTasks(1);
+        FileInputFormat.setInputPaths(job, args[0]);// 本质是写到 job.getConfiguration().get("mapreduce.input.fileinputformat.inputdir"));
+        Path out = new Path(args[1]);
+        FileOutputFormat.setOutputPath(job, out);
+        FileSystem hdfs = FileSystem.get(conf);
+        if (hdfs.exists(out)){
+            hdfs.delete(out, true);
+        }
+        if (!job.waitForCompletion(true)) return;
+    }
+}
+public class org.apache.hadoop.mapreduce.Job extends JobContextImpl implements JobContext {
+	private Cluster cluster;
+	Job(JobConf conf) throws IOException {
+		super(conf, null);
+	}
+	public static Job getInstance(Configuration conf, String jobName) throws IOException {
+		Job result = getInstance(conf);
+		result.setJobName(jobName);
+		return result;
+	}
+	public static Job getInstance(Configuration conf) throws IOException {
+		JobConf jobConf = new JobConf(conf);
+		return new Job(jobConf);
+	}
+	public void setJarByClass(Class<?> cls) {
+		conf.setJarByClass(cls);
+	}
+	public void setMapperClass(Class<? extends Mapper> cls) throws IllegalStateException {
+		conf.setClass(MAP_CLASS_ATTR, cls, Mapper.class);// mapreduce.job.map.class
+	}
+	public boolean waitForCompletion(boolean verbose ) throws IOException, InterruptedException, ClassNotFoundException {
+		submit();
+		monitorAndPrintJob();
+		return isSuccessful();
+	}
+	public void submit() throws IOException, InterruptedException, ClassNotFoundException {
+		setUseNewAPI();
+		connect();
+		final JobSubmitter submitter = getJobSubmitter(cluster.getFileSystem(), cluster.getClient());//cluster.getFileSystem 不必细究就是 DistributedFileSystem
+		status = submitter.submitJobInternal(Job.this, cluster);
+	}
+	private synchronized void connect() throws IOException, InterruptedException, ClassNotFoundException {
+		cluster = return new Cluster(getConfiguration());
+	}
+	public boolean monitorAndPrintJob() throws IOException, InterruptedException {
+		Job.TaskStatusFilter filter;
+		filter = Job.getTaskOutputFilter(clientConf);
+		JobID jobId = getJobID();
+		int progMonitorPollIntervalMillis = Job.getProgressPollInterval(clientConf);
+		boolean reportedAfterCompletion = false;
+		boolean reportedUberMode = false;
+		while (!isComplete() || !reportedAfterCompletion) {
+		  if (isComplete()) {
+			reportedAfterCompletion = true;
+		  } else {
+			Thread.sleep(progMonitorPollIntervalMillis);
+		  }
+		  String report = (" map " + StringUtils.formatPercent(mapProgress(), 0)+ " reduce " + StringUtils.formatPercent(reduceProgress(), 0));
+		}
+		boolean success = isSuccessful();
+		Counters counters = getCounters();
+		LOG.info(counters.toString());// 这就是在控制台看到的那些计数器
+		return success;
+	}
+	public boolean isComplete() throws IOException {
+		updateStatus();
+		return status.isJobComplete();
+	}
+	public boolean isSuccessful() throws IOException {
+		updateStatus();
+		return status.getState() == JobStatus.State.SUCCEEDED;
+	}
+	synchronized void updateStatus() throws IOException {
+		this.status = cluster.getClient().getJobStatus(status.getJobID());
+	}
+	public Counters getCounters() throws IOException {
+	  return cluster.getClient().getJobCounters(getJobID());
+	}
+	public float mapProgress() throws IOException {
+		return status.getMapProgress();
+	}
+	public float reduceProgress() throws IOException {
+		return status.getReduceProgress();
+	}
+	public JobSubmitter getJobSubmitter(FileSystem fs, ClientProtocol submitClient) throws IOException {
+		return new JobSubmitter(fs, submitClient);
+	}
+}
+public class org.apache.hadoop.mapreduce.Cluster {
+	private Configuration conf;
+	private ClientProtocolProvider clientProtocolProvider;
+	private ClientProtocol client;
+	public Cluster(Configuration conf) throws IOException {
+		this(null, conf);
+	}
+	public Cluster(InetSocketAddress jobTrackAddr, Configuration conf) throws IOException {
+		this.conf = conf;
+		initialize(jobTrackAddr, conf);
+	}
+	private void initialize(InetSocketAddress jobTrackAddr, Configuration conf) throws IOException { //利用了 java 的 ServiceLoader 框架，过程略过
+		clientProtocolProvider = provider;//org.apache.hadoop.mapred.YarnClientProtocolProvider
+		client = clientProtocol;//org.apache.hadoop.mapred.YARNRunner, 应该不能小看, 这貌似是个全局的 client 
+	}
+}
+class org.apache.hadoop.mapreduce.JobSubmitter {
+	private ClientProtocol submitClient;
+	JobSubmitter(FileSystem submitFs, ClientProtocol submitClient) throws IOException {
+		this.submitClient = submitClient;
+	}
+	JobStatus submitJobInternal(Job job, Cluster cluster) { //略过了此方法的很多细节
+		Configuration conf = job.getConfiguration();
+		Path jobStagingArea = JobSubmissionFiles.getStagingDir(cluster, conf);///tmp/hadoop-yarn/staging/tyx/.staging --hdfs上的
+		JobID jobId = submitClient.getNewJobID();//好像是 RS 创建出来的，而且应该只有这里与 RS 交互了一次吧(其它就是获取 job 的进度和状态)，所以这才是真正提交 job
+		job.setJobID(jobId);
+		Path submitJobDir = new Path(jobStagingArea, jobId.toString());
+		JobStatus status = null;
+		//conf.get("tmpfiles");"tmpjars";"tmparchives";job.getJar();其实是去取 "mapreduce.job.jar", 但是哪里赋的值还没看到，可能在 hadoop jar 时
+		//其实传上去的 /tmp/hadoop-yarn/staging/tyx/.staging/job_1581761880939_0002/job.jar 就是本地的jar包改了名
+		  copyAndConfigureFiles(job, submitJobDir);	
+			// 有必要说的就是 get Locations 时应该是用 RPC 调了 nameNode 暂不细究。然后把 split 信息写到了与 job.jar 同级的 job.split 下
+			// 至于 Split 的长相看下构造方法就知道有啥了 FileSplit(Path file, long start, long length, String[] hosts, String[] inMemoryHosts) 
+		  int maps = writeSplits(job, submitJobDir);
+		  writeConf(conf, submitJobFile);// 写到了 job.xml 中，目录同上
+		  status = submitClient.submitJob(jobId, submitJobDir.toString(), job.getCredentials());
+   		  return status;
+	}
+}
+
+public class org.apache.hadoop.mapreduce.task.JobContextImpl implements JobContext {
+	protected final org.apache.hadoop.mapred.JobConf conf;
+	public JobContextImpl(Configuration conf, JobID jobId) {
+		if (conf instanceof JobConf) {
+			this.conf = (JobConf)conf;
+		} else {
+			this.conf = new JobConf(conf);
+		}
+		this.jobId = jobId;
+	}
+}
+public class org.apache.hadoop.mapred.YARNRunner implements ClientProtocol {
+	private ResourceMgrDelegate resMgrDelegate;
+	private ClientCache clientCache;
+	public YARNRunner(Configuration conf, ResourceMgrDelegate resMgrDelegate, ClientCache clientCache) {
+		this.conf = conf;
+		this.resMgrDelegate = resMgrDelegate;
+		this.clientCache = clientCache;
+	}
+	public JobStatus getJobStatus(JobID jobID) throws IOException, InterruptedException {
+		JobStatus status = clientCache.getClient(jobID).getJobStatus(jobID);
+		return status;
+	}
+	public JobStatus submitJob(JobID jobId, String jobSubmitDir, Credentials ts) throws IOException, InterruptedException {
+		ApplicationSubmissionContext appContext = createApplicationSubmissionContext(conf, jobSubmitDir, ts);
+		ApplicationId applicationId = resMgrDelegate.submitApplication(appContext);
+		return clientCache.getClient(jobId).getJobStatus(jobId);
+	}
+}
+public class org.apache.hadoop.mapred.ResourceMgrDelegate extends YarnClient {
+	protected YarnClient client;
+	public ResourceMgrDelegate(YarnConfiguration conf) {
+		this.client = YarnClient.createYarnClient();
+		init(conf);
+		start();
+	}
+	public ApplicationId submitApplication(ApplicationSubmissionContext appContext) throws YarnException, IOException {
+		return client.submitApplication(appContext);
+	}
+	public ApplicationReport getApplicationReport(ApplicationId appId) throws YarnException, IOException {
+		return client.getApplicationReport(appId);
+	}
+	protected void serviceInit(Configuration conf) throws Exception {
+		client.init(conf);
+		super.serviceInit(conf);
+	}
+	protected void serviceStart() throws Exception {
+		client.start();
+		super.serviceStart();
+	}
+}
+public class org.apache.hadoop.mapred.ClientServiceDelegate {
+	public JobStatus getJobStatus(JobID oldJobID) throws IOException {
+		org.apache.hadoop.mapreduce.v2.api.records.JobId jobId = TypeConverter.toYarn(oldJobID);
+		GetJobReportRequest request = recordFactory.newRecordInstance(GetJobReportRequest.class);
+		request.setJobId(jobId);
+		JobReport report = ((GetJobReportResponse) invoke("getJobReport", GetJobReportRequest.class, request)).getJobReport();
+		JobStatus jobStatus = TypeConverter.fromYarn(report, url);
+		return jobStatus;
+	}
+	private synchronized Object invoke(String method, Class argClass, Object args) throws IOException {
+		Method methodOb = MRClientProtocol.class.getMethod(method, argClass);
+		while (maxClientRetry > 0) {
+			MRClientProtocol mRClientProxy = null;
+			mRClientProxy = getProxy();
+			return methodOb.invoke(mRClientProxy, args);
+		}
+	}
+	private MRClientProtocol getProxy() throws IOException {
+		if (realProxy != null) {
+			return realProxy;
+		}
+		ApplicationReport application = null;
+		application = rm.getApplicationReport(appId);
+		InetSocketAddress serviceAddr = null;
+		while (application == null || YarnApplicationState.RUNNING == application.getYarnApplicationState()) {
+			serviceAddr = NetUtils.createSocketAddrForHost(application.getHost(), application.getRpcPort());// MRAppMaster 的端口
+			final InetSocketAddress finalServiceAddr = serviceAddr;
+			realProxy = instantiateAMProxy(finalServiceAddr);
+			return realProxy;
+		}
+		return realProxy;
+	}
+	MRClientProtocol instantiateAMProxy(final InetSocketAddress serviceAddr) throws IOException {
+		YarnRPC rpc = YarnRPC.create(conf);// 去 nodemanager 篇看
+		MRClientProtocol proxy = (MRClientProtocol) rpc.getProxy(MRClientProtocol.class, serviceAddr, conf);
+		return proxy;
+	}
+}
+public abstract class org.apache.hadoop.yarn.client.api.YarnClient extends AbstractService {
+	public static YarnClient createYarnClient() {
+		YarnClient client = new YarnClientImpl();
+		return client;
+	}
+}
+public class org.apache.hadoop.yarn.client.api.impl.YarnClientImpl extends YarnClient {
+	protected ApplicationClientProtocol rmClient;
+	public YarnClientImpl() {
+		super(YarnClientImpl.class.getName());
+	}
+	protected void serviceStart() throws Exception {
+		rmClient = ClientRMProxy.createRMProxy(getConfig(), ApplicationClientProtocol.class);
+	}
+}
+public class org.apache.hadoop.yarn.client.ClientRMProxy<T> extends RMProxy<T>  {
+	private static final ClientRMProxy INSTANCE = new ClientRMProxy();
+	public static <T> T createRMProxy(final Configuration configuration, final Class<T> protocol) throws IOException {
+		return createRMProxy(configuration, protocol, INSTANCE);
+	}
+	protected static <T> T createRMProxy(final Configuration configuration, final Class<T> protocol, RMProxy instance) throws IOException {
+		RetryPolicy retryPolicy = createRetryPolicy(conf);
+		InetSocketAddress rmAddress = instance.getRMAddress(conf, protocol);
+		T proxy = RMProxy.<T>getProxy(conf, protocol, rmAddress);
+		return (T) RetryProxy.create(protocol, proxy, retryPolicy);// 应该不用再看了, 与 hdfs 类似吧
+	}
+}
+public class org.apache.hadoop.yarn.client.RMProxy<T> {
+	static <T> T getProxy(final Configuration conf, final Class<T> protocol, final InetSocketAddress rmAddress) throws IOException {
+		YarnRPC rpc = YarnRPC.create(conf);
+		return (T) rpc.getProxy(protocol, rmAddress, conf);
+	}
+}
+public class org.apache.hadoop.conf.Configuration implements Iterable<Map.Entry<String,String>>, Writable {
+	// *** 用到了 AtomicReference ConcurrentHashMap WeakHashMap CopyOnWriteArrayList, 这个类挺复杂的有精力要看下
+	public void set(String name, String value) {
+		set(name, value, null);// 这个 set 方法有点复杂, 但本质就是往 Properties 塞值
+	}
+	public void setClass(String name, Class<?> theClass, Class<?> xface) {
+		set(name, theClass.getName());
+	}
+	public String get(String name) {
+		String[] names = handleDeprecation(deprecationContext.get(), name);
+		String result = null;
+		for(String n : names) {
+			result = substituteVars(getProps().getProperty(n));// 去 Properties 拿值
+		}
+		return result;
+	}
+}
+
+public class org.apache.hadoop.mapreduce.JobStatus implements Writable, Cloneable {
+	private float mapProgress;
+	private float reduceProgress;
+}
+public interface org.apache.hadoop.mapreduce.JobContext extends MRJobConfig {
+}
+public interface org.apache.hadoop.mapreduce.MRJobConfig {
+	// N 多个常量
+	public static final String JAR = "mapreduce.job.jar";
+}
+public class org.apache.hadoop.mapred.JobConf extends Configuration {
+	public void setJarByClass(Class cls) {
+		String jar = ClassUtil.findContainingJar(cls);
+		if (jar != null) {
+			setJar(jar);
+		}
+	}
+	public void setJar(String jar) { set(JobContext.JAR, jar); }//JobContext.JAR:mapreduce.job.jar 此 set 方法就进入了 Configuration
+}
+
+public class org.apache.hadoop.mapreduce.v2.api.impl.pb.client.MRClientProtocolPBClientImpl implements MRClientProtocol, Closeable {
+	protected MRClientProtocolPB proxy;
+	public MRClientProtocolPBClientImpl(long clientVersion, InetSocketAddress addr, Configuration conf) throws IOException {
+		RPC.setProtocolEngine(conf, MRClientProtocolPB.class, ProtobufRpcEngine.class);
+		proxy = RPC.getProxy(MRClientProtocolPB.class, clientVersion, addr, conf);
+	}
+	public GetJobReportResponse getJobReport(GetJobReportRequest request) throws IOException {
+		// request 与 response 用了 PB, callBlockingMethod 并没有用, 即没有用 
+		// service MRClientProtocolService {rpc getJobReport (GetJobReportRequestProto) returns (GetJobReportResponseProto);}
+		GetJobReportRequestProto requestProto = ((GetJobReportRequestPBImpl)request).getProto();
+		return new GetJobReportResponsePBImpl(proxy.getJobReport(null, requestProto));
+	}
+}
+public class org.apache.hadoop.mapreduce.v2.api.protocolrecords.impl.pb.GetTaskReportResponsePBImpl extends ProtoBase<GetTaskReportResponseProto> implements GetTaskReportResponse {
+	GetTaskReportResponseProto proto = GetTaskReportResponseProto.getDefaultInstance();
+	boolean viaProto = false;
+	public GetTaskReportResponsePBImpl(GetTaskReportResponseProto proto) {
+		this.proto = proto;
+		viaProto = true;
+	}
+}

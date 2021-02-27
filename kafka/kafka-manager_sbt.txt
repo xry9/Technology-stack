@@ -1,0 +1,6 @@
+1、kafkamanager源码下载：https://github.com/yahoo/kafka-manager/releases
+2、sbt下载解压即可，配置一下环境变量
+3、在解压目录下执行：sbt clean dist
+4、解压，vim conf/application.conf
+	kafka-manager.zkhosts="localhost:2181"
+5、bin/kafka-manager -Dconfig.file=/path/to/application.conf -Dhttp.port=8080（默认端口是9000）

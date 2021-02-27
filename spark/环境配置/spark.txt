@@ -1,0 +1,180 @@
+scala安装：
+1、rpm -ivh scala-2.11.7.rpm
+2、键入scala即可进入命令行
+=============================
+单机：
+0、yum install -y lrzsz(软件名)--会把依赖的软件一并安装好
+	chkconfig iptables off，chkconfig 服务名 off|on 禁止或开户开机自启动
+	chkconfig --list列出所有服务
+1、cp spark-env.sh.template spark-env.sh
+2、加入SPARK_LOCAL_IP=192.168.58.160（或hadpure）
+3、bin/spark-shell --master=local
+4、val l1 = sc.makeRDD(List(1,2,3,4))
+	--与hadoop整合，HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
+	--配置slaves，同时启动master,slave
+spark-submit --master=local --class org.apache.spark.examples.SparkPi /usr/local/app/spark-1.5.2-bin-hadoop2.6/lib/spark-examples-1.5.2-hadoop2.6.0.jar
+====================================
+集群：
+1、sbin/start-master.sh
+2、sbin/start-slave.sh spark://pseudo:7077 --动态添加work
+	--只配了hosts文件映射，没有配主机名，造成连不上，用ip就可以了，据此分析，当做为服务时只配映射不配主机名就玩儿不转了
+3、bin/spark-shell --master=spark://pseudo:7077
+----
+另一种方式：
+1、ssh免登录	ssh-keygen	ssh-copy-id spark1
+2、配slaves
+3、spark-env.sh中加入	SPARK_MASTER_IP=spark2	JAVA_HOME=/usr/local/app/jdk1.8.0_77
+4、sbin/start-all.sh
+	----在从机器执行只能把所有Worker起动
+----
+与hadoop整合
+A)用spaek-shell客户端连接集群时：
+	方式1、val file = sc.textFile("hdfs://cloud02:9000/spark/words.txt",2)	file.first
+		不需要做任何配置，只要写是active的namenode就可以访问文件
+	方式2、无论集群外节点在主节点还是从节点或是集群外机器，只要把Hadoop集群的core-site.xml和hdfs-site.xml拷到本机SPARK_HOME/conf下即可
+	方式3、无论集群外节点在主节点还是从节点，只要在spark-env.sh中加入HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
+B)spark-submit任务时
+	同spaek-shell，还要在代码中sc.hadoopConfiguration.addResource("core-site.xml");sc.hadoopConfiguration.addResource("hdfs-site.xml");(core-site.xml,hdfs-site.xml加入classpath)
+	（core-site.xml,hdfs-site.xml不加入jar包的classpath也可，只要SPARK_HOME/conf或配置了HADOOP_CONF_DIR，没有严格验证）
+====================================
+sparkSql:
+1、bin/spark-shell --master=local --jars=mysql-connector-java-5.1.38.jar   --driver-class-path=mysql-connector-java-5.1.38.jar
+	--注：jar包用5.0的都不行;集群方式连接也可以
+2、val prop = new java.util.Properties
+	prop.put("user", "root")
+	prop.put("password", "root")
+	val df = sqlContext.read.jdbc("jdbc:mysql://192.168.58.1:3306/jsd", "t_emp", prop)--物理机的mysql
+3、df.write.jdbc("jdbc:mysql://192.168.58.1:3306/jsd", "t_emp2", prop)
+	df.write.json("hdfs://192.168.58.161:9000/sparkResult/json")
+====================================
+sparkStremaing:
+1、yum install -y nc	nc -lk 9999  (nc localhost 9999)
+2、
+import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.spark.streaming.StreamingContext._
+val ssc = new StreamingContext(sc, Seconds(10))
+val dstream = ssc.socketTextStream("localhost", 9999)
+.flatMap(_.split(" "))
+.map((_, 1))
+.reduceByKey(_ + _)
+.print()// dstream.print()
+ssc.start()
+
+3、
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.StreamingContext._ 
+val ssc = new StreamingContext(sc, Seconds(10))
+//val ds = ssc.textFileStream("file:///root/temp")
+val ds = ssc.textFileStream("/spark/dir1")
+ds.flatMap(_.split(" ")).map{x=>(x,1)}.reduceByKey{(x,y)=>x+y}.print
+ssc.start
+4、
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.StreamingContext._ 
+val ssc = new StreamingContext(sc, Seconds(10))
+ssc.checkpoint("ck1") // 保存点
+val ds = ssc.socketTextStream("localhost", 9999)
+ds.flatMap(_.split(" ")).map{x=>(x,1)}.updateStateByKey{
+  (seq,op:Option[Int])=>   Some(seq.sum+op.getOrElse(0))
+}.print
+ssc.start
+5、
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.StreamingContext._ 
+val ssc = new StreamingContext(sc, Seconds(10))
+ssc.checkpoint("ck1") // 保存点,/user/root/ck1
+val ds = ssc.socketTextStream("localhost", 9999)
+ds.flatMap(_.split(" ")).map{x=>(x,1)}.
+reduceByKeyAndWindow((x:Int,y:Int)=>{x+y}, Seconds(30), Seconds(20)).print
+ssc.start
+6、
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.StreamingContext._ 
+val ssc = new StreamingContext(sc, Seconds(10))
+ssc.checkpoint("ck1") // 保存点
+val ds = ssc.socketTextStream("localhost", 9999)
+ds.flatMap(_.split(" ")).map{x=>(x,1)}.reduceByKeyAndWindow((x:Int,y:Int)=>{x+y}, Seconds(30), Seconds(20))
+.saveAsTextFiles("/spark/streaming/window")
+ssc.start
+7、
+bin/spark-shell --master=spark://pseudo:7077 --jars=jars/slf4j-api-1.7.10.jar,jars/bee-client_2.10-0.28.0.jar 
+import org.apache.spark.{SparkContext, SparkConf}
+import org.apache.spark.streaming.{Seconds, StreamingContext}
+import uk.co.bigbeeconsultants.http._
+import uk.co.bigbeeconsultants.http.request.RequestBody
+import java.net.URL
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.StreamingContext._ 
+
+val ssc = new StreamingContext(sc, Seconds(10))
+ssc.checkpoint("ck01")
+val ds = ssc.socketTextStream("localhost", 9999)
+val ds2 = ds.flatMap(_.split(" ")).map{x=>(x,1)}.reduceByKey{(x,y)=>x+y}
+ds2.foreachRDD((rdd,time)=>{
+var arr=rdd.sortBy(x=> x._2,false).map{x=>"{\""+x._1+":"+x._2+",\"time\":"+time+"}"}.collect.mkString("[",",","]");//take(5)
+val requestBody=RequestBody(Map("json"->arr));
+val url = new URL("http://192.168.58.1:8080/sparkStreaming-web/JsonServlet");
+new HttpClient().post(url,Some(requestBody))}) 
+ssc.start
+
+===================================
+kafka:
+1、bin/zookeeper-server-start.sh config/zookeeper.properties
+2、bin/kafka-server-start.sh config/server.properties
+3、bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic test
+4、bin/kafka-topics.sh --list --zookeeper localhost:2181
+5、bin/kafka-console-producer.sh --broker-list localhost:9092 --topic test
+	--输入
+6、bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic test --from-beginning
+7、bin/spark-shell --master=local[2] --jars=spark-streaming-kafka_2.10-1.5.2.jar,kafka_2.10-0.8.2.1.jar,kafka-clients-0.8.2.1.jar,metrics-core-2.2.0.jar,zkclient-0.3.jar 
+8、
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.StreamingContext._ 
+import org.apache.spark.streaming.kafka._
+val ssc = new StreamingContext(sc, Seconds(10))
+val dstream = KafkaUtils.createStream(ssc, "localhost:2181", "group1", Map("test"->1)) 
+dstream.map(x=>(x._2,1)).reduceByKey{ (x,y)=> x+y }.print
+ssc.start
+9、bin/spark-submit --master=local[2] --class=test.MyStreaming --jars=spark-streaming-kafka_2.10-1.5.2.jar,kafka_2.10-0.8.2.1.jar,kafka-clients-0.8.2.1.jar,metrics-core-2.2.0.jar,zkclient-0.3.jar streaming.jar
+
+==================================
+import scala.sys.process._
+val file = sc.textFile("file:///usr/local/app/spark-1.5.2-bin-hadoop2.6/README.md",2)
+ps -ef | grep java
+==================================
+spark on hive时只需把hive元数据文件放到$SPARK_HOME/conf下，改名为hive-site.xml，提交作业时加上--driver-class-path mysql驱动包
+----
+想要查看运行作业的日志
+vim spark-defaults.conf
+spark.eventLog.enabled           true
+spark.eventLog.dir               hdfs://pseudo:9000/sparkLog
+查看历史日志
+vim spark-env.sh
+SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=hdfs://pseudo:9000/sparkLog"
+start-history-server.sh	web端口 18080
+----spark on yarn 日志配置
+0、mapreduce任务日志查看好用为前提
+1、vim spark-defaults.conf
+spark.eventLog.enabled           true
+spark.eventLog.dir               hdfs://ns1/sparkLog
+spark.history.fs.logDirectory=hdfs://ns1/sparkLog
+spark.yarn.historyServer.address=cloud01:18080
+2、vim yarn-site.xml
+<property>
+<name>yarn.log.server.url</name>
+<value>http://cloud01:19888/jobhistory/logs</value>
+<!--查看spark Executor的输出日志时用到-->
+</property>
+
+----
+在spark-env.sh中加入如下，就可不必指定 --driver-class-path，--jars没试
+SPARK_CLASSPATH=/root/jars/mysql-connector-java-5.1.38-bin.jar
+--
+或者在作业提交之前在Linux中执行 export SPARK_CLASSPATH=$SPARK_CLASSPATH:/root/jars/mysql-connector-java-5.1.38-bin.jar
+----

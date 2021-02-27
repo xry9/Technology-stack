@@ -1,0 +1,45 @@
+yum install mysql	安装MySQL客户端
+
+yum install mysql-server -y	(rpm -Uvh http://dev.mysql.com/get/mysql-community-release-el7-5.noarch.rpm)
+service mysqld status
+service mysqld start
+chkconfig mysqld on	--设置开机启动  chkconfig --list | grep mysql 2,3,4,5为on时开机启动成功
+mysqladmin -uroot password root	--创建root管理员
+mysql -uroot -proot
+---------------------
+centos8:
+yum install mysql-server -y
+systemctl start mysqld
+systemctl status mysqld
+mysqladmin -uroot password root
+mysql -uroot -proot
+---------------------
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'root' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+# 查询用户信息
+mysql> select User,Host,Password from user;
+# 更新用户信息
+mysql> update user set Host='%' where User = 'root' and Host='localhost' ;
+# 刷新信息
+mysql> flush privileges;
+# 删除用户信息
+mysql> delete from user where user='root' and host='127.0.0.1';
+===============================================================
+rpm -qa | grep -i mysql
+rpm -e --nodeps mysql-libs-5.1.71-1.el6.x86_64
+rpm -ivh MySQL-server-5.6.24-1.el6.x86_64.rpm
+service mysql start
+cat ~/.mysql_secret
+mysql -uroot -pIWiQnITavP5EZg19	--后报没有mysql命令，还得装客户端
+rpm -ivh MySQL-client-5.6.24-1.el6.x86_64.rpm
+mysql -uroot -pIWiQnITavP5EZg19
+set password=password('root');	--修改密码
+----
+本想不安装客户端，安装一个navicate，还是用这个IWiQnITavP5EZg19密码，也连不上
+wget http://download.fedoraproject.org/pub/epel/6/i386/epel-release-6-8.noarch.rpm
+rpm -ivh epel-release-6-8.noarch.rpm
+yum repolist
+yum install wine
+
+

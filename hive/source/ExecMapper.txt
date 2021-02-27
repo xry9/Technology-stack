@@ -1,0 +1,199 @@
+select name,sum(age) from db.tab group by name;
+TableScanOperator-TS[0]-535687332[ 
+	SelectOperator-SEL[1]-508323203[ 
+		GroupByOperator-GBY[2]-182254297[
+			ReduceSinkOperator-RS[3]-401194142[ 
+				GroupByOperator-GBY[4]-918145945[
+					FileSinkOperator-FS[6]-1802415698
+				]
+			]
+		]
+	]
+]
+
+org.apache.hadoop.hive.ql.parse.TypeCheckProcFactory#genExprNode 方法将表达式转换成工具类, 说 sql 解析最核心的部分也不过分
+
+public class org.apache.hadoop.hive.ql.exec.mr.ExecMapper extends MapReduceBase implements Mapper {
+	// 用的是 runOldMapper, 被底层调用到
+	public void configure(JobConf job) {
+		execContext = new ExecMapperContext(job);
+		jc = job;
+		execContext.setJc(jc);
+		MapWork mrwork = Utilities.getMapWork(job);// create map and fetch operators.  反序列化
+		mo = new MapOperator();
+		mo.setConf(mrwork);
+		mo.passExecContext(execContext);
+		mo.initialize(job, null);
+		mo.setChildren(job);// 创建 operator 树
+	}
+	public void map(Object key, Object value, OutputCollector output, Reporter reporter) throws IOException {
+		execContext.resetRow();// reset the execContext for each new row
+		mo.process((Writable)value);
+	}
+}
+
+public class org.apache.hadoop.hive.ql.exec.MapOperator extends Operator<MapWork> implements Serializable, Cloneable {
+	private final Map<String, Map<Operator<?>, MapOpCtx>> opCtxMap = new HashMap<String, Map<Operator<?>, MapOpCtx>>();
+	public void setChildren(Configuration hconf) throws Exception {
+		List<Operator<? extends OperatorDesc>> children = new ArrayList<Operator<? extends OperatorDesc>>();
+		Map<TableDesc, StructObjectInspector> convertedOI = getConvertedOI(hconf);
+		for (Map.Entry<String, ArrayList<String>> entry : conf.getPathToAliases().entrySet()) {// getPathToAliases 路径和别名的对应关系, 在 org.apache.hadoop.hive.ql.optimizer.GenMapRedUtils#setMapWork 中产生
+			String onefile = entry.getKey();
+			List<String> aliases = entry.getValue();
+			PartitionDesc partDesc = conf.getPathToPartitionInfo().get(onefile);
+			for (String alias : aliases) {
+				Operator<? extends OperatorDesc> op = conf.getAliasToWork().get(alias);// getAliasToWork 别名和 operator 的对应关系
+				Map<Operator<?>, MapOpCtx> contexts = opCtxMap.get(onefile);
+				if (contexts == null) {
+					opCtxMap.put(onefile, contexts = new LinkedHashMap<Operator<?>, MapOpCtx>());
+				}
+				MapOpCtx context = new MapOpCtx(alias, op, partDesc);
+				StructObjectInspector tableRowOI = convertedOI.get(partDesc.getTableDesc());
+				contexts.put(op, initObjectInspector(hconf, context, tableRowOI));// 这里重要
+				if (children.contains(op) == false) {
+					op.setParentOperators(new ArrayList<Operator<? extends OperatorDesc>>(1));
+					op.getParentOperators().add(this);
+					children.add(op);
+				}
+			}
+		}
+		initOperatorContext(children);
+		setChildOperators(children);
+	}
+	public void process(Writable value) throws HiveException {
+		ExecMapperContext context = getExecContext();
+		if (context != null && context.inputFileChanged()) {
+			cleanUpInputFileChanged();
+		}
+		int childrenDone = 0;
+		for (MapOpCtx current : currentCtxs) {
+			Object row = null;
+			row = current.readRow(value, context);
+			if (!current.forward(row)) {
+				childrenDone++;
+			}
+		}
+		rowsForwarded(childrenDone, 1);
+	}
+	public void cleanUpInputFileChangedOp() throws HiveException {
+		super.cleanUpInputFileChangedOp();
+		Path fpath = getExecContext().getCurrentInputPath();
+		String nominalPath = getNominalPath(fpath);
+		Map<Operator<?>, MapOpCtx> contexts = opCtxMap.get(nominalPath);		
+		currentCtxs = contexts.values().toArray(new MapOpCtx[contexts.size()]);
+	}
+	protected static class MapOpCtx {
+		public MapOpCtx(String alias, Operator<?> op, PartitionDesc partDesc) {
+			this.alias = alias;
+			this.op = op;
+			this.partDesc = partDesc;
+		}
+		private Object readRow(Writable value, ExecMapperContext context) throws SerDeException {
+			Object deserialized = deserializer.deserialize(value);
+			Object row = partTblObjectInspectorConverter.convert(deserialized);
+			return row;
+		}
+		public boolean forward(Object row) throws HiveException {
+			op.process(row, 0);// TableScanOperator
+			return true;
+		}
+	}
+}
+
+public abstract class org.apache.hadoop.hive.ql.exec.Operator<T extends OperatorDesc> implements Serializable,Cloneable, Node {
+	protected T conf;
+	public void setConf(T conf) {
+		this.conf = conf;
+	}
+	public void passExecContext(ExecMapperContext execContext) {
+		this.setExecContext(execContext);
+		for (int i = 0; i < childOperators.size(); i++) {
+			childOperators.get(i).passExecContext(execContext);
+		}
+	}
+	public void setExecContext(ExecMapperContext execContext) {
+		this.execContext = execContext;
+	}
+	public ExecMapperContext getExecContext() {
+		return execContext;
+	}
+	public void cleanUpInputFileChanged() throws HiveException {
+		this.cleanUpInputFileChangedOp();
+		if(this.childOperators != null) {
+			for (int i = 0; i<this.childOperators.size();i++) {
+				Operator<? extends OperatorDesc> op = this.childOperators.get(i);
+				op.cleanUpInputFileChanged();
+			}
+		}
+	}
+	protected void forward(Object row, ObjectInspector rowInspector) throws HiveException {
+		int childrenDone = 0;
+		for (int i = 0; i < childOperatorsArray.length; i++) {
+			Operator<? extends OperatorDesc> o = childOperatorsArray[i];
+			o.process(row, childOperatorsTag[i]);
+		}
+	}
+}
+
+
+public class org.apache.hadoop.hive.ql.exec.TableScanOperator extends Operator<TableScanDesc> implements Serializable {
+	public void process(Object row, int tag) throws HiveException {
+		forward(row, inputObjInspectors[tag]);
+	}
+}
+
+public class org.apache.hadoop.hive.ql.exec.SelectOperator extends Operator<SelectDesc> implements Serializable {
+	public void process(Object row, int tag) throws HiveException {
+		int i = 0;
+		for (; i < eval.length; ++i) {
+			output[i] = eval[i].evaluate(row);
+		}
+		forward(output, outputObjInspector);
+	}
+}
+public class org.apache.hadoop.hive.ql.exec.GroupByOperator extends Operator<GroupByDesc> {
+public void process(Object row, int tag) throws HiveException {
+    firstRow = false;
+    ObjectInspector rowInspector = inputObjInspectors[tag];
+    if (hashAggr) {
+      numRowsInput++;
+      if (numRowsInput == numRowsCompareHashAggr) {
+        numRowsCompareHashAggr += groupbyMapAggrInterval;
+        if (numRowsHashTbl > numRowsInput * minReductionHashAggr) {
+          flushHashTable(true);
+          hashAggr = false;
+        } else {          
+        }
+      }
+    }
+    try {
+      countAfterReport++;
+      newKeys.getNewKey(row, rowInspector);
+      if (groupingSetsPresent) {
+        Object[] newKeysArray = newKeys.getKeyArray();
+        Object[] cloneNewKeysArray = new Object[newKeysArray.length];
+        for (int keyPos = 0; keyPos < groupingSetsPosition; keyPos++) {
+          cloneNewKeysArray[keyPos] = newKeysArray[keyPos];
+        }
+        for (int groupingSetPos = 0; groupingSetPos < groupingSets.size(); groupingSetPos++) {
+          for (int keyPos = 0; keyPos < groupingSetsPosition; keyPos++) {
+            newKeysArray[keyPos] = null;
+          }
+          FastBitSet bitset = groupingSetsBitSet[groupingSetPos];
+          for (int keyPos = bitset.nextSetBit(0); keyPos >= 0;
+            keyPos = bitset.nextSetBit(keyPos+1)) {
+            newKeysArray[keyPos] = cloneNewKeysArray[keyPos];
+          }
+          newKeysArray[groupingSetsPosition] = newKeysGroupingSets[groupingSetPos];
+          processKey(row, rowInspector);
+        }
+      } else {
+        processKey(row, rowInspector);
+      }
+    } catch (HiveException e) {
+      throw e;
+    } catch (Exception e) {
+      throw new HiveException(e);
+    }
+  }
+}

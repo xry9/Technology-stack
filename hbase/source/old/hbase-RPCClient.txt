@@ -1,0 +1,492 @@
+static class HConnectionImplementation implements ClusterConnection, Closeable {
+    private final ConcurrentHashMap<String, Object> stubs = new ConcurrentHashMap<String, Object>();
+    private RpcClient rpcClient;
+	HConnectionImplementation(Configuration conf, boolean managed, ExecutorService pool, User user) throws IOException {
+		// 默认值 RpcClientImpl
+        this.rpcClient = RpcClientFactory.createClient(this.conf, this.clusterId, this.metrics);
+    }
+    public ClientService.BlockingInterface getClient(final ServerName sn) throws IOException {
+      String key = getStubKey(ClientService.BlockingInterface.class.getName(), sn.getHostname(), sn.getPort(), this.hostnamesCanChange);
+      ClientService.BlockingInterface stub = null;
+      synchronized (this.connectionLock.get(key)) {
+        stub = (ClientService.BlockingInterface)this.stubs.get(key);
+        if (stub == null) {
+          BlockingRpcChannel channel = this.rpcClient.createBlockingRpcChannel(sn, user, rpcTimeout);
+          stub = ClientService.newBlockingStub(channel);
+          this.stubs.put(key, stub);
+        }
+      }
+      return stub;
+    }
+}
+
+public abstract class AbstractRpcClient implements RpcClient {
+  protected final SocketAddress localAddr;
+  public AbstractRpcClient(Configuration conf, String clusterId, SocketAddress localAddr,
+      MetricsConnection metrics) {
+    this.localAddr = localAddr;
+  }
+  Message callBlockingMethod(Descriptors.MethodDescriptor md, PayloadCarryingRpcController pcrc, Message param, Message returnType, final User ticket, final InetSocketAddress isa) throws ServiceException {
+      val = call(pcrc, md, param, returnType, ticket, isa, cs);// call 方法调用是阻塞的, server 端有返回结果才可以
+      return val.getFirst();
+  }
+  protected abstract Pair<Message, CellScanner> call(PayloadCarryingRpcController pcrc, Descriptors.MethodDescriptor md, Message param, Message returnType, User ticket, InetSocketAddress isa, MetricsConnection.CallStats callStats) throws IOException, InterruptedException;
+  public BlockingRpcChannel createBlockingRpcChannel(final ServerName sn, final User ticket, int defaultOperationTimeout) throws UnknownHostException {
+    return new BlockingRpcChannelImplementation(this, sn, ticket, defaultOperationTimeout);
+  }
+  public static class BlockingRpcChannelImplementation implements BlockingRpcChannel {
+    private final InetSocketAddress isa;
+    private final AbstractRpcClient rpcClient;
+    protected BlockingRpcChannelImplementation(final AbstractRpcClient rpcClient, final ServerName sn, final User ticket, int channelOperationTimeout) throws UnknownHostException {
+      this.isa = new InetSocketAddress(sn.getHostname(), sn.getPort());
+      this.rpcClient = rpcClient;
+    }
+    public Message callBlockingMethod(Descriptors.MethodDescriptor md, RpcController controller,
+        Message param, Message returnType) throws ServiceException {
+      return this.rpcClient.callBlockingMethod(md, pcrc, param, returnType, this.ticket, this.isa);
+    }
+  }
+}
+
+public class RpcClientImpl extends AbstractRpcClient {	
+	protected Pair<Message, CellScanner> call(PayloadCarryingRpcController pcrc, MethodDescriptor md, Message param, Message returnType, User ticket, InetSocketAddress addr, MetricsConnection.CallStats callStats) throws IOException, InterruptedException {    
+		final Call call = new Call(this.callIdCnt.getAndIncrement(), md, param, cells, returnType, pcrc.getCallTimeout(), MetricsConnection.newCallStats());
+		final Connection connection = getConnection(ticket, call, addr);
+		connection.tracedWriteRequest(call, pcrc.getPriority(), Trace.currentSpan());
+		while (!call.done) {
+			if (call.checkAndSetTimeout()) {
+				break;
+			}
+			synchronized (call) {
+			if (call.done) break;
+				call.wait(Math.min(call.remainingTime(), 1000) + 1);// 等待有人调 notify 
+			}
+		}
+		return new Pair<Message, CellScanner>(call.response, call.cells);
+    }
+	protected Connection getConnection(User ticket, Call call, InetSocketAddress addr) throws IOException {
+		Connection connection;
+		ConnectionId remoteId = new ConnectionId(ticket, call.md.getService().getName(), addr);
+		synchronized (connections) {
+			connection = connections.get(remoteId);
+			if (connection == null) {
+				connection = createConnection(remoteId, this.codec, this.compressor);
+				connections.put(remoteId, connection);
+			}
+		}
+		return connection;
+	}
+	protected Connection createConnection(ConnectionId remoteId, final Codec codec, final CompressionCodec compressor) throws IOException {
+		return new Connection(remoteId, codec, compressor);
+	}
+
+	protected class Connection extends Thread {
+		private ConnectionHeader header;              // connection header
+		protected ConnectionId remoteId;
+		protected Socket socket = null;                 // connected socket
+		protected DataInputStream in;
+		protected DataOutputStream out;
+		private InetSocketAddress server;             // server ip:port
+		protected final ConcurrentSkipListMap<Integer, Call> calls = new ConcurrentSkipListMap<Integer, Call>();
+		
+		Connection(ConnectionId remoteId, final Codec codec, final CompressionCodec compressor) throws IOException {		  
+		  this.server = remoteId.getAddress();
+		  this.remoteId = remoteId;
+		  ConnectionHeader.Builder builder = ConnectionHeader.newBuilder();
+		  builder.setServiceName(remoteId.getServiceName());
+		  this.header = builder.build();
+		}
+	    protected void tracedWriteRequest(Call call, int priority, Span span) throws IOException {
+			writeRequest(call, priority, span);
+		}
+		private void writeRequest(Call call, final int priority, Span span) throws IOException {
+			RequestHeader.Builder builder = RequestHeader.newBuilder();
+			builder.setCallId(call.id);
+			builder.setMethodName(call.md.getName());
+			builder.setRequestParam(call.param != null);
+			RequestHeader header = builder.build();
+			setupIOstreams();//目的就是创建连接,发送 ConnectionHeader 到 server 端,并启动一个线程接收 server 的数据
+			synchronized (this.outLock) {
+				calls.put(call.id, call); // We put first as we don't want the connection to become idle.
+				try {
+				  call.callStats.setRequestSizeBytes(IPCUtil.write(this.out, header, call.param, cellBlock));// client 端发 RPC 请求到 server 端
+				} catch (IOException e) {
+				  interrupt();
+				}
+			}
+			doNotify();
+		}
+		
+		protected synchronized void setupIOstreams() throws IOException {
+			if (socket != null) {
+				return;
+			}
+			while (true) {
+				setupConnection();// 去创建 socket 了
+				InputStream inStream = NetUtils.getInputStream(socket);
+				OutputStream outStream = NetUtils.getOutputStream(socket, writeTO);
+				writeConnectionHeaderPreamble(outStream);          
+				this.in = new DataInputStream(new BufferedInputStream(inStream));
+				synchronized (this.outLock) {
+				this.out = new DataOutputStream(new BufferedOutputStream(outStream));
+				}
+				writeConnectionHeader();// 把 header 写到 out 里并输出了,也就是创建连接
+				start();
+				return;
+			}
+		}
+		public void run() {
+			while (waitForWork()) {//就认为一直返回 true 就行了
+				readResponse();
+			}
+		}
+		protected void readResponse() {
+			ResponseHeader responseHeader = ResponseHeader.parseDelimitedFrom(in);
+			int id = responseHeader.getCallId();
+			call = calls.remove(id);
+			Message value = null;
+			if (call.responseDefaultType != null) {
+				Builder builder = call.responseDefaultType.newBuilderForType();
+				ProtobufUtil.mergeDelimitedFrom(builder, in);
+				value = builder.build();
+			}
+			call.setResponse(value, cellBlockScanner);
+		}
+	}	
+}
+
+public class Call {
+  final int id;                                 // call id
+  final Message param;                          // rpc request method param object
+  Message response;                             // value, null if error
+  Message responseDefaultType;
+  volatile boolean done;                                 // true when call is done
+  final Descriptors.MethodDescriptor md;
+  protected Call(int id, final Descriptors.MethodDescriptor md, Message param,
+      final CellScanner cells, final Message responseDefaultType, int timeout,
+      MetricsConnection.CallStats callStats) {
+    this.param = param;
+    this.md = md;
+    this.responseDefaultType = responseDefaultType;
+    this.id = id;
+  }
+  protected synchronized void callComplete() {//try{Integer.parseInt("done99");}catch (Exception e){e.printStackTrace();}
+    this.done = true;
+    notify();
+  }
+  public void setResponse(Message response, final CellScanner cells) {
+    this.response = response;
+    this.cells = cells;
+    callComplete();
+  }
+}
+
+public class IPCUtil {
+	public static int write(final OutputStream dos, final Message header, final Message param, final ByteBuffer cellBlock) throws IOException {
+		int totalSize = IPCUtil.getTotalSizeWhenWrittenDelimited(header, param);
+		return write(dos, header, param, cellBlock, totalSize);
+	}
+	private static int write(final OutputStream dos, final Message header, final Message param, final ByteBuffer cellBlock, final int totalSize) throws IOException {
+		dos.write(Bytes.toBytes(totalSize));
+		header.writeDelimitedTo(dos);
+		if (param != null) param.writeDelimitedTo(dos);
+		dos.flush();
+		return totalSize;
+	}
+}
+
+
+=========================================================================
+public class HTable implements HTableInterface, RegionLocator {
+	public HTable(TableName tableName, final ClusterConnection connection, final ConnectionConfiguration tableConfig, final RpcRetryingCallerFactory rpcCallerFactory, final RpcControllerFactory rpcControllerFactory, final ExecutorService pool) throws IOException {
+		this.tableName = tableName;
+		this.connection = connection;
+		this.pool = pool;
+		if (pool == null) {
+			this.pool = getDefaultExecutor(this.configuration);
+		}
+		this.rpcCallerFactory = rpcCallerFactory;
+	}
+	public Result get(final Get get) throws IOException {
+		return get(get, get.isCheckExistenceOnly());
+	}
+	private Result get(Get get, final boolean checkExistenceOnly) throws IOException {
+		final Get getReq = get;
+		RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection, getName(), get.getRow()) {
+			public Result call(int callTimeout) throws IOException {
+				ClientProtos.GetRequest request = RequestConverter.buildGetRequest(getLocation().getRegionInfo().getRegionName(), getReq);
+				ClientProtos.GetResponse response = getStub().get(controller, request);
+				return ProtobufUtil.toResult(response.getResult(), controller.cellScanner());
+			}
+		};
+		return rpcCallerFactory.<Result>newCaller(rpcTimeout).callWithRetries(callable, this.operationTimeout);
+	}
+	public static ThreadPoolExecutor getDefaultExecutor(Configuration conf) {
+		ThreadPoolExecutor pool = new ThreadPoolExecutor(1, maxThreads, keepAliveTime, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), Threads.newDaemonThreadFactory("htable"));
+		return pool;
+	}
+}
+
+
+public class RpcRetryingCaller<T> {
+	private final int retries;
+	private final RetryingCallerInterceptor interceptor;
+	public RpcRetryingCaller(long pause, int retries, RetryingCallerInterceptor interceptor, int startLogErrorsCnt, int rpcTimeout) {
+		this.retries = retries;
+		this.interceptor = interceptor;
+	}
+
+	public T callWithRetries(RetryingCallable<T> callable, int callTimeout) throws IOException, RuntimeException {
+		for (int tries = 0;; tries++) {
+			callable.prepare(tries != 0); // if called with false, check table status on ZK
+			interceptor.intercept(context.prepare(callable, tries));
+			return callable.call(getTimeout(callTimeout));
+		}
+	}
+
+	public T callWithoutRetries(RetryingCallable<T> callable, int callTimeout) throws IOException, RuntimeException {
+		callable.prepare(false);
+		return callable.call(callTimeout);
+	}
+}
+
+public abstract class RegionServerCallable<T> implements RetryingCallable<T> {
+	protected final Connection connection;
+	protected final TableName tableName;
+	protected final byte[] row;
+	protected HRegionLocation location;
+	private ClientService.BlockingInterface stub;
+	public RegionServerCallable(Connection connection, TableName tableName, byte [] row) {
+		this.connection = connection;
+		this.tableName = tableName;
+		this.row = row;
+	}
+	public void prepare(final boolean reload) throws IOException {
+		try (RegionLocator regionLocator = connection.getRegionLocator(tableName)) {
+			this.location = regionLocator.getRegionLocation(row);
+		}
+		setStub(getConnection().getClient(this.location.getServerName()));
+	}
+	void setStub(final ClientService.BlockingInterface stub) {
+		this.stub = stub;
+	}
+	public HRegionInfo getHRegionInfo() {
+		return this.location.getRegionInfo();
+	}
+}
+
+class ConnectionManager {
+	static class HConnectionImplementation implements ClusterConnection, Closeable {
+		public RegionLocator getRegionLocator(TableName tableName) throws IOException {
+			return new HRegionLocator(tableName, this);
+		}
+		public HRegionLocation getRegionLocation(final TableName tableName, final byte [] row, boolean reload) throws IOException {
+			return reload? relocateRegion(tableName, row): locateRegion(tableName, row);
+		}
+		public HRegionLocation locateRegion(final TableName tableName, final byte[] row) throws IOException{
+			RegionLocations locations = locateRegion(tableName, row, true, true);
+			return locations == null ? null : locations.getRegionLocation();
+		}
+		public RegionLocations locateRegion(final TableName tableName, final byte [] row, boolean useCache, boolean retry) throws IOException {
+			return locateRegion(tableName, row, useCache, retry, RegionReplicaUtil.DEFAULT_REPLICA_ID);
+		}
+		public RegionLocations locateRegion(final TableName tableName, final byte [] row, boolean useCache, boolean retry, int replicaId) throws IOException {
+			if (tableName.equals(TableName.META_TABLE_NAME)) {
+				return locateMeta(tableName, useCache, replicaId);
+			} else {
+				return locateRegionInMeta(tableName, row, useCache, retry, replicaId);
+			}
+		}
+		private RegionLocations locateRegionInMeta(TableName tableName, byte[] row, boolean useCache, boolean retry, int replicaId) throws IOException{
+			if (useCache) {
+				RegionLocations locations = getCachedLocation(tableName, row);
+				if (locations != null && locations.getRegionLocation(replicaId) != null) {
+				return locations;
+				}
+			}
+			byte[] metaKey = HRegionInfo.createRegionName(tableName, row, HConstants.NINES, false);
+			Scan s = new Scan();
+			s.setReversed(true);
+			s.setStartRow(metaKey);
+			s.setSmall(true);
+			s.setCaching(1);
+			int localNumRetries = (retry ? numTries : 1);
+			for (int tries = 0; true; tries++) {
+				if (useCache) {
+					RegionLocations locations = getCachedLocation(tableName, row);
+					if (locations != null && locations.getRegionLocation(replicaId) != null) {
+						return locations;
+					}
+				} else {
+					metaCache.clearCache(tableName, row);
+				}
+				Result regionInfoRow = null;
+				ReversedClientScanner rcs = null;
+				rcs = new ClientSmallReversedScanner(conf, s, TableName.META_TABLE_NAME, this, rpcCallerFactory, rpcControllerFactory, getMetaLookupPool(), 0);
+				//****这里****
+				regionInfoRow = rcs.next();
+				RegionLocations locations = MetaTableAccessor.getRegionLocations(regionInfoRow);
+				HRegionInfo regionInfo = locations.getRegionLocation(replicaId).getRegionInfo();
+				ServerName serverName = locations.getRegionLocation(replicaId).getServerName();
+				cacheLocation(tableName, locations);
+				return locations;
+			}
+		}
+		RegionLocations getCachedLocation(final TableName tableName, final byte [] row) {
+		  return metaCache.getCachedLocation(tableName, row);
+		}
+		public void cacheLocation(final TableName tableName, final RegionLocations location) {
+		  metaCache.cacheLocation(tableName, location);
+		}
+	}
+}
+
+
+public class HRegionLocator implements RegionLocator {
+  private final TableName tableName;
+  private final ClusterConnection connection;
+  public HRegionLocator(TableName tableName, ClusterConnection connection) {
+    this.connection = connection;
+    this.tableName = tableName;
+  }
+  public HRegionLocation getRegionLocation(final byte [] row) throws IOException {
+    return connection.getRegionLocation(tableName, row, false);
+  }
+  public HRegionLocation getRegionLocation(final byte [] row, boolean reload) throws IOException {
+    return connection.getRegionLocation(tableName, row, reload);
+  }
+  public List<HRegionLocation> getAllRegionLocations() throws IOException {
+    TableName tableName = getName();
+    NavigableMap<HRegionInfo, ServerName> locations = MetaScanner.allTableRegions(this.connection, tableName);// TreeMap
+    ArrayList<HRegionLocation> regions = new ArrayList<>(locations.size());
+    for (Entry<HRegionInfo, ServerName> entry : locations.entrySet()) {
+      regions.add(new HRegionLocation(entry.getKey(), entry.getValue()));
+    }
+    if (regions.size() > 0) {
+      connection.cacheLocation(tableName, new RegionLocations(regions));
+    }
+    return regions;
+  }
+}
+
+public class ClientSmallReversedScanner extends ReversedClientScanner {
+  private ScannerCallableWithReplicas smallScanCallable = null;
+  private SmallScannerCallableFactory callableFactory;
+  private boolean nextScanner(int nbRows, final boolean done, boolean currentRegionDone) throws IOException {
+    smallScanCallable = callableFactory.getCallable(getConnection(), getTable(), scan, getScanMetrics(), localStartKey, cacheNum, rpcControllerFactory, getPool(), getPrimaryOperationTimeout(), getRetries(), getScannerTimeout(), getConf(), caller);
+    return true;
+  }
+  public Result next() throws IOException {
+    if (cache.size() == 0 && this.closed) {
+      return null;
+    }
+    if (cache.size() == 0) {
+      loadCache();
+    }
+    if (cache.size() > 0) {
+      return cache.poll();
+    }
+    return null;
+  }
+
+  @Override
+  protected void loadCache() throws IOException {
+    Result[] values = null;
+    while (remainingResultSize > 0 && countdown > 0 && nextScanner(countdown, values == null, currentRegionDone)) {
+      values = this.caller.callWithoutRetries(smallScanCallable, scannerTimeout);
+      this.currentRegion = smallScanCallable.getHRegionInfo();
+      if (values != null && values.length > 0) {
+        for (int i = 0; i < values.length; i++) {
+          Result rs = values[i];
+          cache.add(rs);
+        }
+      }
+    }
+  }
+}
+
+public class ClientSmallScanner extends ClientScanner {
+	protected static class SmallScannerCallableFactory {
+		public ScannerCallableWithReplicas getCallable(ClusterConnection connection, TableName table, Scan scan, ScanMetrics scanMetrics, byte[] localStartKey, int cacheNum, RpcControllerFactory controllerFactory, ExecutorService pool, int primaryOperationTimeout, int retries, int scannerTimeout, Configuration conf, RpcRetryingCaller<Result[]> caller) {
+			scan.setStartRow(localStartKey);
+			SmallScannerCallable s = new SmallScannerCallable(connection, table, scan, scanMetrics, controllerFactory, cacheNum, 0);
+			ScannerCallableWithReplicas scannerCallableWithReplicas = new ScannerCallableWithReplicas(table, connection, s, pool, primaryOperationTimeout, scan, retries, scannerTimeout, cacheNum, conf, caller);
+			return scannerCallableWithReplicas;
+		}
+	}
+	
+	static class SmallScannerCallable extends ScannerCallable {
+		public Result[] call(int timeout) throws IOException {
+			ScanRequest request = RequestConverter.buildScanRequest(getLocation().getRegionInfo().getRegionName(), getScan(), getCaching(), true);
+			ScanResponse response = null;
+			response = getStub().scan(controller, request);
+			Result[] results = ResponseConverter.getResults(controller.cellScanner(), response);
+			return results;
+		}
+	}
+}
+
+public class ScannerCallable extends RegionServerCallable<Result[]> {
+  public void prepare(boolean reload) throws IOException {
+    if (Thread.interrupted()) {
+      throw new InterruptedIOException();
+    }
+    RegionLocations rl = RpcRetryingCallerWithReadReplicas.getRegionLocations(!reload, id, getConnection(), getTableName(), getRow());
+    location = id < rl.size() ? rl.getRegionLocation(id) : null;
+    ServerName dest = location.getServerName();
+    setStub(super.getConnection().getClient(dest));
+  }
+}
+
+
+class ScannerCallableWithReplicas implements RetryingCallable<Result[]> {
+  final ClusterConnection cConnection;
+  protected final ExecutorService pool;
+  private final Scan scan;
+  private final int retries;
+  private Result lastResult;
+  private final RpcRetryingCaller<Result[]> caller;
+  private final TableName tableName;
+  public ScannerCallableWithReplicas(TableName tableName, ClusterConnection cConnection, ScannerCallable baseCallable, ExecutorService pool, int timeBeforeReplicas, Scan scan, int retries, int scannerTimeout, int caching, Configuration conf, RpcRetryingCaller<Result []> caller) {
+    this.currentScannerCallable = baseCallable;
+    this.cConnection = cConnection;
+    this.pool = pool;
+    this.scan = scan;
+    this.retries = retries;
+    this.tableName = tableName;
+    this.caller = caller;
+  }
+
+  @Override
+  public Result [] call(int timeout) throws IOException {
+    RegionLocations rl = RpcRetryingCallerWithReadReplicas.getRegionLocations(true, RegionReplicaUtil.DEFAULT_REPLICA_ID, cConnection, tableName, currentScannerCallable.getRow());
+    ResultBoundedCompletionService<Pair<Result[], ScannerCallable>> cs = new ResultBoundedCompletionService<Pair<Result[], ScannerCallable>>(RpcRetryingCallerFactory.instantiate(ScannerCallableWithReplicas.this.conf), pool, rl.size() * 5);
+	// 这里相当于提交多线程任务了
+    addCallsForCurrentReplica(cs, rl);
+	Future<Pair<Result[], ScannerCallable>> f = cs.poll(timeout, TimeUnit.MILLISECONDS);
+	// 从线程任务中获取结果
+	Pair<Result[], ScannerCallable> r = f.get(timeout, TimeUnit.MILLISECONDS);
+	if (r != null && r.getSecond() != null) {
+	  updateCurrentlyServingReplica(r.getSecond(), r.getFirst(), done, pool);
+	}
+	return r == null ? null : r.getFirst(); // great we got an answer
+  }
+
+  
+	class RetryingRPC implements RetryingCallable<Pair<Result[], ScannerCallable>>, Cancellable {
+		final ScannerCallable callable;
+		RpcRetryingCaller<Result[]> caller;
+		RetryingRPC(ScannerCallable callable) {
+			this.callable = callable;
+			this.caller = ScannerCallableWithReplicas.this.caller;
+		}
+		public Pair<Result[], ScannerCallable> call(int callTimeout) throws IOException {
+			Result[] res = this.caller.callWithoutRetries(this.callable, callTimeout);
+			return new Pair<Result[], ScannerCallable>(res, this.callable);
+		}
+		public void prepare(boolean reload) throws IOException {
+			callable.prepare(reload);
+		}
+	}
+  
+}

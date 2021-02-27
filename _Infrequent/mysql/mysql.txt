@@ -1,0 +1,21 @@
+修改mysql最大连接数要改 mysqlData下的my.ini，max_connections=1000
+
+
+21、mySql授权：
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.0.102' IDENTIFIED BY 'jsd1410' WITH GRANT OPTION;--192.168.0.102是被连接的ip，不是连接者的ip
+GRANT ALL PRIVILEGES ON dbname.tabname TO 'user'@'host' IDENTIFIED BY 'passwd';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'root';
+GRANT ALL PRIVILEGES ON bigdata.tab1 TO 'canal'@'cloud01' IDENTIFIED BY 'canal';
+FLUSH PRIVILEGES;
+ mysql -ucanal -pcanal -h192.168.58.1 -Dbigdata
+
+2、MySQL 授权
+  CREATE USER 'label_dig'@'172.17.10.10' IDENTIFIED BY 'Sophondig356LWrw!@#';
+	GRANT SELECT, INSERT ON dig_wf.* TO 'label_dig'@'172.17.10.10';
+	--想给另一台机器赋权，本以为执行第2个sql就行，其实不然啊，第1个sql也要执行，没想到user可以create两次
+3、jdbc:mysql://192.168.220.62:3306/serverstation_analy?user=root&password=zhtx1.q&autoReconnect=true	----autoReconnect=true很有必要啊，不然在web工程中用了连接池又长时间没人访问要重启服务器了
+4、mysql导出数据为csv文件时，要导到指定目录下，可以查看show variables like '%secure%';
+	my.ini
+	#secure-file-priv="C:/ProgramData/MySQL/MySQL Server 5.7/Uploads"
+	secure-file-priv="D:/mysqlexport"
+	SELECT * FROM emp into outfile 'D://mysqlexport/emp.csv' fields terminated by ',' optionally enclosed by '"' lines terminated by '\r\n';

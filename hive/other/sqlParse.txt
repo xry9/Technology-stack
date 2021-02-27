@@ -1,0 +1,50 @@
+select id,name 
+	from 
+		(select id ,name 
+		 from tab1 t1 
+		 join 
+			(select * from tab2) t2 on t1.id = t2.id ) t3 
+	join t4 on t3.id = t4.id 
+	join 
+		(select * from tab5) t5 on t3.id = t5.id
+
+
+select id name from t3 join t4 join t4
+
+(QUERY:SELECT ID,NAME FROM T3 JOIN T4 ON T3.ID = T4.ID JOIN T5 ON T3.ID = T5.ID 
+	(JOIN:T4 ON:T3.ID = T4.ID) 
+	(JOIN:T5 
+		(QUERY:SELECT * FROM TAB5 
+			(FROM:TAB5 TQ:TAB5) 
+			(QUOTE:null SELECT: * GROUPBY:null WHERE:null)) ON:T3.ID = T5.ID) 
+	(FROM:T3 (
+			QUERY:SELECT ID ,NAME FROM TAB1 T1 JOIN T2 ON T1.ID = T2.ID 
+				(JOIN:T2 
+					(QUERY:SELECT * FROM TAB2 
+						(FROM:TAB2 TQ:TAB2) 
+						(QUOTE:null SELECT: * GROUPBY:null WHERE:null)) ON:T1.ID = T2.ID) 
+				(FROM:TAB1 TQ:TAB1) 
+				(QUOTE:null SELECT: ID ,NAME GROUPBY:null WHERE:null))) 
+	(QUOTE:null SELECT: ID,NAME GROUPBY:null WHERE:null))
+
+零、这个语法树内容是比较丰富的，可以说解析之后任何信息都没有丢失，完全可以跟据语法树恢复出原始sql
+
+一、sql规则：
+	1、from后的子查询如果是单表，没有join(union)，不允许做成子查询，例如： select * from (select * from tab)t1。开窗函数另外处理
+	2、所有子查询必须有别名，所有别名不能相同（即便sql语法可能支持不同层级可以用相同别名）
+	3、首先进行语法校验，只有满足1，2条件的sql才可以向下执行sql解析的操作
+
+二、血缘关系（以上面sql为例）：
+
+	(t4 (tab5) (tab1,(tab2))) --> (t4 tab5 (tab1,tab2))
+	(t4 (tab5) (tab1,(tab2)))
+	
+三、sql优化：	
+	1、同一层级from的如果是同表（当然要下钻的，因为可能是别名），不能有相同的groupby字段出现，如果没有groupby那就更不允许了
+		特殊：即便from有同表，但是如果有join的情况，要所有from表和join表完全相同
+			举例：from (from tabA T3 join (from tabB T7 join tabE T8) T4) T1	--> (tabA (tabB tabE))
+				  join (from tabC T5 join (from tabB T9 join tabE T0) T6) T2	--> (tabC (tabB tabE))
+
+	2、不同job之间有依赖关系的优化，如果Ajob的结果插入resultTabA中，Bjob又用到了resultTabA，则跟据jobA的血缘关系生成jobB的血统关系，然后再看jobB可不可以优化
+
+四、待完善：开窗函数，explode，where in，出现join nuion，如何处理

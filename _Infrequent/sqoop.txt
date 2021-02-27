@@ -1,0 +1,62 @@
+0、正确配置好HADOOP_HOME，HADOOP_HOME名称不能写错1、上传mysql的jar包到lib目录下
+2、数据库中的数据导入到HDFS上
+	对于没有主键的表，导入时要加上	-m 1
+	./sqoop import --connect jdbc:mysql://192.168.58.1:3306/jtdb --username root --password root  --table tb_item --columns 'id, title' --target-dir '/sqoop/td' --fields-terminated-by ','
+		
+	./sqoop import --connect jdbc:mysql://192.168.58.1:3306/jtdb --username root --password root  --table tb_item --columns 'id, title' --target-dir '/sqoop/td' --fields-terminated-by ',' -m 2
+		如果表没有主键，mapReduce指定为1，或指定一个列来分割，--split-by，这个列有没有重复值无所谓，真不知道它是怎么判断的
+		有主键时真正的切片数和指定的-m个数并不一致
+3、HDFS-->数据库
+	./sqoop export --connect jdbc:mysql://192.168.58.1:3306/jtdb --username root --password root  --table jt_bak   --export-dir '/sqoop/td' --fields-terminated-by ',' -m 6
+		导出时也可以指定--columns uid,time，但是是以hdfs依次排列的，其实columns也是限定数据库的字段
+=============================
+指定where条件：
+	./sqoop import --connect jdbc:mysql://192.168.58.1:3306/jtdb --username root --password root  --table tb_item  --columns 'id, title' --target-dir '/sqoop/td' --fields-terminated-by ',' -m 2 --where 'id>1469756408'
+----
+增加query语句(使用 \ 将语句换行)，这个没有实现
+		sqoop import --connect jdbc:mysql://192.168.1.10:3306/tedu --username root --password 123 \
+--query 'SELECT * FROM trade_detail where id > 2 AND $CONDITIONS' --split-by trade_detail.id --target-dir '/sqoop/td3'
+		
+		注意：如果使用--query这个命令的时候，需要注意的是where后面的参数，AND $CONDITIONS这个参数必须加上
+		而且存在单引号与双引号的区别，如果--query后面使用的是双引号，那么需要在$CONDITIONS前加上\即\$CONDITIONS
+		如果设置map数量为1个时即-m 1，不用加上--split-by ${tablename.column}，否则需要加上
+		切记：加--query就不能加--table了
+		用query多表关联时，字段名不能相同，起别名也不行
+==============================================
+CREATE TABLE subway_sqoop (
+	uid VARCHAR (50),
+	val VARCHAR (50),
+	action VARCHAR (50),
+	city VARCHAR (50),
+	time VARCHAR (50)
+);
+sqoop export --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop  --export-dir '/portrait/data/subway' --fields-terminated-by ','
+
+从mysql导入到hdfs 中
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop --columns 'uid,time' --target-dir '/sqoop/subway' --fields-terminated-by ',' -m 1
+如果不指定--columns则导入表中所有字段
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop  --target-dir '/sqoop/subway' --fields-terminated-by ',' -m 1
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop  --target-dir '/sqoop/subway' --fields-terminated-by ',' --split-by uid -m 4
+-m 表示map个数，如果想指定map个数：1、表没主键时，要加入分割字段--split-by;2、表有主键时，会默认以主键做为分割字段
+===============================
+导入数据时，可以指定查询条件--where
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop --columns 'uid,time' --target-dir '/sqoop/subway' --where 'time>2016' --fields-terminated-by ',' -m 1
+如果想导入多张表的多个字段，可以用关联查询，只需把--table换成--query，但是多个表之间字段不能重名，可以通过子查询起别名解决
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root --query 'SELECT city.val1,subway.*  from city_sqoop city JOIN subway_sqoop subway on city.uid = subway.uid where $CONDITIONS'  --target-dir '/sqoop/query' -m 1
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root --query 'SELECT city.val1,subway.*  from city_sqoop city JOIN subway_sqoop subway on city.uid = subway.uid where city.time>2016 and $CONDITIONS'  --target-dir '/sqoop/query' -m 1
+
+============================================
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop   --hive-import --hive-overwrite --hive-table db1.tab_sqoop --split-by uid -m 1
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root  --table subway_sqoop   --hive-import --hive-overwrite --hive-table db1.tab_sqoop --hive-partition-key day --hive-partition-value '20270920' --split-by uid -m 2
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root --query 'SELECT city.val1,subway.*  from city_sqoop city JOIN subway_sqoop subway on city.uid = subway.uid where $CONDITIONS' --target-dir '/sqoop/query' --hive-import --hive-overwrite --hive-table db1.tab_sqoop --hive-partition-key day --hive-partition-value '20270926' --split-by city.uid -m 2
+	要加一个--target-dir '/sqoop/query',且/sqoop/query不能存在，没有--hive-overwrite时不会覆盖
+============================================
+mysql数据导入到hbase中
+sqoop import --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root --table city_sqoop --hbase-row-key uid --hbase-table city --column-family info1 -m 1
+默认是将mysql所有列都导入指定的列簇中
+如果想把指定的列导入指定的列簇中，只需加入--columns uid,city  ----注意此时的列要多加一个做为行键的列，此列不导入
+----
+更新导入--update-key empno
+sqoop export --connect jdbc:mysql://192.168.58.1:3306/bigdata --username root --password root --table emp --export-dir '/data/emp1.txt' --fields-terminated-by '\t' --update-key empno
+更新导入时，不会插入多余数据，根据指定字段只对原有数据更新
+如果想更新同时插入，加入--update-mode allowinsert这个参数，指定的字段必须是主键才可以，

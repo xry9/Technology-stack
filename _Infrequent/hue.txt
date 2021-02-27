@@ -1,0 +1,12 @@
+https://www.cnblogs.com/xuziyu/p/10735609.html
+在 centos6.5 机器即可安装
+yum -y install ant asciidoc cyrus-sasl-devel cyrus-sasl-gssapi gcc gcc-c++ krb5-devel libtidy libxml2-devel libxslt-devel openldap-devel python-devel sqlite-devel openssl-devel mysql-devel gmp-devel
+wget http://archive.cloudera.com/cdh5/cdh/5/hue-3.9.0-cdh5.7.0.tar.gz
+make apps --编译
+
+vim $HUE_HOME/desktop/conf/hue.ini
+...
+cd hue-3.9.0-cdh5.7.0/build/env
+bin/supervisor &  -- 要用普通用户启动不能用 root
+
+跑 mr 的 query 做有权限问题, 没搞明白

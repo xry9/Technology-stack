@@ -1,0 +1,108 @@
+public abstract class RpcExecutor {
+  private final List<Handler> handlers;
+  public RpcExecutor(final String name, final int handlerCount) {
+    this.handlers = new ArrayList<Handler>(handlerCount);
+  }
+
+  public void start(final int port) {
+    running = true;
+    startHandlers(port);
+  }
+
+  public abstract boolean dispatch(final CallRunner callTask) throws InterruptedException;
+  protected void startHandlers(final int port) {
+    List<BlockingQueue<CallRunner>> callQueues = getQueues();
+    startHandlers(null, handlerCount, callQueues, 0, callQueues.size(), port);
+  }
+  // 调用到此并不会走此 getHandler 会下沉一级到子类 FastPathBalancedQueueRpcExecutor
+  protected Handler getHandler(final String name, final double handlerFailureThreshhold,
+      final BlockingQueue<CallRunner> q) {
+    return new Handler(name, handlerFailureThreshhold, q);
+  }
+  protected void startHandlers(final String nameSuffix, final int numHandlers,
+      final List<BlockingQueue<CallRunner>> callQueues,
+      final int qindex, final int qsize, final int port) {
+    final String threadPrefix = name + Strings.nullToEmpty(nameSuffix);
+    double handlerFailureThreshhold =
+        conf == null ? 1.0 : conf.getDouble(HConstants.REGION_SERVER_HANDLER_ABORT_ON_ERROR_PERCENT,
+          HConstants.DEFAULT_REGION_SERVER_HANDLER_ABORT_ON_ERROR_PERCENT);
+    for (int i = 0; i < numHandlers; i++) {
+      final int index = qindex + (i % qsize);
+      String name = "RpcServer." + threadPrefix + ".handler=" + handlers.size() + ",queue=" +
+          index + ",port=" + port;
+	  // 会调下沉到 FastPathBalancedQueueRpcExecutor 
+      Handler handler = getHandler(name, handlerFailureThreshhold, callQueues.get(index));
+      handler.start();
+      LOG.debug("Started " + name);
+      handlers.add(handler);
+    }
+  }
+  protected class Handler extends Thread {
+    final BlockingQueue<CallRunner> q;
+    Handler(final String name, final double handlerFailureThreshhold, final BlockingQueue<CallRunner> q) {
+      super(name);
+      setDaemon(true);
+      this.q = q;
+      this.handlerFailureThreshhold = handlerFailureThreshhold;
+    }
+    protected CallRunner getCallRunner() throws InterruptedException {
+      CallRunner qt = this.q.take();
+    }
+    public void run() {
+		while (running) {
+			run(getCallRunner());
+		}
+    }
+    private void run(CallRunner cr) {
+      cr.run();
+    }
+  }
+}
+--------
+public class FastPathBalancedQueueRpcExecutor extends BalancedQueueRpcExecutor {
+  private final Deque<FastPathHandler> fastPathHandlerStack = new ConcurrentLinkedDeque<>();
+  // 上层会遍历调用 
+  protected Handler getHandler(String name, double handlerFailureThreshhold, BlockingQueue<CallRunner> q) {
+    return new FastPathHandler(name, handlerFailureThreshhold, q, fastPathHandlerStack);
+  }
+  //SimpleRpcScheduler 会调到此处
+  public boolean dispatch(CallRunner callTask) throws InterruptedException {
+    FastPathHandler handler = popReadyHandler();//返回 !null
+    return handler != null? handler.loadCallRunner(callTask): super.dispatch(callTask);
+  }
+  private FastPathHandler popReadyHandler() {
+    //此 fastPathHandlerStack 并未直接添加元素,但是调用 getHandler 时会将 fastPathHandlerStack 属性传入 FastPathHandler, 并有 this.fastPathHandlerStack.push(this);
+    return this.fastPathHandlerStack.poll();
+  }
+  class FastPathHandler extends Handler {
+    final Deque<FastPathHandler> fastPathHandlerStack;
+    private Semaphore semaphore = new Semaphore(0);
+    private CallRunner loadedCallRunner;
+    FastPathHandler(String name, double handlerFailureThreshhold, BlockingQueue<CallRunner> q, final Deque<FastPathHandler> fastPathHandlerStack) {
+      super(name, handlerFailureThreshhold, q);
+      this.fastPathHandlerStack = fastPathHandlerStack;
+    }
+    
+	protected CallRunner getCallRunner() throws InterruptedException {
+      CallRunner cr = this.q.poll();
+      if (cr == null) {
+        if (this.fastPathHandlerStack != null) {
+		  // this.fastPathHandlerStack 被多个实例共享,所以其中会有多个元素
+          this.fastPathHandlerStack.push(this);
+          this.semaphore.acquire();//加锁
+          cr = this.loadedCallRunner;
+          this.loadedCallRunner = null;
+        } else {
+          cr = super.getCallRunner();
+        }
+      }
+      return cr;
+    }
+	
+    boolean loadCallRunner(final CallRunner cr) {
+      this.loadedCallRunner = cr;
+      this.semaphore.release();//解锁
+      return true;
+    }
+  }
+}

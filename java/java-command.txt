@@ -1,0 +1,207 @@
+18、yum install java-1.8.0-openjdk 安装openJDK，好像8以前没有tar包
+java -XX:+PrintCommandLineFlags -version
+  打印一些参数的基本信息, 加了 -version 进程就不会启动了
+  
+1、jps | grep PhantomTest |awk '{print $1}' |head -1 |xargs lsof -p |grep /home/tyx  --这个命令好重要啊
+   lsof abc.txt 显示开启文件 abc.txt 的进程, lsof -p 107250 显示进程打开的文件
+3、nohup java -Dlogback.configurationFile=/home/admin/zhengli/scylla/bench-hbase/logback.xml -jar stress-2.0-SNAPSHOT.jar -Xfile2db \
+-H172.16.1.81,172.16.1.82,172.16.1.83,172.16.1.84,172.16.1.85,172.16.1.86 -asophon_online_v140.sophon_object_v140 \
+-d/data/mydata_tyx/table2 -t50 -sBLOB_SPLITTABLE >> ./nohup2.log 2>&1 &
+
+19、非IDE环境执行java程序
+	jar cvf LayOutDemo.jar LayOutDemo.class
+	jar tf LayOutDemo.jar
+	java -cp ./LayOutDemo.jar[:./jarxxxx.jar] [MainClass]
+	jar cvf UserProfile.war ./*	--打war包
+21、jstack 检测高 cpu
+	1) top -H -p 17850
+		-H： 设置线程模式
+		-p: 显示指定PID的进程
+		-c: 命令行列显示程序名以及参数
+	2) 查找出占用cpu较多的线程[18434]  printf "%x\n" 18434, printf "%d\n" 0xac
+		4802
+	3) jstack 17850|grep 4802 -A 30
+22、性能监控工具
+  1) uptime 
+     vmstat	https://www.cnblogs.com/tommyli/p/3746187.html 
+  2) jmap -histo 19536		生成Java应用程序的堆快照和对象的统计信息
+     jmap -histo:live 1105
+     jmap -dump:format=b,file=/home/tyx/d.hprof 19536	 
+	 -permstat 打印 classload 和 jvm heap 长久层的信息. 包含每个 classloader的名字,活泼性,地址,父 classloader 和加载的class数量. 另外内部 String 
+	 的数量和占用内存数也会打印出来(好像是 openjdk 才支持)
+	 jmap -finalizerinfo 87210
+	 jstack 
+		-l 打印锁信息
+		-m 打印java和native的帧信息
+		-F 强制dump，当 jstack 没有响应时使用
+
+24、pstree -apnh 列出的是每个进程的线程 id，可以和 jstack 48258 中对得上   pstree -p 78942
+25、jps 
+  -m 输出传递给main方法的参数		
+  -l 输出 main class 的全限定名
+  jps -v 对比 jinfo -flags, 内容还会更丰富一些
+6、
+打印GC的简要信息  -verbose:gc
+打印GC的详细信息  -XX:+PrintGCDetails
+指定GC log的位置  -Xloggc:log/gc.log
+每一次GC前和GC后，都打印堆信息  -XX:+PrintHeapAtGC
+监控类的加载  -XX:+TraceClassLoading, 最先的肯定是 Object, 通过他可以看类的加载时期, 能解决好多疑问啊
+-XX:-PrintClassHistogram  遇到Ctrl-Break后打印类实例的柱状信息，与jmap -histo 功能相同
+OOM时导出堆到文件  -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/home/tyx/t.dump
+
+-XX:OnOutOfMemoryError　　　　在OOM时，执行一个脚本。可以在OOM时，发送邮件，甚至是重启程序。例如我们设置如下的参数：
+	-XX:OnOutOfMemoryError=D:/tools/jdk1.7_40/bin/printstack.bat %p //p代表的是当前进程的pid 
+-XX:+PrintGCTimeStamps  该参数会在每次 GC 时额外输出 GC 发生的时间，该输出时间为虚拟机启动后的时间偏移量
+
+由于GC引起应用程序停顿，因此还需要特别关注应用程序的执行时间和停顿时间。使用参数 -XX:+PrintGCApplicationConcurrentTime 可以打印应用程序的执行时间，
+使用参数 -XX:+PrintGCApplicationStoppedTime 可以打印应用程序由于GC而产生的停顿时间
+-XX:+PrintGCApplicationConcurrentTime -XX:+PrintGCApplicationStoppedTime
+-XX:+PrintReferenceGC  如果想跟踪系统内的软引用、弱引用、虚引用和 Finallize 队列
+
+====================================other====================================
+1、有的java程序用jsp看不到进程，要用 ps aux | grep data-mining-server，好奇怪
+18、iostat -d 1 2
+  监控磁盘  https://blog.csdn.net/qq13650793239/article/details/82623938
+  30个线程读写各 30 个 100M 文件, 才能把 %util 打到 90% 以上, 只读 30 个文件的话能打到 70% 多
+  
+pidstat -p 82396 1 3 -u -t
+  -u 表示对 cpu 进行监控, -t 将系统性能的监控细化到线程级别, top 也可监控到线程级别
+pidstat -p 85741 -d -t 1 3
+  -d 参数表明监控对象为磁盘, 通过定位线程 id, 结合 jstack 就能找到线程代码位置
+pidstat -r -p 27233 1 5
+  监控内存, -t 也可以到线程级别, 但是没有用呀
+  VSZ：虚拟地址大小，虚拟内存的使用KB
+  RSS：常驻集合大小，非交换区五里内存使用KB
+  目测 VSZ - RSS ≈ MaxHeapSize
+  https://www.jianshu.com/p/9bf36aa82f90  https://blog.csdn.net/zjc156m/article/details/38920321
+pmap -d 3446	查看进程所占内存, 居然还可以看启动命令 
+cat /proc/1353/status 查看进程信息
+	VmSize: 代表进程现在正在占用的内存, 这个值与pmap pid的值基本一致,如果略有不同,可能是内存裂缝所造成的.
+	VmData: 表示进程数据段的大小.
+	VmStk: 表示进程堆栈段的大小.
+	VmExe: 表示进程代码的大小.
+	VmLib: 表示进程所使用LIB库的大小.
+	VmSwap: 进程占用Swap的大小.
+
+19、
+jstat -class -t 3118 1000 2
+  载入类数量, 大小, 还有意外收获, 能看到进程启动时间
+jstat -compiler -t 3118
+  编译任务执行的次数, 有啥意义呢没太明白
+jstat -gc 3118, (Capacity)和使用量(Used), CCS:压缩类空间(-XX:CompressedClassSpaceSize)。这个操作应该是比较准, 当前的各区域大小而不是初始时 https://www.zhihu.com/question/268392125
+jstat -gccapacity 3118
+	-XX:MaxHeapSize=1048576000
+	-XX:MaxNewSize=349175808
+	好像没有老年代最大值的参数, 我分析应该是用这两个值差得出的, 而且不是元空间大小可不受 MaxHeapSize 影响啊, 包括两部分: 方法区 CCS
+jstat -gccause 3118
+  gc 原因等
+jstat -gcnew 3118
+jstat -gcutil 3118
+还有一些解释的信息 (实战Java虚拟机JVM故障诊断与性能优化2)
+
+jinfo -flag name 打印指定 Java 虚拟机的参数值。
+jinfo -flag MaxTenuringThreshold 63018
+jinfo -flag PrintGCDetails 11059
+
+
+jhat /tmp/heap.hprof 启动 7000 端口, 没有 Visual VM 观察得更细致, 但已经很方便了
+  OQL: select file.path.value.toString() from java.io.File file
+jcmd 87210 Thread.print  , 好像与 jstack -l 一样
+jcmd 87210 GC.class_histogram
+jcmd 87210 GC.heap_dump /home/tyx/d.dump
+jcmd 87210 VM.system_properties , 这个含义可以相当丰富啊
+jcmd 87210 VM.flags , 对比 jps -v 与 jinfo -flags
+jcmd 87210 PerfCounter.print , 性能计数器
+jcmd 拥有 jmap 的大部分功能，并且在 Oracl 的官方网站上也推使用 jcrnd 命令 jmap 命令
+
+
+包括 jps 在内的命令本质上是使用 Java 实现的。以 jps 命令为例，它在实现过程中，使用 MonitoredVmUtil 类获得给定虚拟机的相关信息 Mo oredVmUtil 的主要
+功能都来自于 MonitoVm.findByName()方法，通过 PerfData 数据查询，可以得到虚拟机的相关性能参数。
+
+-Xssl28k 减小栈空间可以创建更多线程才 OOM
+
+CglibBean bean = new CglibBean("geym.perm" + i, new HashMap());
+JDK1.6 1.7 -XX:+PrintGCDetails -XX:MaxPermSize=5M
+  java.lang.OutOfMemoryError: PermGen space
+JDK1.8 -XX:+PrintGCDetails -XX:MaxMetaspaceSize=5M
+  java.lang.OutOfMemoryError: Metaspace
+
+perf stat -e cpu-clock,task-clock,cs,instructions,L1-dcache-load-misses,L1-dcache-store-misses,LLC-loads,LLC-stores java other.FalseSharingDemo 1
+---------------------------------
+JConsole, Visual VM, jmc 图形化
+在 Visual VM 中使用 OQL 
+查询长度大于等于100的字符串
+select s from java.lang.String s where s.value.length >= 100
+查询长度大于等于256的int数组
+select a from [I a where a.length >= 256
+---------------------------------
+[tyx@cluster01 ~]$ free -m
+             total       used       free     shared    buffers     cached
+Mem:          7857       1018       6838          0         12         37
+-/+ buffers/cache:        967       6889
+Swap:         1983        175       1808
+
+8g 的虚拟机, 代码
+for (int i=0;i<2000;i++){// 试过 2048, 起不来 4 个进程了
+	list.add(new byte[1024*1024]);
+}
+
+java -XX:MaxHeapSize=4294967296 -XX:InitialHeapSize=4294967296 HeapDemo
+java -XX:MaxHeapSize=4294967296 -XX:InitialHeapSize=4294967296 HeapDemo
+java -XX:MaxHeapSize=2357198848 -XX:InitialHeapSize=2147483648 HeapDemo
+java -XX:MaxHeapSize=2357198848 -XX:InitialHeapSize=2147483648 HeapDemo
+执行 vmstat 的情形:
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 180028 7772816   2188  37940    3   11     6    19   17    8  1  1 99  0  0	
+[tyx@cluster01 ~]$ vmstat
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 0  0 180000 5645872   2196  38304    3   11     6    19   17    8  1  1 99  0  0	
+[tyx@cluster01 ~]$ vmstat
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 180000 3518080   2204  38336    3   11     6    19   17    8  1  1 99  0  0	
+[tyx@cluster01 ~]$ vmstat
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 179996 1196868   2212  38368    3   11     6    19   17    8  1  1 99  0  0	
+[tyx@cluster01 ~]$ vmstat
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 0  0 1417372 135496    876  25184    3   11     6    20   17    8  1  1 99  0  0	
+然后我居然还能把 hdfs 启动, 哇哈哈, 居然还可以 hadoop fs -text /data/words.txt 
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 0  0 2031528 226416   2684  29108    4   15     9    22    4    5  1  1 99  0  0	
+kill -9 4g 的 pid
+procs -----------memory---------- ---swap-- -----io---- --system-- -----cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 0  0 1048868 1255872   2136  22644    5   16    11    24    4    6  1  1 99  0  0	
+
+[tyx@cluster01 ~]$ jstat -gc 92822
+ S0C    S1C    S0U    S1U      EC       EU        OC         OU       MC     MU    CCSC   CCSU   YGC     YGCT    FGC    FGCT     GCT   
+15872.0 14848.0  0.0   11797.1 126976.0 24378.1   74240.0    20253.6   30464.0 29986.1 3584.0 3478.1      7    0.106   1      0.045    0.150
+5120.0 8192.0 4936.0  0.0   104448.0 25985.3   52224.0     7250.2   25728.0 25277.2 3200.0 3071.6      6    0.064   1      0.034    0.098
+15872.0 16896.0 3791.1  0.0   125952.0 22581.1   64512.0    19784.3   24704.0 24069.4 2944.0 2802.0      6    0.062   1      0.030    0.092
+174592.0 174592.0  0.0   174418.7 1048576.0 1036117.0 2796544.0   851989.0  4864.0 2470.0 512.0  266.6       1    0.225   0      0.000    0.225
+87040.0 87040.0  0.0    0.0   592896.0 514460.0 1534976.0  1534239.3  4864.0 2470.3 512.0  266.6       2    0.235   2      0.459    0.694
+87040.0 87040.0  0.0    0.0   592896.0 514472.7 1534976.0  1534239.2  4864.0 2468.2 512.0  266.6       2    1.067   2      0.978    2.045
+174592.0 174592.0  0.0   174466.7 1048576.0 1036117.0 2796544.0   851989.0  4864.0 2470.0 512.0  266.6       1    0.204   0      0.000    0.204
+
+174418.7 1036117 851989 2470 266 = 2065260.7
+174466.7 1036117 851989 2470 266 = 2065308.7
+通过这两个再对比下面的 %MEM 28.76 26.46, 说明此处的内存包括了交换分区, 
+
+[tyx@cluster01 ~]$ pidstat -r -p 92822
+05:35:49 PM       PID  minflt/s  majflt/s     VSZ    RSS   %MEM  Command
+05:35:49 PM     92822      0.21      0.00 2819856 282972   3.52  java
+05:35:54 PM     92956      0.13      0.00 2813008 182848   2.27  java
+05:36:00 PM     93134      0.10      0.00 2791024 170596   2.12  java
+05:36:10 PM     92640      0.02      0.00 6741908 1423680  17.70  java
+05:36:25 PM     92655      0.02      0.00 6741908 1124776  13.98  java
+05:36:38 PM     92670      0.05      0.00 4780420 2129184  26.46  java
+05:36:45 PM     92685      0.80      0.00 4780420 2314064  28.76  java
+
+
+free 是真的剩余内存, 当它不够时, swpd 才会起作用, 以前申请的内存虽然早已超过了物理内存, 但是没有关系呀, 申请多大无所谓看用多少了, 所以肯定会有个虚拟内存

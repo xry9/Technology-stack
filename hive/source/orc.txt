@@ -1,0 +1,71 @@
+1、RcFile:是一种行列存储相结合的存储方式。
+（1）将数据按行分块，保证同一个record在一个块上，避免读一个记录需要读取多个block；
+  (我觉得此点未必需要, 因为都是读多行的操作, 而且各字段大小不同时这样分不太合理. 所以总体感觉弊大于利. 我又推翻了自己的说法)
+（2）块数据列式存储，有利于数据压缩和快速的列存取。查询效率最高、存储空间最小、但加载最慢
+首先我觉得, 如果 record 非常多的话, 水分切分是必需的
+
+2、写入的数据结构基本符合图 https://cwiki.apache.org/confluence/display/Hive/LanguageManual+ORC 
+select name,sum(age) from db.emp_orc group by name;
+TableScanOperator 中 {null, zhaoliu, 48, null, null, null, null, null}
+
+The stripe footer contains a directory of stream locations. Row data is used in table scans.
+Index data includes min and max values for each column and the row positions within each column. 
+stripe footer 和 Index data 共同组成索引的统计数据吧
+记录列的 max/min 等元信息未必多有用, 全局统计时还可以但是遇到 group by 某列就没有多大用了
+
+
+public class org.apache.hadoop.hive.ql.io.orc.WriterImpl implements Writer, MemoryManager.Callback {
+	private final FileSystem fs;
+	private final Path path;
+	private final Map<StreamName, BufferedStream> streams = new TreeMap<StreamName, BufferedStream>();
+	private final List<OrcProto.StripeInformation> stripes = new ArrayList<OrcProto.StripeInformation>();
+	public void addRow(Object row) throws IOException {
+	// 写一行数据, 至于与下面写数据调用怎么过渡的, 真的相当复杂不搞了, 上面的调用过程是: FileSinkOperator.process --> OrcOutputFormat$OrcRecordWriter.write
+		treeWriter.write(row);//StructTreeWriter
+		if (rowsInIndex >= rowIndexStride) {
+			createRowIndexEntry();
+		}
+		memoryManager.addedRow();
+	}  
+	FSDataOutputStream getStream() throws IOException {
+		if (rawWriter == null) {
+			rawWriter = fs.create(path, false, HDFS_BUFFER_SIZE, fs.getDefaultReplication(), blockSize);// path: hdfs://cluster01:9000/hive1/user/hive/warehouse/db.db/emp_orc/.hive-staging_hive_2020-03-21_20-50-50_696_2686554102014615330-1/_task_tmp.-ext-10002/_tmp.000000_0
+			writer = new OutStream("metadata", bufferSize, codec, new DirectStream(rawWriter));
+			protobufWriter = CodedOutputStream.newInstance(writer);
+		}
+		return rawWriter;
+	}
+	private void flushStripe() throws IOException {
+		getStream();
+		if (rowsInStripe != 0) {
+			int requiredIndexEntries = rowIndexStride == 0 ? 0 : (int) ((rowsInStripe + rowIndexStride - 1) / rowIndexStride);
+			OrcProto.StripeFooter.Builder builder = OrcProto.StripeFooter.newBuilder();
+			treeWriter.writeStripe(builder, requiredIndexEntries);
+			OrcProto.StripeFooter footer = builder.build();
+			for(Map.Entry<StreamName, BufferedStream> pair: streams.entrySet()) {
+				BufferedStream stream = pair.getValue();
+				if (!stream.isSuppressed()) {
+					// 这里是关键，真正写数据到文件了, TreeMap 已经排好序先写 index Data 再写 Row Data, StreamName 说明了每个列一个流吧, 应该也属于 rcfile 的先水平后垂直的切分格式
+					stream.spillTo(rawWriter);
+				}
+				stream.clear();
+			}
+			footer.writeTo(protobufWriter);
+			long footerLength = rawWriter.getPos() - start - dataSize - indexSize;
+			OrcProto.StripeInformation dirEntry = OrcProto.StripeInformation.newBuilder().setOffset(start).setNumberOfRows(rowsInStripe).setIndexLength(indexSize).setDataLength(dataSize).setFooterLength(footerLength).build();
+			stripes.add(dirEntry);
+		}
+	}  
+	public void close() throws IOException {
+		memoryManager.removeWriter(path);
+		flushStripe();
+		int metadataLength = writeMetadata(rawWriter.getPos());
+		int footerLength = writeFooter(rawWriter.getPos() - metadataLength);// 就是把 stripes 写出去了
+		rawWriter.writeByte(writePostScript(footerLength, metadataLength));
+		rawWriter.close();
+	}
+}
+class org.apache.hadoop.hive.ql.io.orc.StreamName implements Comparable<StreamName> {
+	private final int column;
+	private final OrcProto.Stream.Kind kind;
+}

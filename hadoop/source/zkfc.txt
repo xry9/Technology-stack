@@ -1,0 +1,13 @@
+1、最重要的方法, 此其实就是选举, CreateMode.EPHEMERAL 会有一个回调, 根据返回值判断是否是我创建成功的(我猜想的), 还有个特点是 Client 断开连接, Server 端
+  删除该节点, NameNode 由 active --> standby, 就是利用这个特性
+private void createLockNodeAsync() {
+	zkClient.create(zkLockFilePath, appData, zkAcl, CreateMode.EPHEMERAL, this, zkClient);
+}
+还有一个方法也很重要, 相当于注册监听, 但是此处的 watcher 回调原理应该是不同于上面的
+private void monitorLockNodeAsync() {
+	zkClient.exists(zkLockFilePath, watcher, this, zkClient);
+}
+2、zkfs 中 HealthMonitor#doHealthChecks 实时监控 namenode 状态
+总结一下, 不保证没问题:
+a. 两节点选举, 成功的成为 active, 没成功的注册监听
+b. HealthMonitor 线程检查到 namenode 挂了之后, 断开连接?

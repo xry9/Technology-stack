@@ -1,0 +1,562 @@
+AIO不需要通过多路复用器对注册的通道进行轮询操作即可实现异步读写。什么意思呢？NIO采用轮询的方式，一直在轮询的询问stream中数据是否准备就绪，如果准备就绪
+发起处理。但是AIO就不需要了，AIO框架在Linux下使用epoll多路复用IO技术模拟异步IO， 即：【应用程序向操作系统注册IO监听】，
+然后继续做自己的事情。操作系统发生IO事件，并且准备好数据后，在主动通知应用程序，触发相应的函数（这就是一种以订阅者模式进行的改造）。由于应用程序
+不是“轮询”方式而是订阅-通知方式，所以不再需要selector轮询，由channel通道直接到操作系统注册监听
+
+long transCount = filechannel.transferTo(0, filechannel.size(), socketChannel);// 此种传输方式比传统 io 方式快了一倍, server 是老版还是新版其实是无所谓的, 区别在于 client
+
+======================NIO===========================
+unsafe.allocateMemory(8 * 1024 * 1024); 方法返回内存地址, 轮询调会内存溢出
+
+
+--多路复用器 Selector
+总结一下: 其实看一下 SelectionKeyImpl 的四个属性就不太用说太多了, readyOps 的值基本是由 interestOps 决定的, interestOps 的值基本是由每次
+遍历时 channel.register(selc, SelectionKey.OP_READ); 决定的, 我想说真心不好用啊...
+
+
+1.不想多说别的，这四行代码太硬核了：
+	SocketChannel sc = SocketChannel.open();
+	sc.configureBlocking(false);//这个为 false 表示不阻塞吧
+	sc.connect(new InetSocketAddress("127.0.0.1", 9999));
+	sc.register(selc, SelectionKey.OP_CONNECT|SelectionKey.OP_WRITE);
+2.再往下：
+while (true) {
+	selc.select();
+	Set<SelectionKey> set = selc.selectedKeys();// 次方将会阻塞，直到选择器中注册的任意通道可以被操作为止。
+	Iterator<SelectionKey> it = set.iterator();
+	while (it.hasNext()) {
+	    SelectionKey key = it.next();
+		if (key.isConnectable()) {
+		    ...
+			channel.register(selc, SelectionKey.OP_WRITE);
+		} else if (key.isWritable()) {
+			...
+			channel.register(selc, SelectionKey.OP_READ);
+		}
+	}
+}
+
+4、最核心的方法 translateReadyOps
+Net.POLLIN = pollinValue();//1, 普通或优先级带数据可读
+Net.POLLOUT = polloutValue();//4, 普通数据可写
+Net.POLLCONN = pollconnValue();//4
+Net.POLLERR = pollerrValue();//8, 发生错误
+Net.POLLHUP = pollhupValue();//16, 对方描述符挂起
+Net.POLLNVAL = pollnvalValue();//32, 描述字不是一个打开的文件
+-- 正是因为底层硬件层面 POLLOUT 与 POLLCONN 都是 4(底层逻辑应该就是用可写代表可连接), 所以需要要用一个 state 来表示连接的状态
+public static final int OP_ACCEPT = 1 << 4;
+public static final int OP_CONNECT = 1 << 3;
+public static final int OP_READ = 1 << 0;
+public static final int OP_WRITE = 1 << 2;
+
+
+selc.select();  --客户端
+sun.nio.ch.SelectorImpl#select()
+sun.nio.ch.SelectorImpl#select(long)
+sun.nio.ch.SelectorImpl#lockAndDoSelect
+sun.nio.ch.EPollSelectorImpl#doSelect
+sun.nio.ch.EPollSelectorImpl#updateSelectedKeys
+sun.nio.ch.SocketChannelImpl#translateAndSetReadyOps
+sun.nio.ch.SocketChannelImpl#translateReadyOps	--> 核心逻辑判断, 
+sun.nio.ch.SelectionKeyImpl#nioReadyOps(int) 
+	this.readyOps = var1;
+
+selc.select();  --客户端
+sun.nio.ch.SelectorImpl#select()
+sun.nio.ch.SelectorImpl#select(long)
+sun.nio.ch.SelectorImpl#lockAndDoSelect
+sun.nio.ch.EPollSelectorImpl#doSelect
+sun.nio.ch.EPollArrayWrapper#poll
+	this.updated = this.epollWait(this.pollArrayAddress, NUM_EPOLLEVENTS, var1, this.epfd);
+
+
+为什么要把核心逻辑判断放在 translateReadyOps 方法中, 因为 POLLOUT 与 POLLCONN 同为 4, 没法区分可连接状态而引入 SocketChannelImpl#state, 所以在
+SocketChannelImpl 中实现也有一定道理
+5、唤醒只是让调用 epollWait 时没有可用的 channel(会阻塞) 接收到一个信号, 但是并没有真正可用的 channel, 所以这种唤醒有什么用呢, 我猜测就是让线程
+停止阻塞去做别的事
+【EPoll有水平唤醒触发和边缘触发两种触发模式，水平触发有数据可读，若不读取完，下次调用poll时会一致被唤醒。而边缘触发则触发一次后不处理，
+下次除非有新的事件到来否则不会再唤醒。边缘触发性能更好。这里必须将管道数据全部读取完才行，避免设置为水平触发时管道一值唤醒
+https://www.cnblogs.com/cobbliu/articles/10782804.html】
+
+6、nio 的灵魂是 sun.nio.ch.EPollArrayWrapper#eventsLow 与 sun.nio.ch.EPollArrayWrapper#pollArray
+eventsLow 下标是 socket, 值是 ops, 而通过 pollArray 获取
+
+public class SelectionKeyImpl extends AbstractSelectionKey {
+    final SelChImpl channel;
+    public final SelectorImpl selector;
+    private int readyOps;
+}
+SelectionKey 挂一个 selector 和 channel 很好理解
+public abstract class SelectorImpl extends AbstractSelector {
+    protected Set<SelectionKey> selectedKeys = new HashSet();
+    protected HashSet<SelectionKey> keys = new HashSet();
+    private Set<SelectionKey> publicKeys;
+    private Set<SelectionKey> publicSelectedKeys;
+}
+a. Selector 挂多个 SelectionKey 也好理解, 而 selector 与 channel 并无绑定
+b. 通常来说一个 Selector 管理多个 channel, 每个 channel 被一个 selector 管理, 一对多的关系
+c. 但是我认为多对多, 即一个 channel 同时被多个 Selector 也是没有问题的
+d. nio 的灵魂方法应该是 this.epollWait(this.pollArrayAddress, NUM_EPOLLEVENTS, var1, this.epfd);
+e. 以上是我不知道 epoll 总结的
+f. 还得说一下 channel.register 没看太明白怎么影响上面的结果
+rKey = channel.register(selc, SelectionKey.OP_READ);  --客户端
+java.nio.channels.SelectableChannel#register(java.nio.channels.Selector, int)
+java.nio.channels.spi.AbstractSelectableChannel#register
+sun.nio.ch.SelectionKeyImpl#interestOps(int)
+sun.nio.ch.SelectionKeyImpl#nioInterestOps(int)
+sun.nio.ch.SocketChannelImpl#translateAndSetInterestOps
+sun.nio.ch.EPollSelectorImpl#putEventOps
+sun.nio.ch.EPollArrayWrapper#setInterest
+
+https://www.cnblogs.com/guazi/p/6605221.html
+--------------------------
+Selector selc = Selector.open(); selc 的实现类是 sun.nio.ch.EPollSelectorImpl 
+
+int OP_READ = 1 << 0;
+int OP_WRITE = 1 << 2;
+int OP_CONNECT = 1 << 3;
+int OP_ACCEPT = 1 << 4;
+
+1. SocketChannel 和 ServerSocketChannel 都继承自 AbstractSelectableChannel,AbstractSelectableChannel#register 方法中
+  1.1 SelectionKey k = findKey(sel); 而 findKey 方法就是去属性 private SelectionKey[] keys = null; 中找东西去了
+  1.2 k = ((AbstractSelector)sel).register(this, ops, att); 些处把 this 即 channel 传入返回 SelectionKey,说明一个 SelectionKey 对应一个 channel
+    1.2.1 进入到 sun.nio.ch.SelectorImpl#register 中 SelectionKeyImpl var4 = new SelectionKeyImpl((SelChImpl)var1, this);
+	  此处的 var1 就是上面的 channel 哈，再往里看下 SelectionKeyImpl(SelChImpl var1, SelectorImpl var2) {this.channel = var1;this.selector = var2;}
+	1.2.2 接着 SelectionKeyImpl var4 = ... 往下，var4.attach(var3); 走进 java.nio.channels.SelectionKey#attach 方法内是一行代码
+        	return attachmentUpdater.getAndSet(this, ob);
+			想取到该值是方法 public final Object attachment() {return attachment;}
+			多说一句但不是废话,attachmentUpdater = AtomicReferenceFieldUpdater.newUpdater(SelectionKey.class, Object.class, "attachment");
+			attachmentUpdater 和 attachment 两个属性是一个东东
+	1.2.3 往下 this.implRegister(var4); 进入到 sun.nio.ch.EPollSelectorImpl#implRegister 在这里 this.keys.add(var1); 此 keys 就是 sun.nio.ch.SelectorImpl#keys
+	  这个实在是**重要**了，因为 nio 代码中 Set<SelectionKey> set = selc.selectedKeys(); 得到的 set 就是由此 keys 包装而成的
+	1.2.4 再往下 var4.interestOps(var2); var4 是 SelectionKeyImpl, var2 是 ops 哈,所以进入到 sun.nio.ch.SelectionKeyImpl#nioInterestOps(int)
+	  两个主要操作 this.channel.translateAndSetInterestOps(var1, this); this.interestOps = var1;
+	  
+  sun.nio.ch.SelectorImpl#register
+java.nio.channels.spi.AbstractSelector#register
+
+--------
+
+
+public abstract class SelectableChannel extends AbstractInterruptibleChannel implements Channel{
+	public final SelectionKey register(Selector sel, int ops)throws ClosedChannelException{
+		return register(sel, ops, null);
+	}
+	public abstract SelectionKey register(Selector sel, int ops, Object att) throws ClosedChannelException;
+}
+
+public abstract class AbstractSelectableChannel extends SelectableChannel{
+    private SelectionKey[] keys = null;
+	public final SelectionKey register(Selector sel, int ops, Object att) throws ClosedChannelException{
+		SelectionKey k = findKey(sel);
+		if (k != null) {
+			k.interestOps(ops);
+			k.attach(att);
+		}
+		if (k == null) {
+			synchronized (keyLock) {
+				k = ((AbstractSelector)sel).register(this, ops, att);
+				addKey(k);
+			}
+		}
+		return k;
+	}
+	private SelectionKey findKey(Selector sel) {
+		for (int i = 0; i < keys.length; i++)
+			if ((keys[i] != null) && (keys[i].selector() == sel))
+				return keys[i];
+		return null;
+	}
+}
+
+public abstract class SelectionKey {
+    public abstract SelectableChannel channel();
+    public abstract Selector selector();
+    public abstract int interestOps();
+    public abstract SelectionKey interestOps(int ops);
+    public abstract int readyOps();
+    public static final int OP_READ = 1 << 0;
+    public static final int OP_WRITE = 1 << 2;
+    public static final int OP_CONNECT = 1 << 3;
+    public static final int OP_ACCEPT = 1 << 4;
+    public final boolean isReadable() {
+        return (readyOps() & OP_READ) != 0;
+    }
+    public final boolean isWritable() {
+        return (readyOps() & OP_WRITE) != 0;
+    }
+    public final boolean isConnectable() {
+        return (readyOps() & OP_CONNECT) != 0;
+    }
+    public final boolean isAcceptable() {
+        return (readyOps() & OP_ACCEPT) != 0;
+    }
+    private volatile Object attachment = null;
+    private static final AtomicReferenceFieldUpdater<SelectionKey,Object> attachmentUpdater = AtomicReferenceFieldUpdater.newUpdater(SelectionKey.class, Object.class, "attachment");
+    public final Object attach(Object ob) {
+        return attachmentUpdater.getAndSet(this, ob);
+    }
+    public final Object attachment() {
+        return attachment;
+    }
+}
+
+public class SelectionKeyImpl extends AbstractSelectionKey {
+    final SelChImpl channel;
+    public final SelectorImpl selector;
+    private volatile int interestOps;
+    private int readyOps;
+	// 此处充分说明了,SelectionKey 就是挂着 selector 和 channel 
+    SelectionKeyImpl(SelChImpl var1, SelectorImpl var2) {
+        this.channel = var1;
+        this.selector = var2;
+    }
+    public SelectionKey interestOps(int var1) {
+        this.ensureValid();
+        return this.nioInterestOps(var1);
+    }
+	public SelectionKey nioInterestOps(int var1) {
+		this.channel.translateAndSetInterestOps(var1, this);
+		this.interestOps = var1;
+		return this;
+	}
+}
+
+public interface SelChImpl extends Channel {
+    FileDescriptor getFD();
+    int getFDVal();
+    boolean translateAndUpdateReadyOps(int var1, SelectionKeyImpl var2);
+    boolean translateAndSetReadyOps(int var1, SelectionKeyImpl var2);
+    void translateAndSetInterestOps(int var1, SelectionKeyImpl var2);
+    int validOps();
+}
+
+class ServerSocketChannelImpl extends ServerSocketChannel implements SelChImpl {
+    public void translateAndSetInterestOps(int var1, SelectionKeyImpl var2) {
+        int var3 = 0;
+        if ((var1 & 16) != 0) {
+            var3 |= Net.POLLIN;
+        }
+		// registerOps --> InterestOps --> putEventOps
+        var2.selector.putEventOps(var2, var3);
+    }
+	public boolean translateAndSetReadyOps(int var1, SelectionKeyImpl var2) {
+		return this.translateReadyOps(var1, 0, var2);
+	}
+	public boolean translateReadyOps(int var1, int var2, SelectionKeyImpl var3) {
+		int var4 = var3.nioInterestOps();
+		int var5 = var3.nioReadyOps();
+		int var6 = var2;
+		if ((var1 & Net.POLLNVAL) != 0) {
+			return false;
+		} else if ((var1 & (Net.POLLERR | Net.POLLHUP)) != 0) {
+			var3.nioReadyOps(var4);
+			return (var4 & ~var5) != 0;
+		} else {
+			if ((var1 & Net.POLLIN) != 0 && (var4 & 16) != 0) {
+				var6 = var2 | 16;
+			}
+			var3.nioReadyOps(var6);
+			return (var6 & ~var5) != 0;
+		}
+	}
+}
+
+class SocketChannelImpl extends SocketChannel implements SelChImpl {
+	private static final int ST_UNINITIALIZED = -1;
+	private static final int ST_UNCONNECTED = 0;
+	private static final int ST_PENDING = 1;
+	private static final int ST_CONNECTED = 2;
+	private static final int ST_KILLPENDING = 3;
+	private static final int ST_KILLED = 4;
+	private int state = ST_UNINITIALIZED;// -1
+	public boolean connect(SocketAddress sa) throws IOException {
+        synchronized (readLock) {
+            synchronized (writeLock) {
+                synchronized (blockingLock()) {
+                    int n = 0;
+					for (;;) {
+						InetAddress ia = isa.getAddress();
+						if (ia.isAnyLocalAddress()) ia = InetAddress.getLocalHost();
+						n = Net.connect(fd, ia, isa.getPort());
+						if (  (n == IOStatus.INTERRUPTED) && isOpen()) continue;
+						break;
+					}
+                    synchronized (stateLock) { // 获取了 4 把锁, 太厉害了
+                        if (n > 0) {
+                            state = ST_CONNECTED;
+                            if (isOpen()) localAddress = Net.localAddress(fd);
+                            return true;
+                        }
+                        if (!isBlocking())
+                            state = ST_PENDING;//1 客户端调用 sc.connect(new InetSocketAddress("127.0.0.1", 9999)); 时执行, 这里影响 translateReadyOps
+                    }
+                }
+                return false;
+            }
+        }
+    }
+	public boolean finishConnect() throws IOException {
+        synchronized (readLock) {
+            synchronized (writeLock) {                
+                int n = 0;
+				begin();
+				synchronized (blockingLock()) {
+					if (!isBlocking()) {
+						for (;;) {
+							n = checkConnect(fd, false, readyToConnect);
+							if ((n == IOStatus.INTERRUPTED) && isOpen()) continue;
+							break;
+						}
+					}
+				}
+            }
+			if (n > 0) {
+				synchronized (stateLock) {
+					state = ST_CONNECTED;// 这里就是确认了已连接操作, 太重要了, 客户端 channel.finishConnect() 时调用 
+					if (isOpen()) localAddress = Net.localAddress(fd);
+				}
+				return true;
+			}
+			return false;
+        }
+    }
+    public void translateAndSetInterestOps(int var1, SelectionKeyImpl var2) {
+        int var3 = 0;
+        if ((var1 & 1) != 0) {
+            var3 |= Net.POLLIN;
+        }
+        if ((var1 & 4) != 0) {
+            var3 |= Net.POLLOUT;
+        }
+        if ((var1 & 8) != 0) {
+            var3 |= Net.POLLCONN;
+        }
+        var2.selector.putEventOps(var2, var3);
+    }
+	public boolean translateAndSetReadyOps(int var1, SelectionKeyImpl var2) {
+		return this.translateReadyOps(var1, 0, var2);
+	}
+	public boolean translateReadyOps(int ops, int initialOps, SelectionKeyImpl sk) {
+		int intOps = sk.nioInterestOps(); // 这个是关键, 是每次遍历时 channel.register(selc, SelectionKey.OP_READ); 一下的给了 interestOps 值
+		int oldOps = sk.nioReadyOps();
+		int newOps = initialOps;
+		if ((ops & Net.POLLNVAL) != 0) {
+			return false;
+		}
+		if ((ops & (Net.POLLERR | Net.POLLHUP)) != 0) {
+			newOps = intOps;
+			sk.nioReadyOps(newOps);
+			readyToConnect = true;
+			return (newOps & ~oldOps) != 0;
+		}
+		if (((ops & Net.POLLIN) != 0) && ((intOps & SelectionKey.OP_READ) != 0) && (state == ST_CONNECTED))
+			newOps |= SelectionKey.OP_READ;
+		if (((ops & Net.POLLCONN) != 0) && ((intOps & SelectionKey.OP_CONNECT) != 0) && ((state == ST_UNCONNECTED) || (state == ST_PENDING))) {
+			newOps |= SelectionKey.OP_CONNECT;// 这里很关键, 相当于允许连接操作, 会影响 state 值
+			readyToConnect = true;
+		}
+		if (((ops & Net.POLLOUT) != 0) && ((intOps & SelectionKey.OP_WRITE) != 0) && (state == ST_CONNECTED))
+			newOps |= SelectionKey.OP_WRITE;
+		sk.nioReadyOps(newOps);
+		return (newOps & ~oldOps) != 0;
+	}
+}
+
+public abstract class SelectorImpl extends AbstractSelector {
+    protected Set<SelectionKey> selectedKeys = new HashSet();
+    protected HashSet<SelectionKey> keys = new HashSet();
+    private Set<SelectionKey> publicKeys;
+    private Set<SelectionKey> publicSelectedKeys;
+    protected SelectorImpl(SelectorProvider var1) {
+        super(var1);
+		this.publicKeys = Collections.unmodifiableSet(this.keys);
+		this.publicSelectedKeys = Util.ungrowableSet(this.selectedKeys);
+    }
+    public void putEventOps(SelectionKeyImpl var1, int var2) {
+    }
+	protected final SelectionKey register(AbstractSelectableChannel ch, int ops, Object attachment) {
+        SelectionKeyImpl k = new SelectionKeyImpl((SelChImpl)ch, this);
+        k.attach(attachment);
+        implRegister(k);
+        k.interestOps(ops);
+        return k;
+    }
+    protected abstract void implRegister(SelectionKeyImpl var1);
+}
+
+class EPollSelectorImpl extends SelectorImpl {
+    EPollArrayWrapper pollWrapper;
+    private Map<Integer, SelectionKeyImpl> fdToKey;
+	EPollSelectorImpl(SelectorProvider sp) throws IOException {
+		super(sp);
+		long pipeFds = IOUtil.makePipe(false); // 调用创建一个管道，用于唤醒线程用。当线程中断时通过向写管道写入一个字节来唤醒线程
+		fd0 = (int) (pipeFds >>> 32); //无符号移位
+		fd1 = (int) pipeFds;
+		pollWrapper = new EPollArrayWrapper();
+		pollWrapper.initInterrupt(fd0, fd1);
+		fdToKey = new HashMap<>();
+	}
+    public void putEventOps(SelectionKeyImpl var1, int var2) {
+		SelChImpl var3 = var1.channel;
+		this.pollWrapper.setInterest(var3.getFDVal(), var2);
+    }
+	protected void implRegister(SelectionKeyImpl var1) {
+		SelChImpl var2 = var1.channel;
+		int var3 = Integer.valueOf(var2.getFDVal());
+		this.fdToKey.put(var3, var1);
+		this.pollWrapper.add(var3);
+		this.keys.add(var1);
+	}
+    protected int doSelect(long timeout) throws IOException {// api 调用的 selc.select(); 走到这里
+		this.processDeregisterQueue();// 删除取消的key
+		this.pollWrapper.poll(timeout);// 获取就绪文件描述符, 此处是真正阻塞的, this.updated
+		this.processDeregisterQueue();// 再次删除取消的key
+		int numKeysUpdated = this.updateSelectedKeys();// client 的 register 操作在这里面生效
+		if (pollWrapper.interrupted()) { // 若管道被唤醒清理唤醒的数据
+			// Clear the wakeup pipe
+			pollWrapper.putEventOps(pollWrapper.interruptedIndex(), 0);
+			pollWrapper.clearInterrupted();
+			IOUtil.drain(fd0);
+			interruptTriggered = false;
+		}
+		return numKeysUpdated;
+	}
+	private int updateSelectedKeys() {
+		// pollWrapper.updated 是 pollWrapper.poll 产生的,这就认为是个墨盒吧. ServerSocketChannelImpl 和 两个 SocketChannelImpl 都 register 到这个 selector 时,值却为 2
+        int entries = pollWrapper.updated;
+        int numKeysUpdated = 0;
+        for (int i=0; i<entries; i++) {
+            int nextFD = pollWrapper.getDescriptor(i);
+			// fdToKey 里装了所有的 SelectionKeyImpl, 在 SelectionKeyImpl 创建时被 put 
+             SelectionKeyImpl ski = fdToKey.get(Integer.valueOf(nextFD));
+            if (ski != null) {
+                int rOps = pollWrapper.getEventOps(i);// 这里是去硬件层面取值了
+                if (this.selectedKeys.contains(ski)) {
+					// 此处及下面 translateAndSetReadyOps 调用很关键,因为用户调用 key.isAcceptable() isReadable ... 就是在于此
+					// 捋一下这个结构哈, selector 遍历了 selectedKey, 看 selectedKey 对应的 channel 是否 readyOps. 所以说结构可以是这样的
+					// selector 下有多个 selectedKey, selectedKey 只对应一个 channel, 但是是 channel 是可以对应多个 selectedKey 的吧,
+					// 所以呢 selector 与 channel 多对多是没问题的. 说白了读写都是 channel, 核心是 channel, 而 selector, selectedKey 是辅助
+                    if (ski.channel.translateAndSetReadyOps(rOps, ski)) {// channel 和 rOps 都是由 i 产生的, 说有 channel 同一时刻只能有一种状态
+                        ++numKeysUpdated;
+                    }
+                } else {
+                    ski.channel.translateAndSetReadyOps(rOps, ski);
+                    if ((ski.nioReadyOps() & ski.nioInterestOps()) != 0) {
+						// 此 selectedKeys 和用户调 selector.selectedKeys(); 返回的 sun.nio.ch.SelectorImpl#publicSelectedKeys 本质上是一个 
+						// 用户调用 it.remove(); 后, 再调 selector.select();时就会再 add 一遍
+                        this.selectedKeys.add(ski);
+                        ++numKeysUpdated;
+                    }
+                }
+            }
+        }
+        return numKeysUpdated;
+    }
+	public void putEventOps(SelectionKeyImpl var1, int var2) {
+		SelChImpl var3 = var1.channel;
+		this.pollWrapper.setInterest(var3.getFDVal(), var2);
+    }
+	//当线程中断时， 会调用wakeup唤醒，向管道中写入一个字节数据使其读事件就绪被唤醒
+	public Selector wakeup() {
+		if (!interruptTriggered) {
+			pollWrapper.interrupt();
+			interruptTriggered = true;
+		}
+		return this;
+	}
+}
+
+
+class sun.nio.ch.EPollArrayWrapper {
+	private final AllocatedNativeObject pollArray;
+	private final long pollArrayAddress;
+	private int incomingInterruptFD;
+	private final int epfd;
+	EPollArrayWrapper() throws IOException {
+        this.pollArray = new AllocatedNativeObject(var1, true);
+        this.pollArrayAddress = this.pollArray.address();
+    }
+	void initInterrupt(int fd0, int fd1) {
+		outgoingInterruptFD = fd1;
+		incomingInterruptFD = fd0;
+		epollCtl(epfd, EPOLL_CTL_ADD, fd0, EPOLLIN);// 将管道的读取端注册
+	}
+    int getDescriptor(int var1) {
+        int var2 = SIZE_EPOLLEVENT * var1 + FD_OFFSET;
+        return this.pollArray.getInt(var2);
+    }
+	int getEventOps(int var1) {
+		int var2 = SIZE_EPOLLEVENT * var1 + 0;
+		return this.pollArray.getInt(var2);
+	}
+    int poll(long timeout) throws IOException {// 客户端 selc.select(); 打到这里, timeout 值好像可以忽略
+        this.updateRegistrations();// 更新epoll事件，实际调用`epollCtl`加入到epollfd中
+        this.updated = this.epollWait(this.pollArrayAddress, NUM_EPOLLEVENTS, timeout, this.epfd); //获取已就绪的文件句柄
+		//如是唤醒文件句柄，则跳过，设置interrupted=true
+		for (int i=0; i<updated; i++) {
+			if (getDescriptor(i) == incomingInterruptFD) {
+				interruptedIndex = i;
+				interrupted = true;
+				break;
+			}
+		}
+        return this.updated;
+    }
+	// 这里相当于把用户态的 fd 和 events 写入内核态吧, 但是 updateDescriptors 被置 0, 相当于清空, 而 eventsLow 并没有, eventsLow[fd] = events, 相当于把 socket 与其注册的事件都存在 eventsLow 里了
+	private void updateRegistrations() {
+		int j = 0;
+		while (j < updateCount) { // 注册事件的个数
+			int fd = updateDescriptors[j];// 其实应该就是 socket
+			short events = getUpdateEvents(fd);// 注册的事件
+			boolean isRegistered = registered.get(fd);
+			int opcode = 0;
+			if (events != KILLED) {
+				//已经注册过
+				if (isRegistered) {
+					//修改或删除
+					opcode = (events != 0) ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+				} else {
+					//新增
+					opcode = (events != 0) ? EPOLL_CTL_ADD : 0;
+				}
+				if (opcode != 0) {
+					epollCtl(epfd, opcode, fd, events);
+					if (opcode == EPOLL_CTL_ADD) {
+						//增加到registered缓存是否已注册
+						registered.set(fd);
+					} else if (opcode == EPOLL_CTL_DEL) {
+						registered.clear(fd);
+					}
+				}
+			}
+			j++;
+		}
+		updateCount = 0;// 这里清零说明 client 重新 register, 使 updateCount 增加了, 才会重新走这里
+	}
+	public void interrupt() {
+		interrupt(this.outgoingInterruptFD);
+	}
+	private static native void interrupt(int var0);
+}
+
+public abstract class AbstractSelector extends Selector{
+    protected abstract SelectionKey register(AbstractSelectableChannel ch, int ops, Object att);
+}
+public abstract class Selector implements Closeable {
+    public abstract int select() throws IOException;
+}
+public abstract class SelectorImpl extends AbstractSelector {
+    public int select() throws IOException {
+        return this.select(0L);
+    }
+	public int select(long var1) throws IOException {
+		return this.lockAndDoSelect(var1 == 0L ? -1L : var1);
+	}
+	private int lockAndDoSelect(long var1) throws IOException {
+		int var10000;
+		var10000 = this.doSelect(var1);
+		return var10000;
+	}
+	protected abstract int doSelect(long var1) throws IOException;
+}

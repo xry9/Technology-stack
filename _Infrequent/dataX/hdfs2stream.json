@@ -1,0 +1,44 @@
+{
+  "job": {
+    "content": [
+      {
+        "reader": {
+			"name": "hdfsreader",
+			"parameter": {
+				"path": "/hive1/user/hive/warehouse/dept/dept.txt",
+				"defaultFS": "hdfs://cluster01:9000",
+				"column": [
+					   {
+						"index": 0,
+						"type": "long"
+					   },
+					   {
+						"index": 1,
+						"type": "string"
+					   },
+					   {
+						"index": 2,
+						"type": "string"
+					   }
+				],
+				"fileType": "text",
+				"encoding": "UTF-8",
+				"fieldDelimiter": ","
+			}
+        },
+        "writer": {
+          "name": "streamwriter",
+          "parameter": {
+            "encoding": "UTF-8",
+            "print": true
+          }
+        }
+      }
+    ],
+    "setting": {
+      "speed": {
+        "channel": 5
+       }
+    }
+  }
+}

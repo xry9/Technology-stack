@@ -1,0 +1,119 @@
+1、普通字段与 explode 是不能一块用的, spark sql 好像可以
+select explode(array(name,age)) from db.tab2;
+select id, tf.* from db.tab2 lateral view explode(array('A','B')) tf [as ff];
+如果想达到 select id, explode(array(name,age)) from db.tab2; 只能是 select explode(array(array(id,name),array(id,age))) from db.tab2;
+
+2、源码中的 sql 
+	a. SELECT a.key, a.val, count(1) FROM (SELECT explode(map(1,'one',2,'two',3,'three')) AS (key,val) FROM db.tab2 tablesample (1 rows)) a 
+	  GROUP BY a.key, a.val;
+	b. add jar /usr/local/app/apache-hive-1.2.1-bin/lib/hive-contrib-1.2.1.jar;
+	CREATE TEMPORARY FUNCTION explode2 AS 'org.apache.hadoop.hive.contrib.udtf.example.GenericUDTFExplode2';
+	SELECT explode2(array(1,2,3)) AS (col1, col2) FROM src LIMIT 3;
+3、源生 udtf, 在 org.apache.hadoop.hive.ql.exec.FunctionRegistry 中 :
+    system.registerGenericUDTF("explode", GenericUDTFExplode.class);
+    system.registerGenericUDTF("inline", GenericUDTFInline.class);
+    system.registerGenericUDTF("json_tuple", GenericUDTFJSONTuple.class);
+    system.registerGenericUDTF("parse_url_tuple", GenericUDTFParseUrlTuple.class);
+    system.registerGenericUDTF("posexplode", GenericUDTFPosExplode.class);
+    system.registerGenericUDTF("stack", GenericUDTFStack.class);
+	
+	select inline(array(struct('A',10,date '2015-01-01'),struct('B',20,date '2016-02-02'))) as (col1,col2,col3);
+	select stack(2,'A',10, '2015-01-01','B',20, '2016-01-01');
+	CREATE FUNCTION myfunc AS 'myclass' USING JAR 'hdfs:///path/to/jar';
+    https://cwiki.apache.org/confluence/display/Hive/DeveloperGuide+UDTF
+
+
+
+=======================================================
+select explode(array(id,age)) from db.tab2;
+TableScanOperator-TS[0]-602142157[
+	SelectOperator-SEL[1]-1261590832[
+		UDTFOperator-UDTF[2]-639492613[ FileSinkOperator-FS[3]-1815337594]
+	]
+]
+===process===74===1794314439===false===[1, zs, 19]===LazyStruct
+===process===104===[[1, 19]]
+
+select id, tf.* from db.tab2 lateral view explode(array('A','B')) tf;
+TableScanOperator-TS[0]-1887965475[
+	LateralViewForwardOperator-LVF[1]-266196910[
+		SelectOperator-SEL[2]-656787973[
+			LateralViewJoinOperator-LVJ[5]-1802555899[
+				SelectOperator-SEL[6]-2107760645[ FileSinkOperator-FS[7]-2047521920]
+			]
+		] 
+		SelectOperator-SEL[3]-875487383[
+			UDTFOperator-UDTF[4]-1618326377[
+				LateralViewJoinOperator-LVJ[5]-1802555899[
+					SelectOperator-SEL[6]-2107760645[ FileSinkOperator-FS[7]-2047521920]
+				]
+			]
+		]
+	]
+]
+
+===74===1493657028===[1, zs, 19]===LazyStruct
+===74===1775072816===[1, zs, 19]===LazyStruct
+104===[[A, B]]
+===74===2131465140===[1, A]===ArrayList
+===74===2131465140===[1, B]===ArrayList
+
+===forward===836===TableScanOperator-269853881===LateralViewForwardOperator-1112560756===1===[1, zs, 19]
+	(836)) - ===forward===836===LateralViewForwardOperator-1112560756===SelectOperator-2017600489===2===[1, zs, 19]
+		forward===836===SelectOperator-2017600489===LateralViewJoinOperator-1174641185===1===[1]
+
+	(836)) - ===forward===836===LateralViewForwardOperator-1112560756===SelectOperator-2067586671===2===[1, zs, 19]
+		forward===836===SelectOperator-2067586671===UDTFOperator-804993772===1===[[A, B]]
+	
+			rward===836===UDTFOperator-804993772===LateralViewJoinOperator-1174641185===1===[A]
+				6)) - ===forward===836===LateralViewJoinOperator-1174641185===SelectOperator-52642932===1===[1, A]
+					forward===836===SelectOperator-52642932===ListSinkOperator-244430068===1===[1, A]
+			rward===836===UDTFOperator-804993772===LateralViewJoinOperator-1174641185===1===[B]
+				6)) - ===forward===836===LateralViewJoinOperator-1174641185===SelectOperator-52642932===1===[1, B]
+					forward===836===SelectOperator-52642932===ListSinkOperator-244430068===1===[1, B]
+
+public class org.apache.hadoop.hive.ql.exec.LateralViewJoinOperator extends Operator<LateralViewJoinDesc> {
+  public void process(Object row, int tag) throws HiveException {// 起到聚合作用
+    LOG.info("===process===126==="+tag+"==="+(row instanceof Object[]? Arrays.asList((Object[])row) :row));
+    StructObjectInspector soi = (StructObjectInspector) inputObjInspectors[tag];
+    if (tag == SELECT_TAG) {// SELECT_TAG = 0;
+      selectObjs.clear();
+      selectObjs.addAll(soi.getStructFieldsDataAsList(row));
+    } else if (tag == UDTF_TAG) {// UDTF_TAG = 1;
+      acc.clear();
+      acc.addAll(selectObjs);
+      acc.addAll(soi.getStructFieldsDataAsList(row));
+      forward(acc, outputObjInspector);
+    }
+  }
+}
+
+================================================================================
+select name,id, row_number() over(partition by name order by id) from db.tab;
+TableScanOperator-TS[0]-56960427[
+	ReduceSinkOperator-RS[1]-1725073500[
+		SelectOperator-SEL[2]-1613361828[
+			PTFOperator-PTF[3]-387366967[
+				SelectOperator-SEL[4]-1887922615[
+					SelectOperator-SEL[5]-515442419[ FileSinkOperator-FS[6]-1165000566]
+				]
+			]
+		]
+	]
+]
+
+select name,id, sum(age) over(partition by name order by id), row_number() over(partition by name order by id), lag(name) over(partition by name order by id) from db.tab;
+TableScanOperator-TS[0]-1480668865[
+	ReduceSinkOperator-RS[1]-908845261[
+		SelectOperator-SEL[2]-1636003033[
+			PTFOperator-PTF[3]-883110723[
+				SelectOperator-SEL[4]-1167987211[
+					SelectOperator-SEL[5]-698133256[ FileSinkOperator-FS[6]-1341785997]
+				]
+			]
+		]
+	]
+]
+一个 job,结论 over 部分相同时, over 个数对 operator 树没有影响, 如果不同(partition by/order by), 是不一样的, 而且 job 数也可能不同
+
+核心在这方法中: org.apache.hadoop.hive.ql.exec.PTFOperator.PTFInvocation#finishPartition

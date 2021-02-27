@@ -1,0 +1,192 @@
+零散点：
+1、spark写数据库，最好在每个分区内创建连接池对象
+2、checkpoint原理：
+你的job运行完之后，会调用一个finalRDD.doCheckpoint()方法，会顺着rdd lineage，回溯扫描，发现有标记为待checkpoint的rdd，就会进行二次标记，
+inProgressCheckpoint正在接受checkpoint操作，job执行完之后，就会启动一个内部的新job，去将标记为inProgressCheckpoint的rdd的数据，都写入hdfs文件中。
+（备注，如果rdd之前cache过，会直接从缓存中获取数据，写入hdfs中；如果没有cache过，那么就会重新计算一遍这个rdd，再checkpoint）
+将checkpoint过的rdd之前的依赖rdd，改成一个CheckpointRDD*，强制改变你的rdd的lineage。后面如果rdd的cache数据获取失败，直接会通过它的上游CheckpointRDD，
+去容错的文件系统，比如hdfs，中，获取checkpoint的数据。
+persist()与checkpoint()
+深入一点讨论，rdd.persist(StorageLevel.DISK_ONLY) 与 checkpoint 也有区别。前者虽然可以将 RDD 的 partition 持久化到磁盘，但该 partition 由 blockManager 管理。
+一旦 driver program 执行结束，也就是 executor 所在进程 CoarseGrainedExecutorBackend stop，blockManager 也会 stop，被 cache 到磁盘上的 RDD 也会被清空
+（整个 blockManager 使用的 local 文件夹被删除）。而 checkpoint 将 RDD 持久化到 HDFS 或本地文件夹，如果不被手动 remove 掉（ 话说怎么 remove checkpoint 过的 RDD？ ），
+是一直存在的，也就是说可以被下一个 driver program 使用，而 cached RDD 不能被其他 dirver program 使用。
+
+HashShuffle两大死穴：
+1、shuffle前会产生海量小文件在磁盘上，造成大量低效随机磁盘IO
+2、内存不够用，由于内存中需要保存海量文件句柄和临时缓存
+合并之后会有index文件，不用随机的去读写
+
+广播变量，初始的时候，就在Drvier上有一份副本。task在运行的时候，想要使用广播变量中的数据，此时首先会在自己本地的Executor对应的BlockManager中，尝试获取变量副本；
+如果本地没有，那么就从Driver远程拉取变量副本，并保存在本地的BlockManager中；此后这个executor上的task，都会直接使用本地的BlockManager中的副本。
+executor的BlockManager除了从driver上拉取，也可能从其他节点的BlockManager上拉取变量副本
+
+spark算子：
+res11.aggregateByKey(0)(math.max(_,_),(_+_)).collect
+对每个分区调用fun1,计算结果传给fun2计算，初始值参与fun1运算
+
+//第一个参数表示分区下标，第二个参数是分区内所有元素的迭代器
+rdd.mapPartitionsWithIndex((i,iter)=>{
+
+rdd.coalesce(6,true)//分区由少变多，第二个参数要为true，默认是false,表示不需要suffle,repartition调用了rdd.coalesce(n,true)
+coalesce参数为false时参数由少变多无效
+
+因为combineByKey是Spark中一个比较核心的高级函数，其他一些高阶键值对函数底层都是用它实现的。诸如 groupByKey,reduceByKey等等
+createCombiner: V => C ，这个函数把当前的值作为参数，此时我们可以对其做些附加操作(类型转换)并把它返回 (这一步类似于初始化操作)
+mergeValue: (C, V) => C，该函数把元素V合并到之前的元素C(createCombiner)上 (这个操作在每个分区内进行)
+mergeCombiners: (C, C) => C，该函数把2个元素C合并 (这个操作在不同分区间进行)
+
+executor堆外内存
+有时候，如果你的spark作业处理的数据量特别特别大，几亿数据量；然后spark作业一运行，时不时的报错，shuffle file cannot find，executor、task lost，out of memory（内存溢出）；
+可能是说executor的堆外内存不太够用，导致executor在运行的过程中，可能会内存溢出；然后可能导致后续的stage的task在运行的时候，可能要从一些executor中去拉取shuffle map output文件，但是executor可能已经挂掉了，关联的block manager也没有了；所以可能会报shuffle output file not found；resubmitting task；executor lost；spark作业彻底崩溃。
+上述情况下，就可以去考虑调节一下executor的堆外内存。也许就可以避免报错；此外，有时，堆外内存调节的比较大的时候，对于性能来说，也会带来一定的提升。
+--conf spark.yarn.executor.memoryOverhead=2048
+
+==============================
+shuffle
+每次reduece能够拉取多少数据，就由buffer来决定。因为拉取过来的数据，都是先放在buffer中的。然后才用后面的executor分配的堆内存占比（0.2），hashmap，
+去进行后续的聚合、函数的执行。spark.reducer.maxSizeInFlight，48
+默认，map端内存缓冲是每个task，32kb。spark.shuffle.file.buffer
+默认，reduce端聚合内存比例，是0.2，也就是20%。spark.shuffle.memoryFraction
+
+
+==============================
+sparkSql
+5、reduce join转换为map join：spark.sql.autoBroadcastJoinThreshold
+reduce join转换为map join：spark.sql.autoBroadcastoinThreshold（默认是10485760 ）
+
+==============================
+sparkStreaming
+1、实现RDD高可用性：启动WAL预写日志机制
+spark streaming，从原理上来说，是通过receiver来进行数据接收的；接收到的数据，会被划分成一个一个的block；block会被组合成一个batch；针对一个batch，
+会创建一个rdd；启动一个job来执行我们定义的算子操作。
+receiver主要接收到数据，那么就会立即将数据写入一份到容错文件系统（比如hdfs）上的checkpoint目录中的，一份磁盘文件中去；作为数据的冗余副本。
+无论你的程序怎么挂掉，或者是数据丢失，那么数据都不肯能会永久性的丢失；因为肯定有副本。
+WAL（Write-Ahead Log）预写日志机制
+spark.streaming.receiver.writeAheadLog.enable true
+
+batch rdd，它的partition数量是多少呢？一个batch有多少个block，就有多少个partition；就意味着并行度是多少；就意味着每个batch rdd有多少个task会并行计算和处理。
+当然是希望可以比默认的task数量和并行度再多一些了；可以手动调节block interval；减少block interval；每个batch可以包含更多的block；有更多的partition；
+也就有更多的task并行处理每个batch rdd。
+
+3、inputStream.repartition(<number of partitions>)：重分区，增加每个batch rdd的partition数量
+
+有些时候，希望对某些dstream中的rdd进行定制化的分区
+对dstream中的rdd进行重分区，去重分区成指定数量的分区，这样也可以提高指定dstream的rdd的计算并行度
+
+==============================
+spark常见问题
+1、shuffleManager
+spark.shuffle.sort.bypassMergeThreshold：200
+HashShuffleManager那样，默认就去创建多份磁盘文件。一个task，只会写入一个磁盘文件，不同reduce task的数据，用offset来划分界定。
+2、正确的持久化使用方式：
+usersRDD
+usersRDD = usersRDD.cache()
+val cachedUsersRDD = usersRDD.cache()
+3、
+executor的JVM进程，可能内存不是很够用了。那么此时可能就会执行GC。minor GC or full GC。总之一旦发生了GC之后，就会导致executor内，所有的工作线程全部停止，
+比如BlockManager，基于netty的网络通信。--> shuffle file not found
+spark.shuffle.io.maxRetries 3
+spark.shuffle.io.retryWait 5s
+
+spark on yarn 的两种模式cluster,client
+两种模式都启动applicationMaster，只不过cluster模式的am负责资源申请和任务调度（driver），而client模式的am只负责资源申请，任务调度在client
+实践经验，碰到的yarn-cluster的问题：
+有的时候，运行一些包含了spark sql的spark作业，可能会碰到yarn-client模式下，可以正常提交运行；yarn-cluster模式下，可能是无法提交运行的，会报出JVM的PermGen（永久代）的内存溢出，OOM。
+yarn-client模式下，driver是运行在本地机器上的，spark使用的JVM的PermGen的配置，是本地的spark-class文件（spark客户端是默认有配置的），JVM的永久代的大小是128M，这个是没有问题的；但是呢，在yarn-cluster模式下，driver是运行在yarn集群的某个节点上的，使用的是没有经过配置的默认设置（PermGen永久代大小），82M。
+--conf spark.driver.extraJavaOptions="-XX:PermSize=128M -XX:MaxPermSize=256M"
+
+
+yarn-client模式下，会产生什么样的问题呢？
+由于咱们的driver是启动在本地机器的，而且driver是全权负责所有的任务的调度的，也就是说要跟yarn集群上运行的多个executor进行频繁的通信（中间有task的启动消息、task的执行统计消息、task的运行状态、shuffle的输出结果）。
+咱们来想象一下。比如你的executor有100个，stage有10个，task有1000个。每个stage运行的时候，都有1000个task提交到executor上面去运行，平均每个executor有10个task。接下来问题来了，driver要频繁地跟executor上运行的1000个task进行通信。通信消息特别多，通信的频率特别高。运行完一个stage，接着运行下一个stage，又是频繁的通信。
+在整个spark运行的生命周期内，都会频繁的去进行通信和调度。所有这一切通信和调度都是从你的本地机器上发出去的，和接收到的。这是最要人命的地方。你的本地机器，很可能在30分钟内（spark作业运行的周期内），进行频繁大量的网络通信。那么此时，你的本地机器的网络通信负载是非常非常高的。会导致你的本地机器的网卡流量会激增！！！
+你的本地机器的网卡流量激增，当然不是一件好事了。因为在一些大的公司里面，对每台机器的使用情况，都是有监控的。不会允许单个机器出现耗费大量网络带宽等等这种资源的情况。运维人员。可能对公司的网络，或者其他（你的机器还是一台虚拟机），对其他机器，都会有负面和恶劣的影响。
+yarn-client的driver运行在本地，通常来说本地机器跟yarn集群都不会在一个机房的，所以说性能可能不是特别好；
+实际上线了以后，在生产环境中，都得用yarn-cluster模式，去提交你的spark作业。
+
+executor，优先从自己本地关联的BlockManager中获取某份数据
+如果本地block manager没有的话，那么会通过TransferService，去远程连接其他节点上executor的block manager去获取
+正好碰到那个exeuctor的JVM在垃圾回收
+此时呢，就会没有响应，无法建立网络连接；会卡住；ok，spark默认的网络连接的超时时长，是60s；如果卡住60s都无法建立连接的话，那么就宣告失败了。
+碰到一种情况，偶尔，偶尔，偶尔！！！没有规律！！！某某file。一串file id。uuid（dsfsfd-2342vs--sdf--sdfsd）。not found。file lost。
+这种情况下，很有可能是有那份数据的executor在jvm gc。所以拉取数据的时候，建立不了连接。然后超过默认60s以后，直接宣告失败。
+报错几次，几次都拉取不到数据的话，可能会导致spark作业的崩溃。也可能会导致DAGScheduler，反复提交几次stage。TaskScheduler，反复提交几次task。大大延长我们的spark作业的运行时间。
+可以考虑调节连接的超时时长。
+--conf spark.core.connection.ack.wait.timeout=300
+spark.core.connection.ack.wait.timeout（spark core，connection，连接，ack，wait timeout，建立不上连接的时候，超时等待时长）
+
+========
+spark-sql，它的内部是要进行很复杂的SQL的语义解析、语法树的转换等等，特别复杂，在这种复杂的情况下，如果说你的sql本身特别复杂的话，很可能会比较导致性能的消耗，
+内存的消耗。可能对PermGen永久代的占用会比较大。
+
+spark sql，sql，要注意，一个问题
+sql，有大量的or语句。比如where keywords='' or keywords='' or keywords=''
+当达到or语句，有成百上千的时候，此时可能就会出现一个driver端的jvm stack overflow，JVM栈内存溢出的问题
+JVM栈内存溢出，基本上就是由于调用的方法层级过多，因为产生了大量的，非常深的，超出了JVM栈深度限制的，递归。递归方法。我们的猜测，spark sql，
+有大量or语句的时候，spark sql内部源码中，在解析sql，比如转换成语法树，或者进行执行计划的生成的时候，对or的处理是递归。or特别多的话，就会发生大量的递归。
+JVM Stack Memory Overflow，栈内存溢出。
+
+如上条语句,将查询结果插入一分区表中,担心会有小文件过多问题,可以先将查询结果repartition注册成临时表,即:
+spark.sql("select *,'changsha',2 from userlocation").repartition(100).registerTempTable("temp1")
+
+=============================
+spark调优
+--conf spark.locality.wait.node=20s	这个参数很好用
+spark.shuffle.file.buffer，默认32k	内存较小，并行度很高时有一定影响
+spark.shuffle.memoryFraction，默认0.2，影响很大
+
+1、使用Kryo序列化机制：
+Kryo序列化机制，一旦启用以后，会生效的几个地方：
+算子函数中使用到的外部变量
+持久化RDD时进行序列化，StorageLevel.MEMORY_ONLY_SER
+shuffle
+序列化task发送到executor上执行
+2、
+fastutil
+Spark中应用fastutil的场景：
+基本都是类似于IntList的格式，前缀就是集合的元素类型；特殊的就是Map，Int2IntMap，代表了key-value映射的元素类型。除此之外，刚才也看到了，还支持object、reference。
+1、如果算子函数使用了外部变量；那么第一，你可以使用Broadcast广播变量优化；第二，可以使用Kryo序列化类库，提升序列化性能和效率；第三，如果外部变量是某种比较大的集合
+，那么可以考虑使用fastutil改写外部变量，首先从源头上就减少内存的占用，通过广播变量进一步减少内存占用，再通过Kryo序列化类库进一步减少内存占用。
+
+3、spark.locality.wait，默认是3s
+4、
+shuffle：可以优化网络传输的性能
+1、如果算子函数使用了外部变量；那么
+第一，你可以使用Broadcast广播变量优化；
+第二，可以使用Kryo序列化类库，提升序列化性能和效率；
+第三，如果外部变量是某种比较大的集合，那么可以考虑使用fastutil改写外部变量，首先从源头上就减少内存的占用，通过广播变量进一步减少内存占用，再通过Kryo序列化类库进一步减少内存占用。
+====================================
+美团spark调优：
+原则一：避免创建重复的RDD
+原则二：尽可能复用同一个RDD
+	除了要避免在开发过程中对一份完全相同的数据创建多个RDD之外，在对不同的数据执行算子操作时还要尽可能地复用一个RDD。比如说，有一个RDD的数据格式是key-value类型的，另一个是单value类型的，这两个RDD的value数据是完全一样的。那么此时我们可以只使用key-value类型的那个RDD，因为其中已经包含了另一个的数据。对于类似这种多个RDD的数据有重叠或者包含的情况，我们应该尽量复用一个RDD，这样可以尽可能地减少RDD的数量，从而尽可能减少算子执行的次数
+原则三：对多次使用的RDD进行持久化
+原则四：尽量避免使用shuffle类算子（Broadcast）
+原则五：使用map-side预聚合的shuffle操作
+	所谓的map-side预聚合，说的是在每个节点本地对相同的key进行一次聚合操作，类似于MapReduce中的本地combiner。map-side预聚合之后，每个节点本地就只会有一条相同的key，因为多条相同的key都被聚合起来了。其他节点在拉取所有节点上的相同key时，就会大大减少需要拉取的数据数量，从而也就减少了磁盘IO以及网络传输开销。通常来说，在可能的情况下，建议使用reduceByKey或者aggregateByKey算子来替代掉groupByKey算子
+原则六：使用高性能的算子
+	使用reduceByKey/aggregateByKey替代groupByKey，使用mapPartitions替代普通map，使用foreachPartitions替代foreach，使用filter之后进行coalesce操作，
+	使用repartitionAndSortWithinPartitions替代repartition与sort类操作：
+		repartitionAndSortWithinPartitions是Spark官网推荐的一个算子，官方建议，如果需要在repartition重分区之后，还要进行排序，建议直接使用repartitionAndSortWithinPartitions算子。因为该算子可以一边进行重分区的shuffle操作，一边进行排序。shuffle与sort两个操作同时进行，比先shuffle再sort来说，性能可能是要高的。
+原则七：广播大变量
+原则八：使用Kryo优化序列化性能
+	在Spark中，主要有三个地方涉及到了序列化：
+    在算子函数中使用到外部变量时，该变量会被序列化后进行网络传输（见“原则七：广播大变量”中的讲解）。
+    将自定义的类型作为RDD的泛型类型时（比如JavaRDD，Student是自定义类型），所有自定义类型对象，都会进行序列化。因此这种情况下，也要求自定义的类必须实现Serializable接口。
+    使用可序列化的持久化策略时（比如MEMORY_ONLY_SER），Spark会将RDD中的每个partition都序列化成一个大的字节数组。
+原则九：优化数据结构
+Java中，有三种类型比较耗费内存：
+    对象，每个Java对象都有对象头、引用等额外的信息，因此比较占用内存空间。
+    字符串，每个字符串内部都有一个字符数组以及长度等额外信息。
+    集合类型，比如HashMap、LinkedList等，因为集合类型内部通常会使用一些内部类来封装集合元素，比如Map.Entry。
+	因此Spark官方建议，在Spark编码实现中，特别是对于算子函数中的代码，尽量不要使用上述三种数据结构，尽量使用字符串替代对象，使用原始类型（比如Int、Long）替代字符串，使用数组替代集合类型，这样尽可能地减少内存占用，从而降低GC频率，提升性能。
+	但是在笔者的编码实践中发现，要做到该原则其实并不容易。因为我们同时要考虑到代码的可维护性，如果一个代码中，完全没有任何对象抽象，全部是字符串拼接的方式，那么对于后续的代码维护和修改，无疑是一场巨大的灾难
+资源参数调优
+num-executors
+executor-memory：num-executors乘以executor-memory，是不能超过队列的最大内存量的。此外，如果你是跟团队里其他人共享这个资源队列，那么申请的内存量最好不要超过资源队列最大总内存的1/3~1/2
+executor-cores：num-executors * executor-cores不要超过队列总CPU core的1/3~1/2左右比较合适
+driver-memory：Driver的内存通常来说不设置，或者设置1G左右应该就够了
+spark.default.parallelism：设置该参数为num-executors * executor-cores的2~3倍较为合适，比如Executor的总CPU core数量为300个，那么设置1000个task是可以的
+park.storage.memoryFraction：有较多的RDD持久化操作，该参数的值可以适当提高一些；此外，如果发现作业由于频繁的gc导致运行缓慢（通过spark web ui可以观察到作业的gc耗时），意味着task执行用户代码的内存不够用，那么同样建议调低这个参数的值
+spark.shuffle.memoryFraction：该参数用于设置shuffle过程中一个task拉取到上个stage的task的输出后，进行聚合操作时能够使用的Executor内存的比例，默认是0.2。也就是说，Executor默认只有20%的内存用来进行该操作。shuffle操作在进行聚合时，如果发现使用的内存超出了这个20%的限制，那么多余的数据就会溢写到磁盘文件中去，此时就会极大地降低性能

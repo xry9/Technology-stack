@@ -1,0 +1,46 @@
+yum install -y gcc gcc-c++
+cd protobuf-2.5.0
+./configure
+make
+make install
+protoc --version
+yum -y install cmake zlib-devel openssl-devel
+mv hadoop-2.5.0-cdh5.3.6 hadoop-2.5.0-cdh5.3.6-src	解压完源码包最好改下名
+mvn package -Pdist,native -DskipTests -Dtar 
+----
+export JAVA_HOME=/usr/local/app/jdk1.7.0_67
+export M2_HOME=/usr/local/app/apache-maven-3.3.9
+export FINDBUGS_HOME=/usr/local/app/findbugs-1.3.9
+export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin:$FINDBUGS_HOME/bin
+----
+这个环境可以直接做apache Hadoop2.6编译 mvn package -Pdist,native -DskipTests -Dtar。jdk用1.8时用编译不过，用这个命令即可:mvn clean package -DskipTests -Pdist,native -Dtar -Dmaven.javadoc.skip=true
+===============================================
+如果java版本不是java7,或许卸载java也是必要的
+java -version
+rpm -qa|grep java
+rpm -e --nodeps java-1.5.0-gcj-1.5.0.0-29.1.el6.x86_64 java-1.7.0-openjdk-1.7.0.121-2.6.8.1.el6_8.x86_64 tzdata-java-2016j-1.el6.noarch java_cup-0.10k-5.el6.x86_64 java-1.7.0-openjdk-devel-1.7.0.121-2.6.8.1.el6_8.x86_64
+如果网速太慢用阿里的maven也是必要的，但是网速太慢即便是所有jar包都下载完应该也是不成功的，因为还要在线下载tomcat等一些东东的，但是只要把tomcat到载并拷贝到指定的目录（看日志），断网也可编译成功
+<mirror>
+  <id>alimaven</id>
+  <name>aliyun maven</name>
+  <url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+  <mirrorOf>central</mirrorOf>
+</mirror>
+========================================
+带有snappy压缩和bzip2压缩的编译：
+yum install -y bzip2 bzip2-devel
+cd snappy-1.1.2
+./configure
+make
+make install
+tar -xvf hadoop-2.5.0-cdh5.3.6-src.tar.gz
+mv hadoop-2.5.0-cdh5.3.6 hadoop-2.5.0-cdh5.3.6-src
+mvn package -Pdist,native -DskipTests -Dtar -Drequire.snappy
+----
+hadoop checknative
+========================================
+--机器内存最好调大一些，否则会内存溢出，如果虚拟机是最小化安装的话，退便任何一步都没出错hadoop checknative 时，snappy仍然有问题，可以选择基本安装
+--在此环境下成功编译了（./hadoop checknative 全为true）apache hadoop2.6 和cdh5.4.0 hadoop2.6 命令都是mvn package -Pdist,native -DskipTests -Dtar -Drequire.snappy，但只要把jdk换成1.8就不行，会报如下错误
+	Detected JDK Version: 1.8.0-77 is not in the allowed range [1.7.0,1.7.1000}]
+	[ERROR] Command line was: /usr/local/app/jdk1.8.0_77/jre/../bin/javadoc @options @packages
+--在一个“干净”的linux环境直接安装，openssl为false，其它为true，而且严格测试Lz4Codec，GzipCodec，SnappyCodec，BZip2Codec皆有效

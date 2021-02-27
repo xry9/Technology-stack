@@ -1,0 +1,65 @@
+3、sudo systemctl restart scylla-server
+4、nodetool status
+5、du -a *Data.db |sort -rn |awk '{print $5}'|xargs du -sh
+
+
+
+https://blog.csdn.net/snipercai/article/details/88663385
+yum remove -y abrt
+install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+yum install scylla -y
+scylla_setup
+yes
+yes
+no
+no
+yes
+no
+yes
+yes
+yes
+yes
+yes
+yes
+
+vim /etc/scylla/scylla.yaml
+rpc_address:pseudo
+
+systemctl start scylla-server
+cqlsh pseudo
+
+create keyspace domestic with replication = {'class':'SimpleStrategy','replication_factor':2};
+desc keyspaces;
+
+CREATE TABLE student(  
+student_id int PRIMARY KEY,  
+student_name text,  
+student_city text,  
+student_fees varint,  
+student_phone varint  
+);
+SELECT * FROM student;
+INSERT INTO student (student_id, student_fees, student_name)   VALUES(1,5000, 'Maxsu');  
+INSERT INTO student (student_id, student_fees, student_name)   VALUES(2,3000, 'Minsu');  
+INSERT INTO student (student_id, student_fees, student_name)   VALUES(3, 2000, 'Modlee');
+
+SELECT * FROM student WHERE student_id=2;
+UPDATE student SET student_fees=10000,student_name='XunWang' WHERE student_id=2;
+UPDATE student SET student_fees=10000,student_name='XunWang' WHERE student_id=2;
+
+DELETE FROM student WHERE student_id=3;
+
+
+systemctl start scylla-server
+
+
+
+mvn archetype:generate -DgroupId=com.xryj -DartifactId=scyllaDBDemo -DarchetypeArtifactId=maven-archetype-quickstart
+mvn exec:java -Dexec.mainClass="com.xrjy.App"
+
+
+===========================cassandra======================
+https://www.yiibai.com/cassandra/cassandra-create-keyspace.html
+
+vim conf/cassandra.yaml
+cassandra -f

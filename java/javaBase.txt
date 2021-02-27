@@ -1,0 +1,48 @@
+8、Java对象的表示模型叫做"OOP-Klass"二分模型，包括两部分
+	1. OOP，即Ordinary Object Point，普通对象指针。说实话这个名称挺难理解。说白了其实就是表示对象的实例信息
+	2. Klass，即Java类的C++对等体，用来描述Java类，包含了元数据和方法信息等	
+	3. Java的方法调用是值传递，不是引用传递，原因就在这里，传递进来的参数相当于在局部变量表里面拷贝了一份，实际计算时，操作数栈操作的是
+	局部变量变量里面的值，而不是外部的变量
+
+12、
+从CPU到     　　大约需要的CPU周期  大约需要的时间(单位ns)
+寄存器        　　1 cycle
+L1 Cache   　　 ~3-4 cycles          ~0.5-1 ns
+L2 Cache 　　　~10-20 cycles 　　~3-7 ns
+L3 Cache 　　　~40-45 cycles 　　~15 ns
+内存 　　　　　  ~120-240 cycles  ~60-120ns
+
+15、
+  异常 Exception in thread "main" java.lang.OutOfMemoryError: GC overhead limit exceeded
+出现该错误的原因是因为垃圾回收为了释放较小的空间而占用了大量时间造成的。通常来说，当程序用98%的时间回收了不到2%的堆内存时导致的。
+
+17、解释一下 内部类引用局部变量为什么要用 final 修饰，不一定对啊
+	可以通过反编译内部类的class 文件得到解释。很像闭包啊，就是把局部变量的引用做为内部类的一个成员变量拷贝了一份，如果可以改的话，
+	那别人用岂不是乱了
+
+23、计算机存正负数（原码、反码、补码）、算加减法，记住以下几点就全通了，以byte为例：
+	a 没有负数概念，所有位都是正值（计算机中只有加法，只有正值），只符号位为-128, 1000 0000：-128
+	b 除符号位按位取反相当于 X --> +127-X
+	c 所以还要再加1 X --> +128-X
+	d X -128 + 127 - X + 1 = 0 相当于一轮操作后回到原点, 即验证假设
+	-5取补码即为以上步骤
+	
+25、sun.jvmstat.monitor 包可以获取 java 相关进程信息。 
+	获取当前进程ID: java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0]
+	获取当前进程名:sun.jvmstat.monitor.MonitoredVmUtil.mainClass(MonitoredHost.getMonitoredHost("localhost").getMonitoredVm(new VmIdentifier("//" + java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0])), true)
+
+28、获取对象大小底层方法
+baseOffset = unsafe.arrayBaseOffset(type);
+indexScale = unsafe.arrayIndexScale(type);
+final int offset = (int) unsafe.objectFieldOffset(fld);
+这样可以创建一个对象
+DemoClass obj = (DemoClass) unsafe.allocateInstance(DemoClass.class);
+
+29、Thread.getAllStackTraces() 这个方法好厉害, 获取所有线程对象啊
+JavaLangAccess 和 SharedSecrets 可以获取栈帧中的所有实例对象的类名称
+JavaLangAccess access = SharedSecrets.getJavaLangAccess();
+Throwable throwable = new Throwable();
+int depth = access.getStackTraceDepth(throwable);
+StackTraceElement frame = access.getStackTraceElement(throwable, i);
+
+32、Thread.setUncaughtExceptionHandler, Thread.setDefaultUncaughtExceptionHandler

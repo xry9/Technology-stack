@@ -1,0 +1,152 @@
+--conf spark.locality.wait.node=20s	这个参数很好用
+用--conf spark.shuffle.manager=hash时测试以下两个参数
+spark.shuffle.file.buffer，默认32k	内存较小，并行度很高时有一定影响
+spark.shuffle.memoryFraction，默认0.2，影响很大
+spark.storage.memoryFraction	些参数在gc占比较大时也影响不大
+spark.serializer=org.apache.spark.serializer.KryoSerializer	加入此参数，wordcount效率提升也很大
+--------
+spark.storage.memoryFraction=0.6,内存是4g时，stage0时2.8g,storage1时3.2g
+spark.storage.memoryFraction=0.4,内存是4g时，2.2g左右
+spark.storage.memoryFraction=0.4,内存是4g时，2.2g左右
+========================================================
+spark-shell --master=spark://pseudo:7077 --conf spark.executor.memory=4g --conf spark.executor.cores=4
+--/data/words0.txt 文件183M
+sc.textFile("hdfs://pseudo:9000/data/words0.txt").flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}.count	--两个阶段都是2个task
+sc.textFile("hdfs://pseudo:9000/data/words0.txt").flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey((x,y) => x+y,4).count	--reduce阶段变为4个task
+sc.textFile("hdfs://pseudo:9000/data/words0.txt",100).flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}.count	--100，100
+sc.textFile("hdfs://pseudo:9000/data/words0.txt",100).flatMap{x=>x.split(" ")}.map{x=>(x,1)}.coalesce(40).reduceByKey{(x,y) => x+y}.count	--40，40
+sc.textFile("hdfs://pseudo:9000/data/words0.txt",100).flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}.coalesce(40).count	--100，40
+----
+spark-shell --master=spark://pseudo:7077 --conf spark.executor.memory=4g --conf spark.executor.cores=4 --conf spark.default.parallelism=20
+sc.textFile("hdfs://pseudo:9000/data/words0.txt").flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}.count	--2，20
+sc.textFile("hdfs://pseudo:9000/data/words0.txt",100).flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}.count	--100，20
+--------
+spark-shell --master=spark://pseudo:7077 --conf spark.executor.memory=4g --conf spark.executor.cores=4 --driver-class-path=/root/jars/mysql-connector-java-5.1.38-bin.jar
+val hiveContext = new org.apache.spark.sql.hive.HiveContext(sc)
+hiveContext.sql("use db")
+hiveContext.sql("select deptid,count(deptid) from emp group by deptid").saveAsTable("r1")	--2，200
+spark-shell --master=spark://pseudo:7077 --conf spark.executor.memory=4g --conf spark.executor.cores=4 --conf spark.sql.shuffle.partitions=50 --driver-class-path=/root/jars/mysql-connector-java-5.1.38-bin.jar
+hiveContext.sql("select deptid,count(deptid) from emp group by deptid").saveAsTable("r2")	--2，50
+--------
+--conf spark.shuffle.manager=hash、sort、tungsten-sort
+====================================spark2 sql
+import java.io.File
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.SparkSession
+val warehouseLocation = new File("spark-warehouse").getAbsolutePath
+val spark = SparkSession.builder().appName("Spark Hive Example").config("spark.sql.warehouse.dir", warehouseLocation).enableHiveSupport().getOrCreate()
+import spark.implicits._
+import spark.sql
+sql("CREATE TABLE IF NOT EXISTS src (key INT, value STRING) USING hive")
+sql("LOAD DATA LOCAL INPATH '/root/app/spark-2.2.0-bin-hadoop2.7/examples/src/main/resources/kv1.txt' INTO TABLE src")
+sql("SELECT * FROM src").show()
+=============================================
+val map = sc.textFile("hdfs://pseudo:9000/data/words1.txt",8).flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}.collect
+case class Person(name: String, age: Int)
+val mapp = map.map(x=>{Person(x._1,x._2)})
+val list = sc.makeRDD(List(1 to 80),80)
+list.map(x=>{mapp.size;x}).collect
+--------
+spark.sql.autoBroadcastJoinThreshold 	10240	--默认10M
+============================
+真正做了一次Mr和spark的执行效率的对比测试，这次我几乎没有偏袒spark，数据比较合理，大概三倍重复的words，几乎是4个块（509.7M，因为机器是4个core）,
+MR结果为130s；spark结果为1.8min，改shuffle为hash时为1.3min，又改序列化Kryo后为56s。（--conf spark.executor.memory=8g --conf spark.executor.cores=4）
+我说几乎没有偏袒spark，但是Mr也可以调优啊，其实我觉得mr比spark慢只有两点，一是并行任务以进程形式运行，资源开销比较大；二是shuffle中间结果排序
+原则上第二点不算，因为大作业就是得排序啊，但是现实中真正大作业太少，所以短兵相接，真刀真枪比试，Mr只有一个短板就是资源开销大，故真实比例应为130/(60*1.8)=1.2。常规作业spark执行效率是mr的4-5倍还是比较稳妥的
+----
+sc.textFile("/data/spark.txt",128).map(line=>{val x=line.split(",");((x(0),x(1)),(x(2),x(3).toInt))}).reduceByKey((x,y)=>(if(x._1.compareTo(y._1)>0) y._1 else x._1,x._2+y._2)).take(1)
+sc.textFile("/data/spark.txt",128).map(line=>{val x=line.split(",");((x(0),x(1)),(x(2),x(3).toInt))}).reduceByKey((x,y)=>(if((date_diff(x._1,y._1))>0) y._1 else x._1,x._2+y._2)).take(1)
+sc.textFile("/data/spark.txt").map(line=>{val x=line.split(",");(x(0),x(1),x(2),x(3).toInt)}).toDF("userid","location","time","period").write.save("/data2")
+生成文件格式是：.snappy.parquet，而且我没编译本地库，parquet可以直接下面操作，orc就不行
+spark.sqlContext.load("/data2").toDF("userid","location","time","period").groupBy("userid","location").agg(min("time"),sum("period")).limit(1).show
+----
+case class Coltest(col1:String,col2:String,col3:String,col4:Int)extends Serializable
+val ds = sc.textFile("/data/spark.txt").map(line=>{val x=line.split(",");(x(0),x(1),x(2),x(3).toInt)}).map(line=>Coltest(line._1,line._2,line._3,line._4)).toDS
+ds.groupBy(ds("col1"),ds("col2")).agg(min(ds("col3")),sum(ds("col4"))).limit(1).show
+==============================
+spark.sql("insert into table ulss select * from uls")>>生成文件为*c000.snappy.parquet
+spark.sql("insert into table ulsp partition(city) select *,'shenyang' from uls") >>*.c000 
+*.c000文件经spark.sqlContext.read.parquet发现也是parquet文件，但文件大小几乎是.snappy.parquet的两倍
+parquet用gzip压缩比snappy要高1.5倍，但是读取文件gzip稍慢
+parquet表以tblproperties ("parquet.compress"="SNAPPY")形式设置压缩好像不行，要set parquet.compression=SNAPPY;
+----
+spark.sql("create table ulpp(userid string,location string,time string,period int) partitioned by(city string,area int) stored as parquet")
+spark.sql("set hive.exec.dynamic.partition.mode=nonstrict")
+spark.sql("insert into ulpp partition(city,area) select *,'changsha',2 from userlocation")
+如上条语句,将查询结果插入一分区表中,担心会有小文件过多问题,可以先将查询结果repartition注册成临时表,即:
+spark.sql("select *,'changsha',2 from userlocation").repartition(100).registerTempTable("temp1")
+----
+.snappy.parquet用spark读取居然可拆分,gzip压缩的snappy文件也是可拆分
+spark.sqlContext.setConf("spark.sql.parquet.compression.codec","gzip"),此参数可以设置例如spark.sql("insert into table ulss select * from uls")插入数据的格式.
+	插入分区表时.c000,经验证是parquet,spark.sql("set parquet.compression=GZIP")是生效的,但是不生效,要用前一个参数. 同一表中出现三种格式文件(uncompressed, snappy, gzip)没有问题
+	分区表spark.sqlContext.setConf("spark.sql.parquet.compression.codec","gzip")设置是不生效的
+===============================
+spark.sqlContext.setConf("spark.sql.parquet.compression.codec","gzip")
+spark.sql("select * from userlocation").repartition(1).registerTempTable("temp")
+spark.sql("insert into table ulg select * from temp")
+spark.sql("select * from ul").groupBy("userid","location").agg(min("time"),sum("period")).show
+性能测试 txt:uncompressed:snappy:gzip>>47:55:47:56,文件大小uncompressed:snappy:gzip>>1016.2:629.6:317.3:214.5
+----
+spark.sql("select count(userid) from userlocation").show	>> 11s	input:1016.6M	shuffleRead:472.0B
+spark.sql("select count(*) from userlocation").show	>>	8s	input:1016.6M	shuffleRead:472.0B
+spark.sql("select count(userid) from ul").show	>>	5s	input:42.4M	shuffleRead:295.0B
+spark.sql("select count(userid) from uls").show	>>	5s	input:41.9M	shuffleRead:233.0B
+spark.sql("select count(userid) from ulg").show	>>	5s	input:41.8M	shuffleRead:233.0B
+spark.sql("select count(*) from ul").show	>>	3s	input:12.0K	shuffleRead:295.0B
+spark.sql("select count(*) from uls").show	>>	3s	input:6.7K	shuffleRead:233.0B
+spark.sql("select count(*) from ulg").show	>>	3s	input:5.3K	shuffleRead:233.0B
+================================
+一张大表一张小表，取两表全量，但以小表为准去重(以小表updatatime字段去重，小表该字段最新)，这种模型如果用rdd更灵活呀，可以用reduceByKey
+val df1 = sc.textFile("/data/spark2.txt").map(line=>{val x=line.split("\t");(x(0).toInt,x(1),x(2))}).toDF("id", "name", "deptid")
+val df2 = sc.textFile("/data/spark3.txt").map(line=>{val x=line.split("\t");(x(0).toInt,x(1),x(2))}).toDF("id", "name", "deptid")
+val union=df1.union(df2)
+val semi = df1.join(df2,df1("id")===df2("id"),"leftsemi")
+union.except(semi).show
+----
+class MyUDAF2 extends org.apache.spark.sql.expressions.UserDefinedAggregateFunction {
+import org.apache.spark.SparkConf
+import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.types.StringType
+import org.apache.spark.sql.types.StructField
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.expressions.MutableAggregationBuffer
+import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.types.IntegerType
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.SparkContext
+import org.apache.spark.sql.types.DoubleType
+import org.apache.spark.sql.types.LongType
+override def inputSchema: StructType = StructType(Array(StructField("input", StringType, true),StructField("input2", StringType, true),StructField("input3", StringType, true)))
+override def bufferSchema: StructType = StructType(Array(StructField("time", StringType, true)))
+override def dataType: DataType = StringType
+override def deterministic: Boolean = true
+override def initialize(buffer: MutableAggregationBuffer): Unit = { buffer(0) = "" }
+override def update(buffer: MutableAggregationBuffer, input: Row): Unit = {
+if(buffer(0).toString().compareTo(input(0).toString())<=0){
+buffer(0) = input.getAs[String](0)
+}
+}
+override def merge(buffer1: MutableAggregationBuffer, buffer2: Row): Unit = {
+if(buffer1(0).toString().compareTo(buffer2(0).toString())<=0){
+buffer1(0) = buffer2.getAs[String](0)
+}
+}
+override def evaluate(buffer: Row): Any = buffer.getAs[String](0) + "," + buffer.getAs[String](0)
+}
+spark.udf.register("mtime", new MyUDAF2)
+val df1 = sc.textFile("/data/spark2.txt").map(line=>{val x=line.split("\t");(x(0).toInt,x(1),x(2))}).toDF("id", "name", "deptid")
+union.registerTempTable("unn")
+spark.sql("select id,mtime(deptid) as cc from unn group by id").show
+--------
+spark.udf.register("split", (str: String) => (str.split(",")))
+
+spark.udf.register("lengthSum", (arr: scala.collection.mutable.WrappedArray[(String,String)]) =>{
+var c = 0
+for(str<-arr){
+c+=str._1.length
+}
+c
+})
+spark.sql("select lengthSum(collect_list(name)) from tab group by id").show
+
+sparksql动态向分区表导入文件时，每个分区结果好像不是200个，但向非分区表插入时是200个

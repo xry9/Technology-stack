@@ -1,0 +1,2 @@
+type=command
+command=hive -f '/home/tyx/command/create1.sql'

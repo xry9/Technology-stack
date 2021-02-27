@@ -1,0 +1,140 @@
+http://kafka.apache.org/documentation/
+
+	https://kafka.apache.org/protocol.html
+
+Now edit these new files and set the following properties
+bin/connect-standalone.sh config/connect-standalone.properties config/connect-file-source.properties config/connect-file-sink.properties
+	http://kafka.apache.org/21/documentation/streams/quickstart
+https://cwiki.apache.org/confluence/display/KAFKA/Ecosystem
+Offset expiration semantics has slightly changed in this version.
+advertised.host.name
+advertised.listeners
+advertised.port
+auto.leader.rebalance.enable
+host.name
+leader.imbalance.per.broker.percentage
+listeners
+log.flush.interval.messages
+log.flush.interval.ms
+log.flush.offset.checkpoint.interval.ms
+log.flush.scheduler.interval.ms
+log.flush.start.offset.checkpoint.interval.ms
+log.retention.bytes
+log.retention.hours
+log.roll.hours
+log.roll.jitter.hours
+log.segment.bytes
+log.segment.delete.delay.ms
+message.max.bytes
+min.insync.replicas
+num.replica.fetchers
+offset.metadata.max.bytes
+offsets.commit.required.acks
+offsets.commit.timeout.ms
+offsets.load.buffer.size
+offsets.retention.check.interval.ms
+offsets.retention.minutes
+offsets.topic.compression.codec
+offsets.topic.num.partitions
+offsets.topic.replication.factor
+offsets.topic.segment.bytes
+queued.max.requests
+quota.consumer.default
+quota.producer.default
+replica.fetch.min.bytes
+replica.fetch.wait.max.ms
+replica.high.watermark.checkpoint.interval.ms
+replica.lag.time.max.ms
+replica.socket.receive.buffer.bytes
+replica.socket.timeout.ms
+request.timeout.ms
+socket.receive.buffer.bytes
+transaction.max.timeout.ms
+transaction.state.log.load.buffer.size
+transaction.state.log.min.isr
+transaction.state.log.num.partitions
+transaction.state.log.replication.factor
+transaction.state.log.segment.bytes
+transactional.id.expiration.ms
+unclean.leader.election.enable
+group.initial.rebalance.delay.ms
+group.max.session.timeout.ms
+log.cleaner.enable
+Adding and Removing Listeners
+delete.retention.ms
+flush.messages
+flush.ms
+max.message.bytes
+message.timestamp.difference.max.ms
+min.insync.replicas
+retention.bytes
+retention.ms
+segment.bytes
+segment.index.bytes
+segment.ms
+acks
+bootstrap.servers
+buffer.memory
+retries
+batch.size
+connections.max.idle.ms
+delivery.timeout.ms
+linger.ms
+max.block.ms
+max.request.size
+partitioner.class
+receive.buffer.bytes
+request.timeout.ms
+bootstrap.servers
+fetch.min.bytes
+heartbeat.interval.ms
+max.partition.fetch.bytes
+session.timeout.ms
+auto.offset.reset
+connections.max.idle.ms
+default.api.timeout.ms
+enable.auto.commit
+exclude.internal.topics
+fetch.max.bytes
+isolation.level
+max.poll.interval.ms
+max.poll.records
+partition.assignment.strategy
+receive.buffer.bytes
+request.timeout.ms
+fetch.max.wait.ms
+reconnect.backoff.max.ms
+cleanup.policy
+delete.retention.ms
+file.delete.delay.ms
+flush.messages
+
+3.5 Kafka Connect Configs
+3.6 Kafka Streams Configs
+3.7 AdminClient Configs
+https://developer.ibm.com/articles/j-zerocopy/
+As a result the performance of linear writes on a JBOD configuration with six 7200rpm SATA RAID-5 array is about 600MB/sec but the performance of random writes is only about 100k/sec—a difference of over 6000X. 
+A further discussion of this issue can be found in this ACM Queue article; they actually find that sequential disk access can in some cases be faster than random memory access!
+A modern OS will happily divert all free memory to disk caching with little performance penalty when the memory is reclaimed. All disk reads and writes will go through this unified cache. This feature cannot easily be turned off without using direct I/O, so even if a process maintains an in-process cache of the data, this data will likely be duplicated in OS pagecache, effectively storing everything twice. 
+    The memory overhead of objects is very high, often doubling the size of the data stored (or worse).
+    Java garbage collection becomes increasingly fiddly and slow as the in-heap data increases.
+As a result of these factors using the filesystem and relying on pagecache is superior to maintaining an in-memory cache or other structure—we at least double the available cache by having automatic access to all free memory, and likely double again by storing a compact byte structure rather than individual objects. Doing so will result in a cache of up to 28-30GB on a 32GB machine without GC penalties. Furthermore, this cache will stay warm even if the service is restarted, whereas the in-process cache will need to be rebuilt in memory (which for a 10GB cache may take 10 minutes) or else it will need to start with a completely cold cache (which likely means terrible initial performance). This also greatly simplifies the code as all logic for maintaining coherency between the cache and filesystem is now in the OS, which tends to do so more efficiently and more correctly than one-off in-process attempts. If your disk usage favors linear reads then read-ahead is effectively pre-populating this cache with useful data on each disk read. 
+This suggests a design which is very simple: rather than maintain as much as possible in-memory and flush it all out to the filesystem in a panic when we run out of space, we invert that. All data is immediately written to a persistent log on the filesystem without necessarily flushing to disk. In effect this just means that it is transferred into the kernel's pagecache. 
+This style of pagecache-centric design is described in an article on the design of Varnish here (along with a healthy dose of arrogance). 
+Constant Time Suffices
+
+4.3 Efficiency
+4.4 The Producer
+4.5 The Consumer
+4.6 Message Delivery Semantics
+Replicated Logs: Quorums, ISRs, and State Machines (Oh my!)
+Unclean leader election: What if they all die?
+Availability and Durability Guarantees
+Replica Management
+4.8 Log Compaction
+4.9 Quotas
+5. Implementation
+6. Operations
+7. Security
+8. Kafka Connect
+9. Kafka Streams

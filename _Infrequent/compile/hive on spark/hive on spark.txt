@@ -1,0 +1,55 @@
+0、spark只需配SPARK_LOCAL_IP即可
+1、cp $SPARK_HOME/lib/spark-assembly-1.6.3-hadoop2.4.0.jar $HIVE_HOME/lib
+2、set hive.execution.engine=spark;
+3、默认spark以local模式，如果想以其它模式，以standalone为例set spark.master=spark://pseudo:7077;，这个属性hive.enable.spark.execution.engine要设为true，但没有必要，hive2中没这个属性
+另：各应用版本为：apache-hive-2.1.1-bin，spark-1.6.3-bin-hadoop2.4-without-hive，hadoop-2.6.0
+=================*****hive2 on spark2 配置******======================
+hive只能用最新版的hive2.3.0，通过看之前版本源码的pom.xml文件，都是依赖spark1，而此版本依赖为spark2.0.0，故spark用2.0.0
+----
+1、在apache-hive-2.3.0-src源码第一层目录的pom.xml文件中查找spark.version为2.0.0，hadoop.version为2.7.2
+2、编译apache-hive-2.3.0-src，命令：mvn clean install -Phadoop-2,dist -DskipTests，结果文件在packaging/target
+3、spark-2.0.0源码第一层目录下的pom.xml文件中关于hadoop.version比较乱，scala.version为2.11.8，hive.version不必看
+4、可不设置$SCALA_HOME	./dev/make-distribution.sh --name without-hive --tgz -Phadoop-2.7 -Dhadoop.version=2.7.2 -Pyarn
+5、hive不需要其它配置，设置两个属性即可玩耍了，但是要拷贝$SPARK_HOME/jars下的部分jar包到$HIVE_HOME/lib
+	--若出现内存不存，可设置：export MAVEN_OPTS="-Xmx2g -XX:MaxPermSize=512M -XX:ReservedCodeCacheSize=512m"
+set hive.execution.engine=spark;
+set spark.master=local;
+----
+start-master.sh	start-slave.sh spark://pseudo:7077
+set spark.master=spark://pseudo:7077;
+	----Hive-on-MR is deprecated in Hive 2 and may not be available in the future versions. Consider using a different execution engine (i.e. spark, tez) or using Hive 1.X releases.
+----
+要拷贝的jar包如下：
+----To run with YARN mode----
+cp jars/*scala-library* /root/sparklocjar220
+cp jars/*spark-core* /root/sparklocjar220
+cp jars/*spark-network-common* /root/sparklocjar220
+----To run with LOCAL mode另加入----
+cp jars/*chill* /root/sparklocjar220
+cp jars/*jackson-module-paranamer* /root/sparklocjar220
+cp jars/*jackson-module-scala* /root/sparklocjar220
+cp jars/*jersey-container-servlet-core* /root/sparklocjar220
+cp jars/*jersey-server* /root/sparklocjar220
+cp jars/*json4s-ast* /root/sparklocjar220
+cp jars/*kryo-shaded* /root/sparklocjar220
+cp jars/*minlog* /root/sparklocjar220
+cp jars/*scala-xml* /root/sparklocjar220
+cp jars/*spark-launcher* /root/sparklocjar220
+cp jars/*spark-network-shuffle* /root/sparklocjar220
+cp jars/*spark-unsafe* /root/sparklocjar220
+cp jars/*xbean-asm5-shaded* /root/sparklocjar220
+----共17个jar包，jars/*chill*两个
+===============================================================
+官网提供的spark2.x中without-hive版本都是基于hadoo2.4的，而hive2只能用2.3.0，编译2.3.0时hadoop.version为2.6.0尚且不可行，故hive2 on spark2只能自己编译
+1、更改apache-hive-2.3.0-src下的pom.xml文件为<spark.version>2.0.2</spark.version>，若更改hadoop.version为2.6.0编译会失败。编译
+2、编译spark-2.0.2
+3、成功，apache-hive-2.3.0-src基于spark2.2.0，再编译spark2.2.0同样可以
+4、以仅在hive2.3.0下的hive2.2.0编译spark2.x最低的版本spark2.0.0尚且不可，故hive2 on spark2，仅为hive2.3.0支持
+=========================================
+编译spark，不指定-Phive则不包含hive：./dev/make-distribution.sh --name hive121 --tgz -Phadoop-2.7 -Dhadoop.version=2.7.2 -Pyarn -Phive
+--------
+Hive 2.2.0, upload all jars in $SPARK_HOME/jars to hdfs folder(for example:hdfs:///xxxx:8020/spark-jars) and add following in hive-site.xml
+<property>
+  <name>spark.yarn.jars</name>
+  <value>hdfs://xxxx:8020/spark-jars/*</value>
+</property>

@@ -1,0 +1,20 @@
+1、KeyValueHeap 这个数据结构之所以那么恶心, 我感觉应该是由于 joinedScanners 这些东西的存在, 不得不包多层, 如果只是 StoreFileScanner, MemStoreScanner
+  是完全没有必要这样操作的。KeyValueHeap 最终下面还是有个顶级 StoreScanner 把 StoreFileScanner, MemStoreScanner 包起来, StoreScanner 的 next 才是真正的
+  next, 以上论述不保证一定正确。还有顺便说下 next 中的 LOOP, 是因为 while 和 switch 同时存在, 而又有 break
+3、openRegion 操作是 RSRpcServices.openRegion RPC 调用 --> OpenRegionHandler#process --> OpenRegionHandler#openRegion --> HRegion#initializeRegionInternals
+  这方法里最重要的事情就是调用 HRegion#initializeStores 了吧, --> HRegion#instantiateHStore --> HStore#HStore 这里有个重要操作
+  this.storeEngine.getStoreFileManager().loadFiles(loadStoreFiles());storeEngine 可以获取 StoreFile, 因为 StoreFile#reader 查询时就可以通过 HStore 拿到 reader
+  --> HStore#openStoreFiles, 因为最重要的也就是创建 reader 吧, 所以 --> HStore#createStoreFileAndReader --> StoreFile#open --> StoreFileInfo#open -->
+  a. FSDataInputStreamWrapper#FSDataInputStreamWrapper 到了这里真正 open 了 hdfs 文件, 没有本地优化之类的操作, hbase 真的没有做这些事, 这是两层架构的弊端, 
+  当然优点也很明显, 就是架构设计和开发都比较简单, 相比 kudu 等我觉得。回归正题, --> HFile#pickReaderVersion
+  b. StoreFile.Reader#Reader, reader = HFile.createReader(fs, path, in, size, cacheConf, conf); 即 StoreFile.Reader#reader=HFileReaderV3
+4、从查询角度分析, 从 HRegion.getScanner 往下看就行了 --> RegionScannerImpl#initializeScanners 到这会根据 scan.getFamilyMap 创建 HStore#getScanner, 
+  --> HStore#getScanners(1143) 这还是一个很感人的方法, 正经的去拿两类 scanner, 然后就要分别看两类 scanner 了
+  a. 由 Collection<StoreFile> storeFilesToScan = this.storeEngine.getStoreFileManager().getFilesForScanOrGet(isGet, startRow, stopRow)this.storeEngine;
+  再通过 StoreFile --> StoreFileScanner#getScannersForStoreFiles --> StoreFile.Reader#getStoreFileScanner 看到这挺有意思啊, 居然通过 reader 拿 scanner
+  b. ......
+5、StoreFileScanner 的核心方法就两个吧, next, seek
+  a. 肯定是进到了 --> HFileReaderV2.ScannerV2#next
+6、AbstractScannerV2#seekTo seek block 再 --> HFileReaderV3.ScannerV3#blockSeek 方法中是真正的从 buffer 中 seek 了
+7、StoreFile.open --> HFile.createReader --> HFileReaderV2#HFileReaderV2 这里很重要
+8、CacheConfig#blockCache 为全局的缓存类, 最初由 HRegionServer.run 创建, 相当于一个单例, 后续 HStore#HStore 中用到, 主要是在下面的 scanner 中用

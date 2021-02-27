@@ -1,0 +1,10 @@
+jdk 用 jdk1.8.0_251, 用 root 用户启动, 但还是有问题, 所以用 Centos7 吧, 可以不用 root 用户
+
+bin/start-micro-quickstart
+bin/post-index-task --file quickstart/tutorial/wikipedia-index.json --url http://localhost:8081
+--添加 hadoop-dependencies 
+java -cp '/home/tyx/app/apache-druid-0.18.0/lib/*' org.apache.druid.cli.Main tools pull-deps -h "org.apache.hadoop:hadoop-client:2.7.2"
+或者准备一个 pom.xml 用这个命令: mvn dependency:copy-dependencies, 这个命令应该就是拉 jar 包到本地 target 目录的
+
+https://www.imooc.com/video/19663
+

@@ -1,0 +1,181 @@
+spark基于zookeeper高可用
+vim spark-env.sh
+export SPARK_DAEMON_JAVA_OPTS="-Dspark.deploy.recoveryMode=ZOOKEEPER -Dspark.deploy.zookeeper.url=cloud01:2181,cloud02:2181,cloud03:2181"
+注释掉SPARK_MASTER_IP=cloud03
+----
+MASTER=spark://cloud01:7077,cloud02:7077 spark-shell
+=====================
+1、spark-submit --class=demo1.WordCount --master yarn-cluster  wc.jar aaa /spark/words.txt /spark/result
+2、spark-submit --class=demo1.WordCount --master yarn-client  wc.jar aaa /spark/words.txt /spark/result
+两种模式不起spark也可提交，但yarn-client要如下修改
+vim yarn-site.xml
+<property>
+   <name>yarn.nodemanager.vmem-check-enabled</name>
+   <value>false</value>
+</property>
+--master yarn --deploy-mode client
+deploy-mode: Whether to deploy your driver on the worker nodes (cluster) or locally as an external client (client) (default: client)
+yarn.nodemanager.vmem-check-enabled
+是否启动一个线程检查每个任务正使用的虚拟内存量，如果任务超出分配值，则直接将其杀掉，默认是true
+
+spark on yarn 日志：
+Uploading resource file:/usr/local/app/spark152/lib/spark-assembly-1.5.2-hadoop2.6.0.jar -> hdfs://pseudo:9000/user/root/.sparkStaging/application_1497685692850_0001/spark-assembly-1.5.2-hadoop2.6.0.jar
+Uploading resource file:/root/wc.jar -> hdfs://pseudo:9000/user/root/.sparkStaging/application_1497685692850_0001/wc.jar
+======================
+集群外节点（踏板机）向hadoop集群提交mapreduce任务，只需把集群的配置文件放入提交任务和节点，当然hosts文件要配置好集群节点的映射
+--driver-class-path driver所依赖的包，多个包之间用冒号(:)分割
+--jars   driver和executor都需要的包，多个包之间用逗号(,)分割
+JdbcRDD
+import org.apache.spark.rdd.JdbcRDD;
+import java.sql._
+val rdd = new JdbcRDD(sc, ()=>{Class.forName("com.mysql.jdbc.Driver");DriverManager.getConnection("jdbc:mysql://192.168.58.1:3306/bigdata","root","root")},     
+" SELECT * FROM subway_sqoop WHERE uid<=? and uid>=?; ", 4, 1, 2, (r:ResultSet)=>{(r. getString (1),r.getString(2))})
+----2表示分区个数
+
+<property>
+  <name>hive.execution.engine</name>
+  <value>spark</value>
+</property>
+<property>
+  <name>hive.enable.spark.execution.engine</name>
+  <value>true</value>
+</property>
+<property>
+  <name>spark.home</name>
+  <value>/usr/local/app/spark152</value>
+</property>
+<property>
+  <name>spark.master</name>
+  <value>yarn-client</value>
+</property>
+########################################################################################
+standalone client模式
+	deploy-mode: Whether to deploy your driver on the worker nodes (cluster) or locally as an external client (client) (default: client)
+1、集群外节点：
+	spark-submit --class=org.apache.spark.examples.SparkPi --master spark://cloud03:7077 --deploy-mode client app/spark152/lib/spark-examples-1.5.2-hadoop2.6.0.jar
+	spark-env.sh中什么配置都不用加
+	如果不加--master，修改spark-defaults.conf即可
+2、集群内节点：略
+----
+standalone cluster模式
+	Master会在集群中选择一个Worker进程生成一个进程DriverWrapper来启动driver程序，而该DriverWrapper 进程会占用Worker进程的core
+	计算结果看dirver端日志（web界面）
+	如果遇到报错：java.net.BindException: Failed to bind to: /192.168.58.182:0: Service 'Driver' failed after 16 retries!，这时把提交机器中SPARK_LOCAL_IP=127.0.0.1，这应该是个bug
+	standalone cluster模式，集群外节点有时会报资源不够，好奇怪
+1、集群外节点：
+	spark-submit --class=org.apache.spark.examples.SparkPi --master spark://cloud03:7077 --deploy-mode cluster app/spark152/lib/spark-examples-1.5.2-hadoop2.6.0.jar
+	计算结果在控制台显示
+	DriverWrapper在集群中随便一个节点上
+	spark-env.sh中什么配置都不用加
+	如果不加--master，修改spark-defaults.conf即可
+2、集群内节点：
+spark-submit --class=org.apache.spark.examples.SparkPi --master spark://cloud03:7077 --deploy-mode cluster app/spark152/lib/spark-examples-1.5.2-hadoop2.6.0.jar
+	DriverWrapper在本机，正常运行
+----
+yarn client模式
+	vim yarn-site.xml
+<property>   
+<name>yarn.nodemanager.vmem-check-enabled</name>
+<value>false</value>
+</property>
+	是否启动一个线程检查每个任务正使用的虚拟内存量，如果任务超出分配值，则直接将其杀掉，默认是true
+
+	--master yarn --deploy-mode client   ---->  --master yarn-client
+	--master yarn --deploy-mode cluster		---->  --master yarn-cluster
+1、集群外节点：
+	spark-submit --class=org.apache.spark.examples.SparkPi --master yarn-client  app/spark152/lib/spark-examples-1.5.2-hadoop2.6.0.jar
+	集群内某节点中创建ExecutorLauncher进程
+	spark-env.sh中加入HADOOP_CONF_DIR即可
+	注：关闭driver端防火墙，否则 ERROR yarn.ApplicationMaster: Failed to connect to driver
+2、集群内节点：略
+----
+yarn cluster模式
+1、集群外节点：
+	集群内某节点创建ApplicationMaster进度
+	spark-submit --class=org.apache.spark.examples.SparkPi --master yarn-cluster app/spark152/lib/spark-examples-1.5.2-hadoop2.6.0.jar
+2、集群内节点：略
+============================
+配置项spark.dynamicAllocation.initialExecutors,初始化时启用的executor的个数
+sc.wholeTextFiles
+============================
+Top,TakeOrdered
+针对wordcount的结果求单词个数最多的5个
+rdd.top(5)(Ordering[Int].on( x => x._2 ))
+求个数最少的5个
+rdd.takeOrdered(5)(Ordering[Int].on( x => x._2 ))
+4)  (可选) 分区器
+  HashPartitioner		hash来进行划分
+  RangePartitioner  将所有数据进行采样
+针对的是有序的数据
+val rdd = sc.makeRDD(	List(("b", 1), ("c", 1),("a", 1),("d", 1),("f", 1),("e", 1)), 2)
+val rdd2 = rdd.partitionBy(new HashPartitioner(2))
+import org.apache.spark.HashPartitioner 
+要用RangePartitioner前提是分区的数据需要排序
+import org.apache.spark.RangePartitioner
+val rdd3 = rdd.sortByKey().partitionBy(new RangePartitioner(2, rdd))
+val rdd4 = rdd.partitionBy(new RangePartitioner(2, rdd))
+3.累加器
+var counter = 0  // 在分布式环境下，不是真正的全局
+var rdd = sc.makeRDD(List(1,2,3,4,5))
+rdd.foreach(x=> counter+=x)
+println(counter)
+var counter = sc.accumulator(0) 
+var rdd = sc.makeRDD(List(1,2,3,4,5))
+rdd.foreach(x=> counter+=x)
+println(counter.value)
+=======================================
+4个core的机器：
+spark-shell --master spark://pseudo:7077 --conf spark.executor.cores=2	会启2个executor，每个executor2个core，spark.executor.cores=3会启一个3个core的executor
+spark-shell --executor-cores 2 --total-executor-cores 4   --一个application在一个worker上会创建两个executor，也可用--num-executors n 
+--conf spark.executor.cores=4 --total-executor-cores 2导致资源无法正常分配
+想分配一个executor一个core，--conf spark.executor.cores=1 --num-executors 1这样不管用，只好--total-executor-cores 1了
+提交任务时指定4个executor，每个executor一个core，速度没有指定一个executor，每个executor4个core快
+提交一个任务（3000w行5个非重复单调计算wordcount），单core是4core的一半，双core比单core快一些，所以认为性能瓶颈可能在磁盘，于是在机械硬盘上复制相同的环境对比计算，几乎没有差别，似乎打破了我的猜想，但是做了一个saveAsTextFile操作差别还是很大的
+向standalone 集群提交作业时 --num-executors似乎是不起什么作用，--conf spark.executor.cores，--total-executor-cores 好用
+--------
+****经我用spark缓存测试，一个String对象头占3.04字节(spark1.6.0)
+import org.apache.spark.storage.StorageLevel
+val wc1 = sc.textFile("file:///root/words0.txt",80).map{x=>(x+" "+x.toUpperCase)}.flatMap{x=>x.split(" ")}
+val wc = sc.textFile("file:///root/words0.txt",80).flatMap{x=>x.split(" ")}
+wc.persist(StorageLevel.MEMORY_ONLY_SER)
+wc1.persist(StorageLevel.MEMORY_ONLY_SER)
+wc1.saveAsTextFile("file:///root/wcs")
+wc.saveAsTextFile("file:///root/wcs")
+--------
+spark-shell --master=spark://pseudo:7077 --conf spark.executor.memory=48m --conf spark.executor.cores=4 --num-executors 1
+val wc = sc.textFile("hdfs://pseudo:9000/data/words0.txt",4).flatMap{x=>x.split(" ")}.map{x=>(x,1)}.reduceByKey{(x,y) => x+y}
+数据161M,spark1.5.2,虚拟机2g内存
+executor内存	partition
+500 4
+256	8
+128	16
+64	32
+48	64
+32	partition很大也不行
+====================================
+启动worker时要指定一下-h 否则本地化级别都为any
+start-slave.sh -h pseudo spark://pseudo:7077
+====================================
+spark-shell（干净环境）
+val sql1 = """CREATE TEMPORARY TABLE parquetTable USING org.apache.spark.sql.parquet OPTIONS (path "/usr/local/app/spark-1.6.0-bin-hadoop2.6/examples/src/main/resources/users.parquet")"""
+sqlContext.sql(sql1)
+val sql2 = """CREATE TEMPORARY TABLE jsonTable USING org.apache.spark.sql.json OPTIONS ( path"/usr/local/app/spark-1.6.0-bin-hadoop2.6/examples/src/main/resources/people.json")"""
+sqlContext.sql(sql2)
+val sql3 = """ CREATE TEMPORARY TABLE jdbcTable USING org.apache.spark.sql.jdbc OPTIONS ( url "jdbc:mysql://192.168.221.219:3306/mydb", dbtable "person", user "root", password "root" )"""
+sqlContext.sql(sql3)
+---------
+spark-sql -e "CREATE TEMPORARY TABLE parquetTable USING org.apache.spark.sql.parquet OPTIONS (path 'file:///usr/local/app/spark-2.2.0-bin-hadoop2.7/examples/src/main/resources/users.parquet');create table sparkee as select * from parquetTable"
+----
+spark-sql> CREATE TEMPORARY TABLE parquetTable USING org.apache.spark.sql.parquet OPTIONS (path "file:///usr/local/app/spark-2.2.0-bin-hadoop2.7/examples/src/main/resources/users.parquet");
+spark-sql> select * from parquettable;
+
+----创建永久表（Derby存储了永久表的元数据信息）
+val table = """CREATE TABLE table2 USING org.apache.spark.sql.parquet OPTIONS(path "/root/data/parquet")"""	 不可是文件了，要为目录，如果conf下放了hive-site.xml，创建的就是一张hive表了（InputFormat:org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat）
+sqlContext.sql(table)
+sqlContext.sql("show tables").show
+sqlContext.sql("desc table2")
+----
+使用DataFrame的缓存（没有测试）
+方法1：sqlContext.cacheTable("表名")
+方法2：sqlContext.sql("cache table 表名")
+方法３：dataFrame.cache() ，dataFrame.persist(StorageLevel.选项)

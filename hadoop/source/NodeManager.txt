@@ -1,0 +1,412 @@
+1、启动 container 
+  org.apache.hadoop.yarn.server.nodemanager.containermanager.ContainerManagerImpl#startContainers
+  真正启动进程: org.apache.hadoop.util.Shell#runCommand
+2、org.apache.hadoop.mapred.ShuffleHandler
+3、context.getContainers().remove 操作有两个是从 RM(RM 有个 RMNodeFinishedContainersPulledByAMEvent, NM 根据 heartbeat 的返回进行清理, 这样设计是为什么呢?)
+  返回结果清理, 还有是每次 heartbeat 时的 getContainerStatuses 操作 有个 ContainerImpl#getCurrentState, 可以理解, 这是个最终方案, 就是感觉方案一多些一举
+  当然向 context.getContainers() 中添加是在 ContainerManagerImpl#startContainerInternal
+4、NM 被调用(RM,AM) ContainerManagerImpl#stopContainers, 后续具体 kill 进程操作并不复杂, 是被远程调用的
+  mr 的 container stop 是在 TaskAttemptListenerImpl#done 后续操作不复杂, 远程调用 NM, 前面也是被远程调用的, 在 Task 中远程调用是在 ReduceTask#run 
+  的最后一行代码 done(umbilical, reporter), 上面是 runNewReducer, map 端同理
+  AM 的 container 在 RM 端被处理的逻辑有点复杂, 关键点是 AMFinishingContainerFinishedTransition, 再往前是 ApplicationMasterService#finishApplicationMaster
+  即 AM 的远程调用, 在 AM 端是 JobFinishEventHandler$1.run 往下调用的, 
+  AM JobFinish 的逻辑是 JobImpl.TaskCompletedTransition#transition --> JobImpl#checkReadyForCommit 方法中 if (completedTaskCount == tasks.size() && currentState == JobStateInternal.RUNNING)
+  再往上追溯是 TaskAttemptListenerImpl#done 被远程调用了, 不用再说
+
+public class org.apache.hadoop.yarn.server.nodemanager.NodeManager extends CompositeService implements EventHandler<NodeManagerEvent> {
+	private static CompositeServiceShutdownHook nodeManagerShutdownHook;
+	private LocalDirsHandlerService dirsHandler;
+	private NodeStatusUpdater nodeStatusUpdater;
+	protected final NodeManagerMetrics metrics = NodeManagerMetrics.create();
+	public NodeManager() {
+		super(NodeManager.class.getName());
+	}
+	public static void main(String[] args) throws IOException {
+		NodeManager nodeManager = new NodeManager();
+		Configuration conf = new YarnConfiguration();
+		new GenericOptionsParser(conf, args);
+		nodeManager.initAndStartNodeManager(conf, false);
+	}
+	private void initAndStartNodeManager(Configuration conf, boolean hasToReboot) {
+		nodeManagerShutdownHook = new CompositeServiceShutdownHook(this);
+		ShutdownHookManager.get().addShutdownHook(nodeManagerShutdownHook, SHUTDOWN_HOOK_PRIORITY);
+		this.init(conf);
+		this.start();
+	}
+	
+	protected void serviceInit(Configuration conf) throws Exception {
+		ContainerExecutor exec = ReflectionUtils.newInstance(conf.getClass(YarnConfiguration.NM_CONTAINER_EXECUTOR, DefaultContainerExecutor.class, ContainerExecutor.class), conf);
+		exec.init();
+		DeletionService del = createDeletionService(exec);// 看名字就不想往里进，但是给点面子保留了
+		addService(del);
+		this.dispatcher = new AsyncDispatcher();
+		nodeHealthChecker = new NodeHealthCheckerService();
+		addService(nodeHealthChecker);
+		dirsHandler = nodeHealthChecker.getDiskHandler();
+		this.context = createNMContext(containerTokenSecretManager, nmTokenSecretManager, nmStore);
+		nodeStatusUpdater = createNodeStatusUpdater(context, dispatcher, nodeHealthChecker);// 这个应该挺重要的
+		containerManager = createContainerManager(context, exec, del, nodeStatusUpdater, this.aclsManager, dirsHandler);
+		addService(containerManager);
+		WebServer webServer = createWebServer(context, containerManager.getContainersMonitor(), this.aclsManager, dirsHandler);
+		addService(webServer);
+		dispatcher.register(ContainerManagerEventType.class, containerManager);
+		dispatcher.register(NodeManagerEventType.class, this);
+		addService(dispatcher);    
+		addService(nodeStatusUpdater);
+		super.serviceInit(conf);
+	}
+  
+	protected NodeStatusUpdater createNodeStatusUpdater(Context context, Dispatcher dispatcher, NodeHealthCheckerService healthChecker) {
+		return new NodeStatusUpdaterImpl(context, dispatcher, healthChecker, metrics);
+	}
+	protected ContainerManagerImpl createContainerManager(Context context, ContainerExecutor exec, DeletionService del, NodeStatusUpdater nodeStatusUpdater, ApplicationACLsManager aclsManager, LocalDirsHandlerService dirsHandler) {
+		return new ContainerManagerImpl(context, exec, del, nodeStatusUpdater, metrics, aclsManager, dirsHandler);
+	}
+	protected void serviceStart() throws Exception {
+		super.serviceStart();
+	}
+}
+
+public class org.apache.hadoop.yarn.server.nodemanager.NodeStatusUpdaterImpl extends AbstractService implements NodeStatusUpdater {
+	public NodeStatusUpdaterImpl(Context context, Dispatcher dispatcher, NodeHealthCheckerService healthChecker, NodeManagerMetrics metrics) {
+		super(NodeStatusUpdaterImpl.class.getName());
+		this.healthChecker = healthChecker;
+		this.context = context;
+		this.dispatcher = dispatcher;
+		this.metrics = metrics;
+		this.recentlyStoppedContainers = new LinkedHashMap<ContainerId, Long>();
+		this.pendingCompletedContainers = new HashMap<ContainerId, ContainerStatus>();
+	}
+}  
+public class org.apache.hadoop.yarn.server.nodemanager.NodeHealthCheckerService extends CompositeService {
+	private LocalDirsHandlerService dirsHandler;
+	public NodeHealthCheckerService() {
+		super(NodeHealthCheckerService.class.getName());
+		dirsHandler = new LocalDirsHandlerService();
+	}
+}  
+public class org.apache.hadoop.yarn.server.nodemanager.LocalDirsHandlerService extends AbstractService {
+	public LocalDirsHandlerService() {
+		super(LocalDirsHandlerService.class.getName());
+	}
+}
+public class org.apache.hadoop.yarn.event.AsyncDispatcher extends AbstractService implements Dispatcher {
+	protected final Map<Class<? extends Enum>, EventHandler> eventDispatchers;
+	private final BlockingQueue<Event> eventQueue;
+	protected final Map<Class<? extends Enum>, EventHandler> eventDispatchers;
+	public AsyncDispatcher() {
+		this(new LinkedBlockingQueue<Event>());
+	}
+	public AsyncDispatcher(BlockingQueue<Event> eventQueue) {
+		super("Dispatcher");
+		this.eventQueue = eventQueue;
+		this.eventDispatchers = new HashMap<Class<? extends Enum>, EventHandler>();
+	}
+	public void register(Class<? extends Enum> eventType, EventHandler handler) {
+		EventHandler<Event> registeredHandler = (EventHandler<Event>)
+		eventDispatchers.get(eventType);
+		if (registeredHandler == null) {
+			eventDispatchers.put(eventType, handler);
+		} else if (!(registeredHandler instanceof MultiListenerHandler)){
+			MultiListenerHandler multiHandler = new MultiListenerHandler();
+			multiHandler.addHandler(registeredHandler);
+			multiHandler.addHandler(handler);
+			eventDispatchers.put(eventType, multiHandler);
+		} else {
+			MultiListenerHandler multiHandler = (MultiListenerHandler) registeredHandler;
+			multiHandler.addHandler(handler);
+		}
+	}
+	static class MultiListenerHandler implements EventHandler<Event> {
+		List<EventHandler<Event>> listofHandlers;
+		public MultiListenerHandler() {
+			listofHandlers = new ArrayList<EventHandler<Event>>();
+		}
+		public void handle(Event event) {
+			for (EventHandler<Event> handler: listofHandlers) {
+				handler.handle(event);
+			}
+		}
+		void addHandler(EventHandler<Event> handler) {
+			listofHandlers.add(handler);
+		}
+	}
+}
+
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.ContainerManagerImpl extends CompositeService implements ServiceStateChangeListener, ContainerManagementProtocol, EventHandler<ContainerManagerEvent> {
+	protected final AsyncDispatcher dispatcher;
+	public ContainerManagerImpl(Context context, ContainerExecutor exec, DeletionService deletionContext, NodeStatusUpdater nodeStatusUpdater, NodeManagerMetrics metrics, ApplicationACLsManager aclsManager, LocalDirsHandlerService dirsHandler) {
+		super(ContainerManagerImpl.class.getName());
+		this.context = context;
+		this.dirsHandler = dirsHandler;
+		// ContainerManager level dispatcher.
+		dispatcher = new AsyncDispatcher();
+		this.deletionService = deletionContext;
+		this.metrics = metrics;
+		rsrcLocalizationSrvc = createResourceLocalizationService(exec, deletionContext, context);
+		addService(rsrcLocalizationSrvc);
+		containersLauncher = createContainersLauncher(context, exec);
+		addService(containersLauncher);
+		this.nodeStatusUpdater = nodeStatusUpdater;
+		this.aclsManager = aclsManager;
+		// Start configurable services
+		auxiliaryServices = new AuxServices();
+		auxiliaryServices.registerServiceListener(this);
+		addService(auxiliaryServices);
+		this.containersMonitor = new ContainersMonitorImpl(exec, dispatcher, this.context);
+		addService(this.containersMonitor);
+		dispatcher.register(ContainerEventType.class, new ContainerEventDispatcher());
+		dispatcher.register(ApplicationEventType.class, new ApplicationEventDispatcher());
+		dispatcher.register(LocalizationEventType.class, rsrcLocalizationSrvc);
+		dispatcher.register(AuxServicesEventType.class, auxiliaryServices);
+		dispatcher.register(ContainersMonitorEventType.class, containersMonitor);
+		dispatcher.register(ContainersLauncherEventType.class, containersLauncher);    
+		addService(dispatcher);
+		ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+		this.readLock = lock.readLock();
+		this.writeLock = lock.writeLock();
+	}
+	public void serviceInit(Configuration conf) throws Exception {
+		LogHandler logHandler = createLogHandler(conf, this.context, this.deletionService);// Log 应该也不能小看，以后下看吧
+		addIfService(logHandler);// 这块有精力要研究一下
+		dispatcher.register(LogHandlerEventType.class, logHandler);
+		SharedCacheUploadService sharedCacheUploader = createSharedCacheUploaderService();
+		addService(sharedCacheUploader);
+		dispatcher.register(SharedCacheUploadEventType.class, sharedCacheUploader);
+		super.serviceInit(conf);
+	}
+	protected SharedCacheUploadService createSharedCacheUploaderService() {
+		return new SharedCacheUploadService();
+	}
+	
+	protected void serviceStart() throws Exception {
+		final InetSocketAddress initialAddress = conf.getSocketAddr(YarnConfiguration.NM_BIND_HOST, YarnConfiguration.NM_ADDRESS, YarnConfiguration.DEFAULT_NM_ADDRESS, YarnConfiguration.DEFAULT_NM_PORT);
+		Configuration serverConf = new Configuration(conf);
+		YarnRPC rpc = YarnRPC.create(conf);
+		server = rpc.getServer(ContainerManagementProtocol.class, this, initialAddress, serverConf, this.context.getNMTokenSecretManager(), conf.getInt(YarnConfiguration.NM_CONTAINER_MGR_THREAD_COUNT, YarnConfiguration.DEFAULT_NM_CONTAINER_MGR_THREAD_COUNT));
+		InetSocketAddress connectAddress = NetUtils.getConnectAddress(server);
+		server.start();// 启动了 RPC
+		NodeId nodeId = buildNodeId(connectAddress, hostOverride);
+		super.serviceStart();// 启动了 RPC, 在 ResourceLocalizationService 中
+	}
+	protected ResourceLocalizationService createResourceLocalizationService(ContainerExecutor exec, DeletionService deletionContext, Context context) {
+		return new ResourceLocalizationService(this.dispatcher, exec, deletionContext, dirsHandler, context);
+	}
+	public StartContainersResponse startContainers(StartContainersRequest requests) throws YarnException, IOException {
+		Map<ContainerId, SerializedException> failedContainers = new HashMap<ContainerId, SerializedException>();
+		for (StartContainerRequest request : requests.getStartContainerRequests()) {
+			startContainerInternal(nmTokenIdentifier, containerTokenIdentifier, request);
+		}
+		return StartContainersResponse.newInstance(getAuxServiceMetaData(), succeededContainers, failedContainers);
+	}
+	private void startContainerInternal(NMTokenIdentifier nmTokenIdentifier, ContainerTokenIdentifier containerTokenIdentifier, StartContainerRequest request) throws YarnException, IOException {
+		ContainerId containerId = containerTokenIdentifier.getContainerID();
+		ContainerLaunchContext launchContext = request.getContainerLaunchContext();
+		Map<String, ByteBuffer> serviceData = getAuxServiceMetaData();
+		Credentials credentials = parseCredentials(launchContext);
+		Container container = new ContainerImpl(getConfig(), this.dispatcher, context.getNMStateStore(), launchContext, credentials, metrics, containerTokenIdentifier);
+		ApplicationId applicationID = containerId.getApplicationAttemptId().getApplicationId();
+		this.readLock.lock();
+		Application application =  new ApplicationImpl(dispatcher, user, applicationID, credentials, context);
+		if (null == context.getApplications().putIfAbsent(applicationID, application)) { // 执行一次
+			dispatcher.getEventHandler().handle(new ApplicationInitEvent(applicationID, appAcls, logAggregationContext));
+		}
+		this.context.getNMStateStore().storeContainer(containerId, request);
+		dispatcher.getEventHandler().handle(new ApplicationContainerInitEvent(container));// 每个 container 一次
+	}
+}
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer.ResourceLocalizationService extends CompositeService implements EventHandler<LocalizationEvent>, LocalizationProtocol {
+	public ResourceLocalizationService(Dispatcher dispatcher, ContainerExecutor exec, DeletionService delService, LocalDirsHandlerService dirsHandler, Context context) {
+		super(ResourceLocalizationService.class.getName());
+		this.exec = exec;
+		this.dispatcher = dispatcher;
+		this.dirsHandler = dirsHandler;
+	}
+	public void serviceStart() throws Exception {
+		server = createServer();
+		server.start();
+	}
+	Server createServer() {
+		Configuration conf = getConfig();
+		YarnRPC rpc = YarnRPC.create(conf);
+		Server server = rpc.getServer(LocalizationProtocol.class, this, localizationServerAddress, conf, secretManager, conf.getInt(YarnConfiguration.NM_LOCALIZER_CLIENT_THREAD_COUNT, YarnConfiguration.DEFAULT_NM_LOCALIZER_CLIENT_THREAD_COUNT));
+		return server;
+	}
+}
+public abstract class org.apache.hadoop.yarn.server.nodemanager.ContainerExecutor implements Configurable {
+}
+public class org.apache.hadoop.yarn.server.nodemanager.DefaultContainerExecutor extends ContainerExecutor {
+	public void init() throws IOException {}
+}
+public class org.apache.hadoop.service.CompositeService extends AbstractService {
+	private final List<Service> serviceList = new ArrayList<Service>();
+	protected void setConfig(Configuration conf) {
+		this.config = conf;
+	}
+	protected void addService(Service service) {
+		serviceList.add(service);
+	}
+	public List<Service> getServices() {
+		return new ArrayList<Service>(serviceList);
+	}
+	protected void serviceInit(Configuration conf) throws Exception {
+		List<Service> services = getServices();
+		for (Service service : services) {
+			service.init(conf);
+		}
+		super.serviceInit(conf);// 不用看了
+	}
+	public static class CompositeServiceShutdownHook implements Runnable {
+		private CompositeService compositeService;
+		public CompositeServiceShutdownHook(CompositeService compositeService) {
+			this.compositeService = compositeService;
+		}
+		public void run() {
+			ServiceOperations.stopQuietly(compositeService);// 这里不看了
+		}
+	}
+	public void start() {
+		serviceStart();
+	}
+}
+public abstract class org.apache.hadoop.service.AbstractService implements Service {// Service 接口中方法很多不看了
+	public void init(Configuration conf) {
+		setConfig(conf);
+		serviceInit(config);
+	}
+}
+
+public interface org.apache.hadoop.yarn.event.Dispatcher {
+	EventHandler getEventHandler();
+	void register(Class<? extends Enum> eventType, EventHandler handler);
+}
+
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer.sharedcache.SharedCacheUploadService extends AbstractService implements EventHandler<SharedCacheUploadEvent> {
+	public SharedCacheUploadService() {
+		super(SharedCacheUploadService.class.getName());
+	}
+}
+public class org.apache.hadoop.util.ShutdownHookManager {
+	private static final ShutdownHookManager MGR = new ShutdownHookManager();
+	private Set<HookEntry> hooks = Collections.synchronizedSet(new HashSet<HookEntry>());
+
+	public static ShutdownHookManager get() {
+		return MGR;
+	}
+	public void addShutdownHook(Runnable shutdownHook, int priority) {
+		hooks.add(new HookEntry(shutdownHook, priority));
+	}
+	private static class HookEntry {
+		Runnable hook;
+		int priority;
+		public HookEntry(Runnable hook, int priority) {
+			this.hook = hook;
+			this.priority = priority;
+		}
+	}
+}
+
+public class org.apache.hadoop.yarn.conf.YarnConfiguration extends org.apache.hadoop.conf.Configuration {
+	public YarnConfiguration() {
+		super();
+	}
+}
+
+
+
+======================================================================================
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.launcher.ContainersLauncher extends AbstractService implements EventHandler<ContainersLauncherEvent> {
+	public ExecutorService containerLauncher = Executors.newCachedThreadPool(new ThreadFactoryBuilder().setNameFormat("ContainersLauncher #%d").build());
+	public void handle(ContainersLauncherEvent event) {
+		Container container = event.getContainer();// container 的 context 中有启动命令
+		ContainerLaunch launch = new ContainerLaunch(context, getConfig(), dispatcher, exec, app, event.getContainer(), dirsHandler, containerManager);
+		containerLauncher.submit(launch);
+	}
+}
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.launcher.ContainerLaunch implements Callable<Integer> {
+	public ContainerLaunch(Context context, Configuration configuration, Dispatcher dispatcher, ContainerExecutor exec, Application app, Container container, LocalDirsHandlerService dirsHandler, ContainerManagerImpl containerManager) {
+		this.exec = exec;
+		this.container = container;
+	}
+	public Integer call() {
+		ret = exec.launchContainer(container, nmPrivateContainerScriptPath, nmPrivateTokensPath, user, appIdStr, containerWorkDir, localDirs, logDirs);
+		return 0;
+	}
+}
+
+public class org.apache.hadoop.yarn.server.nodemanager.DefaultContainerExecutor extends ContainerExecutor {
+	public int launchContainer(Container container, Path nmPrivateContainerScriptPath, Path nmPrivateTokensPath, String user, String appId, Path containerWorkDir, List<String> localDirs, List<String> logDirs) throws IOException {    
+		Shell.CommandExecutor shExec = buildCommandExecutor(sb.getWrapperScriptPath().toString(), containerIdStr, user, pidFile, container.getResource(), new File(containerWorkDir.toUri().getPath()), container.getLaunchContext().getEnvironment());      
+		shExec.execute();
+		return 0;
+	}
+}
+
+public class ResourceLocalizationService extends CompositeService implements EventHandler<LocalizationEvent>, LocalizationProtocol {
+	class LocalizerTracker extends AbstractService implements EventHandler<LocalizerEvent>  {
+		public void handle(LocalizerEvent event) {
+			String locId = event.getLocalizerId();
+			LocalizerResourceRequestEvent req = (LocalizerResourceRequestEvent)event;
+			localizer = new LocalizerRunner(req.getContext(), locId);
+			localizer.start();
+		}
+	}
+}
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer.ResourceLocalizationService extends CompositeService implements EventHandler<LocalizationEvent>, LocalizationProtocol {
+	class LocalizerRunner extends Thread {
+		public void run() {
+			List<String> localDirs = getInitializedLocalDirs();
+			List<String> logDirs = getInitializedLogDirs();
+			exec.startLocalizer(nmPrivateCTokensPath, localizationServerAddress, context.getUser(), ConverterUtils.toString(context.getContainerId().getApplicationAttemptId().getApplicationId()), localizerId, dirsHandler);
+		}
+	}
+}
+public class org.apache.hadoop.yarn.server.nodemanager.DefaultContainerExecutor extends ContainerExecutor {
+	public void startLocalizer(Path nmPrivateContainerTokensPath, InetSocketAddress nmAddr, String user, String appId, String locId, LocalDirsHandlerService dirsHandler) throws IOException, InterruptedException {    
+		ContainerLocalizer localizer = new ContainerLocalizer(localizerFc, user, appId, locId, getPaths(localDirs), RecordFactoryProvider.getRecordFactory(getConf()));
+		localizer.runLocalization(nmAddr);
+	}
+}
+public class org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer.ContainerLocalizer {
+	public int runLocalization(final InetSocketAddress nmAddr) throws IOException, InterruptedException {
+		final LocalizationProtocol nodeManager = return getProxy(nmAddr);
+		CompletionService<Path> ecs = createCompletionService(createDownloadThreadPool());// 就是个线程池吧不看了
+		localizeFiles(nodeManager, ecs, ugi);
+		return 0;
+	}
+	protected void localizeFiles(LocalizationProtocol nodemanager, CompletionService<Path> cs, UserGroupInformation ugi) throws IOException {
+		while (true) {
+			LocalizerHeartbeatResponse response = nodemanager.heartbeat(status);
+			List<ResourceLocalizationSpec> newRsrcs = response.getResourceSpecs();
+			for (ResourceLocalizationSpec newRsrc : newRsrcs) {
+				cs.submit(download(new Path(newRsrc.getDestinationDirectory().getFile()), newRsrc.getResource(), ugi))
+			}
+			break;        
+		}
+	}
+	Callable<Path> download(Path path, LocalResource rsrc, UserGroupInformation ugi) throws IOException {
+		return new FSDownload(lfs, ugi, conf, path, rsrc);
+	}
+	LocalizationProtocol getProxy(final InetSocketAddress nmAddr) {
+		YarnRPC rpc = YarnRPC.create(conf);
+		return (LocalizationProtocol) rpc.getProxy(LocalizationProtocol.class, nmAddr, conf);
+	}
+
+}
+public class org.apache.hadoop.yarn.util.FSDownload implements Callable<Path> {
+	public FSDownload(FileContext files, UserGroupInformation ugi, Configuration conf, Path destDirPath, LocalResource resource, LoadingCache<Path,Future<FileStatus>> statCache) {
+		this.destDirPath = destDirPath;
+		this.resource = resource;
+	}
+	private LocalResource resource;
+	private Path destDirPath;
+	private Path copy(Path sCopy, Path dstdir) throws IOException {
+		FileUtil.copy(sourceFs, sStat, FileSystem.getLocal(conf), dCopy, false, true, conf);// 不用看了
+		return dCopy;
+	}
+	public Path call() throws Exception {
+		final Path sCopy = ConverterUtils.getPathFromYarnURL(resource.getResource());
+		final Path dst_work = new Path(destDirPath + "_tmp");
+		copy(sCopy, dst_work)
+	}
+}

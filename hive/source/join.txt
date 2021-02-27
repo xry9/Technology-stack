@@ -1,0 +1,29 @@
+set hive.mapjoin.smalltable.filesize=2500000;
+select t1.id,t2.id from db.emp t1 join db.dept t2 on t1.id=t2.id;
+
+TableScanOperator-TS[0]-1305777754[
+	FilterOperator-FIL[2]-1355074[
+		ReduceSinkOperator-RS[3]-389872385[
+			JoinOperator-JOIN[6]-1814943883[
+				SelectOperator-SEL[7]-1859855[ FileSinkOperator-FS[8]-294716061]
+			]
+		]
+	]
+]
+TableScanOperator-TS[1]-959718932[
+	FilterOperator-FIL[4]-1540140763[
+		ReduceSinkOperator-RS[5]-401366570[
+			JoinOperator-JOIN[6]-1814943883[
+				SelectOperator-SEL[7]-1859855[ FileSinkOperator-FS[8]-294716061]
+			]
+		]
+	]
+]
+
+JoinOperator 是同一个呀
+
+org.apache.hadoop.hive.ql.optimizer.physical.CommonJoinTaskDispatcher#convertTaskToMapJoinTask
+
+join 时会有两个 TableScanOperator, org.apache.hadoop.hive.ql.lib.DefaultGraphWalker#startWalking 中 startNodes 如下，所以产生了两个 stage 
+	TableScanOperator-TS[0]-2098720336[ FilterOperator-FIL[9]-1240727361[ ReduceSinkOperator-RS[3]-423870962[ JoinOperator-JOIN[6]-552266488[ SelectOperator-SEL[7]-1690796457[ FileSinkOperator-FS[8]-229318537]]]]] 
+	TableScanOperator-TS[1]-1816633311[ FilterOperator-FIL[10]-1375503918[ ReduceSinkOperator-RS[5]-2127123542[ JoinOperator-JOIN[6]-552266488[ SelectOperator-SEL[7]-1690796457[ FileSinkOperator-FS[8]-229318537]]]]] 

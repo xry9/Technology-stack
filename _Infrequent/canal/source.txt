@@ -1,0 +1,20 @@
+1、canal-1.1.2 版本
+  用阿里镜像
+  mvn clean install -Denv=release
+
+把日志级别改了, 要不然有的 info 打不出来
+
+
+----------------> binlog[mysql-bin.000001:1882] , name[test,tab1] , eventType : UPDATE , executeTime : 1599979114000(2020-09-12 23:38:34) , gtid : () , delay : 101 ms
+id : 6    type=int(11)    update=true
+name : 12    type=varchar(10)
+
+
+================> binlog[mysql-bin.000001:1965] , executeTime : 1599979224000(2020-09-12 23:40:24) , gtid : () , delay : 1038ms
+ BEGIN ----> Thread id: 12
+----------------> binlog[mysql-bin.000001:2087] , name[test,tab1] , eventType : INSERT , executeTime : 1599979224000(2020-09-12 23:40:24) , gtid : () , delay : 1038 ms
+id : 5    type=int(11)    update=true
+name : 12    type=varchar(10)    update=true
+
+
+50 50 60 60

@@ -1,0 +1,27 @@
+******************** HBase最佳实践 – Scan用法大观园 ********************
+1、HBase中Scan从大的层面来看主要有三种常见用法：ScanAPI、TableScanMR以及SnapshotScanMR
+2、scan并没有并发执行。这里可能很多看官会问：扫描数据分布在不同的region难道也不会并行执行扫描吗？是的，确实不会，至少在现在的版本中没有实现。
+    这点一定出乎很多读者的意料，我们知道get的批量读请求会将所有的请求按照目标region进行分组，不同分组的get请求会并发执行读取。然而scan并没有这样实现
+3、ScanAPI最佳实践
+    批量OLAP扫描业务建议不要使用ScanAPI，ScanAPI适用于少量数据扫描场景（OLTP场景）
+    建议所有scan尽可能都设置startkey以及stopkey减少扫描范围
+    建议所有仅需要扫描部分列的scan尽可能通过接口setFamilyMap设置列族以及列
+4、TableScanMR的工作原理其实很简单，说白了就是ScanAPI的并行化
+	TableScanMR会将scan请求根据目标region的分界进行分解，分解成多个sub-scan，每个sub-scan本质上就是一个ScanAPI。假如scan是全表扫描，那这张表有多少region，
+	就会将这个scan分解成多个sub-scan，每个sub-scan的startkey和stopkey就是region的startkey和stopkey
+		TableScanMR设计为OLAP场景使用，因此在离线扫描时尽可能使用该中方式
+		TableScanMR原理上主要实现了ScanAPI的并行化，将scan按照region边界进行切分。这种场景下整个scan的时间基本等于最大region扫描的时间。在某些有数据倾斜的场景下可能出现某一个region上有大量待扫描数据，而其他大量region上都仅有很少的待扫描数据。这样并行化效果并不好。针对这种数据倾斜的场景TableScanMR做了平衡处理，它会将大region上的scan切分成多个小的scan使得所有分解后的scan扫描的数据量基本相当。这个优化默认是关闭的，需要设置参数”hbase.mapreduce.input.autobalance”为true。因此建议大家使用TableScanMR时将该参数设置为true。
+		尽量将扫描表中相邻的小region合并成大region，而将大region切分成稍微小点的region
+		TableScanMR中Scan需要注意如下两个参数设置：
+			Scan scan = new Scan();
+			scan.setCaching(500);        // 1 is the default in Scan, which will be bad for MapReduce jobs
+			scan.setCacheBlocks(false);  // don't set to true for MR jobs
+5、SnapshotScanMR
+    从命名来看就知道，SnapshotScanMR扫描于原始表对应的snapshot之上（更准确来说根据snapshot restore出来的hfile），而TableScanMR扫描于原始表。
+    SnapshotScanMR直接会在客户端打开region扫描HDFS上的文件，不需要发送Scan请求给RegionServer，再有RegionServer扫描HDFS上的文件。是的，你没看错，是在客户端直接扫描HDFS上的文件，这类scanner称之为ClientSideRegionScanner。
+	有些朋友可能要问了，为什么要这么玩？总结起来，之所以这么玩主要有两个原因：
+		减小对RegionServer的影响。很显然，SnapshotScanMR这种绕过RegionServer的实现方式最大限度的减小了对集群中其他业务的影响。
+		极大的提升了扫描效率。SnapshotScanMR相比TableScanMR在扫描效率上会有2倍～N倍的性能提升（下一小节对各种扫描用法性能做个对比评估）。有人又要问了，
+		为什么会有这么大的性能提升？个人认为主要有如下两个方面的原因：
+			扫描的过程少了一次网络传输，对于大数据量的扫描，网络传输花费的时间是非常庞大的，这主要可能牵扯到数据的序列化以及反序列化开销。
+			TableScanMR扫描中RegionServer很可能会成为瓶颈，而SnapshotScanMR扫描并没有这个瓶颈点。

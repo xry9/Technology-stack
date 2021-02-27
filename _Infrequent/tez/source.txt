@@ -1,0 +1,9 @@
+https://tez.apache.org/install.html
+mvn clean package -DskipTests=true -Dmaven.javadoc.skip=true
+	Deploy Apache Hadoop using version of 2.7.0 or higher.
+	This assumes that you have already installed JDK8 or later and Maven 3 or later
+	Tez also requires Protocol Buffers 2.5.0, including the protoc-compiler.
+在 pom.xml 中注释掉 ui, 因为对本地 npm 环境有依赖安装又没成功
+ <!--module>tez-ui</module>
+    <module>tez-ui2</module-->
+0.9.2 同样

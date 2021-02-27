@@ -1,0 +1,21 @@
+https://blog.csdn.net/u013063153/article/details/60757307
+https://cwiki.apache.org/confluence/display/Hive/HBaseIntegration
+
+add jar file:///home/tyx/elasticsearch-hadoop-6.4.2.jar;
+
+CREATE EXTERNAL TABLE lxw1234_es_tags (
+cookieid string,
+price bigint,
+brand string,
+name string,
+produce_date TIMESTAMP
+)
+STORED BY 'org.elasticsearch.hadoop.hive.EsStorageHandler'
+TBLPROPERTIES(
+'es.nodes' = '192.168.58.128:9200',
+'es.index.auto.create' = 'true',
+'es.resource' = 'car_shop/sales',
+'es.read.metadata' = 'true',
+'es.mapping.names' = 'cookieid:_metadata._id');
+
+列名用cookieid，不用加cookieid:_metadata._id也可以，但是用别的名就不行

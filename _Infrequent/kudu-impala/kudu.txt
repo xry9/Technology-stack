@@ -1,0 +1,29 @@
+https://github.com/cloudera/kudu-examples
+http://archive.cloudera.com/kudu/redhat/6/x86_64/kudu/
+http://archive.cloudera.com/beta/impala-kudu/redhat/6/x86_64/impala-kudu/
+http://cwiki.apachecn.org/pages/viewpage.action?pageId=10813647
+https://github.com/LinMingQiang/spark-util/tree/spark-kudu
+https://blog.csdn.net/weixin_39478115/article/details/78469962
+=============================
+主节点都装（不确定4，5是不是必须装），从节点装1，3
+rpm -ivh --nodeps kudu-1.2.0+cdh5.10.0+0-1.cdh5.10.0.p0.56.el6.x86_64.rpm
+rpm -ivh kudu-master-1.2.0+cdh5.10.0+0-1.cdh5.10.0.p0.56.el6.x86_64.rpm
+rpm -ivh kudu-tserver-1.2.0+cdh5.10.0+0-1.cdh5.10.0.p0.56.el6.x86_64.rpm
+rpm -ivh kudu-client0-1.2.0+cdh5.10.0+0-1.cdh5.10.0.p0.56.el6.x86_64.rpm
+rpm -ivh kudu-client-devel-1.2.0+cdh5.10.0+0-1.cdh5.10.0.p0.56.el6.x86_64.rpm
+
+vim /etc/kudu/conf/tserver.gflagfile
+	--tserver_master_addrs=cloud01:7051
+加入--default_num_replicas=1，不确定加到哪个上，故master.gflagfile，tserver.gflagfile都加了
+yum install redhat-lsb -y
+service ntpd start && chkconfig ntpd on	(单机版不用这个，哈哈哈哈)
+	服务启动后，需要5-10钟来完成同步。判断是否已经完成同步可以使用命令：ntpstat，如果输出为：
+	synchronised to NTP server (120.25.108.11) at stratum 3
+	   time correct to within 114 ms
+	   polling server every 1024 s
+	表示同步已经完成，但是往往一直不能同步完成，过几分不断试吧（可尝试下service ntpd restart）：service kudu-master start
+service kudu-master start && service kudu-tserver start
+service kudu-master status && service kudu-tserver status
+service kudu-master stop && service kudu-tserver stop
+
+web端口：8051

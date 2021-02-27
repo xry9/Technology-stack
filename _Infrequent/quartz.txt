@@ -1,0 +1,124 @@
+public class ExampleQuartz {
+    public static void main(String[] args) throws Exception {
+        Scheduler scheduler = StdSchedulerFactory.getDefaultScheduler();
+        scheduler.start();
+        // 定义一次任务
+        JobDetail job = JobBuilder.newJob(EchoJob.class).withIdentity("jobName1", "groupName1").build();
+        // 定义执行时间,2秒1次
+        Trigger trigger = TriggerBuilder.newTrigger()
+                .withIdentity("triggerName1", "groupName1")
+                .withSchedule(CronScheduleBuilder.cronSchedule("0/5 * * ? * * "))
+                .build();
+        scheduler.scheduleJob(job, trigger);
+        TimeUnit.SECONDS.sleep(20);
+        scheduler.shutdown(true);
+    }
+}
+public class EchoJob implements Job {
+    @Override
+    public void execute(JobExecutionContext context) throws JobExecutionException {
+        System.out.println("===execute==="+Thread.activeCount());
+    }
+}
+
+public class org.quartz.core.QuartzSchedulerThread extends Thread {
+    public void run() {
+        while (!halted.get()) {
+            try {
+                int availThreadCount = qsRsrcs.getThreadPool().blockForAvailableThreads();
+                if(availThreadCount > 0) { 
+                    List<OperableTrigger> triggers;
+                    triggers = qsRsrcs.getJobStore().acquireNextTriggers( now + idleWaitTime, Math.min(availThreadCount, qsRsrcs.getMaxBatchSize()), qsRsrcs.getBatchTimeWindow());
+                    acquiresFailed = 0;
+                    if (triggers != null && !triggers.isEmpty()) {
+                        now = System.currentTimeMillis();
+                        long triggerTime = triggers.get(0).getNextFireTime().getTime();
+                        long timeUntilTrigger = triggerTime - now;
+                        while(timeUntilTrigger > 2) {
+                            synchronized (sigLock) {
+                                if (!isCandidateNewTimeEarlierWithinReason(triggerTime, false)) {
+                                        now = System.currentTimeMillis();
+                                        timeUntilTrigger = triggerTime - now;
+                                        if(timeUntilTrigger >= 1) sigLock.wait(timeUntilTrigger);// 这里是核心
+                                }
+                            }
+                            now = System.currentTimeMillis();
+                            timeUntilTrigger = triggerTime - now;
+                        }
+                        for (int i = 0; i < bndles.size(); i++) {
+                            JobRunShell shell = null;
+                                shell = qsRsrcs.getJobRunShellFactory().createJobRunShell(bndle);
+                                shell.initialize(qs);
+                            if (qsRsrcs.getThreadPool().runInThread(shell) == false) {
+                                qsRsrcs.getJobStore().triggeredJobComplete(triggers.get(i), bndle.getJobDetail(), CompletedExecutionInstruction.SET_ALL_JOB_TRIGGERS_ERROR);
+                            }
+                        }
+                        continue; // while (!halted)
+                    }
+                } else { // if(availThreadCount > 0)
+                }
+            } catch(RuntimeException re) {
+                getLog().error("Runtime error occurred in main trigger firing loop.", re);
+            }
+        }
+        qs = null;
+        qsRsrcs = null;
+    }
+}
+public class org.quartz.simpl.SimpleThreadPool implements ThreadPool {
+
+    public boolean runInThread(Runnable runnable) {
+        synchronized (nextRunnableLock) {
+            if (!isShutdown) {
+                WorkerThread wt = (WorkerThread)availWorkers.removeFirst();
+                busyWorkers.add(wt);
+                wt.run(runnable);// 启动一个线程
+            } else {
+            }
+            nextRunnableLock.notifyAll();
+            handoffPending = false;
+        }
+        return true;
+    }
+
+    class WorkerThread extends Thread {
+        public void run(Runnable newRunnable) {
+            synchronized(lock) {
+                runnable = newRunnable;// JobRunShell
+                lock.notifyAll();
+            }
+        }
+        public void run() {
+            boolean ran = false;
+            while (run.get()) {
+                try {
+                    synchronized(lock) {
+                        while (runnable == null && run.get()) {
+                            lock.wait(500);
+                        }
+                        if (runnable != null) {
+                            ran = true;
+                            runnable.run();
+                        }
+                    }
+                } catch (InterruptedException unblock) {} catch (Throwable exceptionInRunnable) {} 
+                finally {
+                    synchronized(lock) {
+                        runnable = null;
+                    }
+                }
+            }
+        }
+    }
+}
+public class org.quartz.core.JobRunShell extends SchedulerListenerSupport implements Runnable {
+    public void run() {
+            OperableTrigger trigger = (OperableTrigger) jec.getTrigger();
+            JobDetail jobDetail = jec.getJobDetail();
+            do {
+                Job job = jec.getJobInstance();
+                job.execute(jec);// 执行我们的 job 了
+                break;
+            } while (true);
+    }
+}

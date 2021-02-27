@@ -1,0 +1,653 @@
+DataNode 与客户端通信端口是 50010, 与 NameNode 通信端口是多少
+
+1、RPC 最底层方法:
+	org.apache.hadoop.ipc.Client.Connection#sendRpcRequest		--> sendRpcRequest===1042
+	org.apache.hadoop.ipc.ProtobufRpcEngine.Invoker#invoke		--> invoke===228
+	org.apache.hadoop.ipc.Server.Connection#readAndProcess	--> readAndProcess===1541
+	org.apache.hadoop.ipc.ProtobufRpcEngine.Server.ProtoBufRpcInvoker#call	--> call===616, 还有一个 call===510
+2、Server 启动 RPC 服务端口:
+	org.apache.hadoop.ipc.Server#bind		--> bind===425	(dataNode:50010 也显示出来了?)
+	RPC Client 连 Server 时网络端口：		
+		org.apache.hadoop.ipc.ProtobufRpcEngine.Invoker#Invoker		--> Invoker===134
+	此二者好像并不完全对等
+3、 Server 端注册协议	
+	org.apache.hadoop.ipc.RPC.Server#registerProtocolAndImpl 	--> registerProtocolAndImpl===871
+	org.apache.hadoop.ipc.Server#registerProtocolEngine		--> registerProtocolEngine===229
+3、Client 与 dataNode 建立网络连接(block 级别的): 
+	org.apache.hadoop.hdfs.DFSClient#newConnectedPeer	--> newConnectedPeer===3440
+	org.apache.hadoop.hdfs.net.TcpPeerServer#peerFromSocket		--> peerFromSocket===47
+	读下一个块时 Client 端口 +1
+4、dataNode 启动 DataXceiver 服务:
+	org.apache.hadoop.hdfs.server.datanode.DataNode#initDataXceiver
+5、dataNode 的 50020 端口启了好像也没啥呀
+6、TaskUmbilicalProtocol 没有用 BP 协议实现是为了支持多语言吗？
+======================================== Server ========================================
+
+public abstract class org.apache.hadoop.ipc.Server {
+	private ConnectionManager connectionManager;
+	private org.apache.hadoop.ipc.CallQueueManager<Call> callQueue;// 一言难尽的队列
+	private static final ThreadLocal<Server> SERVER = new ThreadLocal<Server>();
+	private static final ThreadLocal<Call> CurCall = new ThreadLocal<Call>();
+	static Map<RPC.RpcKind, RpcKindMapValue> rpcKindMap = new HashMap<RPC.RpcKind, RpcKindMapValue>(4);
+
+	private Responder responder = null;
+	protected Server(String bindAddress, int port, Class<? extends Writable> rpcRequestClass, int handlerCount, int numReaders, int queueSizePerHandler, Configuration conf, String serverName, SecretManager<? extends TokenIdentifier> secretManager, String portRangeConfig) throws IOException {
+		this.bindAddress = bindAddress;
+		this.port = port;
+		this.rpcRequestClass = rpcRequestClass; 
+		final String prefix = getQueueClassPrefix();
+		this.callQueue = new CallQueueManager<Call>(getQueueClass(prefix, conf), maxQueueSize, prefix, conf);
+		listener = new Listener();
+		this.port = listener.getAddress().getPort();    
+		connectionManager = new ConnectionManager();
+		responder = new Responder();
+	}
+	public synchronized void start() {
+		responder.start();
+		listener.start();
+		handlers = new Handler[handlerCount];
+		for (int i = 0; i < handlerCount; i++) {
+			handlers[i] = new Handler(i);
+			handlers[i].start();
+		}
+	}
+	private class Responder extends Thread {
+		private final Selector writeSelector;
+		Responder() throws IOException {
+			writeSelector = Selector.open(); // create a selector
+		}
+		public void run() {
+			doRunLoop();
+		}
+		private void doRunLoop() {
+			while (running) {
+				writeSelector.select(PURGE_INTERVAL);
+				Iterator<SelectionKey> iter = writeSelector.selectedKeys().iterator();
+				while (iter.hasNext()) {
+					SelectionKey key = iter.next();
+					iter.remove();
+					if (key.isValid() && key.isWritable()) {
+						doAsyncWrite(key);
+					}
+				}
+			}
+		}
+		
+		private void doAsyncWrite(SelectionKey key) throws IOException {
+			Call call = (Call)key.attachment();
+			if (call == null) {
+				return;
+			}
+			synchronized(call.connection.responseQueue) {
+				if (processResponse(call.connection.responseQueue, false)) {
+					......
+				}
+			}
+		}		
+		private boolean processResponse(LinkedList<Call> responseQueue, boolean inHandler) throws IOException {
+			Call call = null;
+			call = responseQueue.removeFirst();
+			SocketChannel channel = call.connection.channel;
+			int numBytes = channelWrite(channel, call.rpcResponse);// 不必看了，就是将 ByteBuffer 写到 channel 中
+			channel.register(writeSelector, SelectionKey.OP_WRITE, call);// 此行是有条件执行的，属于有限次执行
+			return done;
+		}
+		void doRespond(Call call) throws IOException {
+			call.connection.responseQueue.addLast(call);
+			if (call.connection.responseQueue.size() == 1) {
+				processResponse(call.connection.responseQueue, true);
+			}
+		}
+
+	}
+	private class Listener extends Thread {
+		private ServerSocketChannel acceptChannel = null; //the accept channel
+		private Selector selector = null; //the selector that we use for the server
+		private Reader[] readers = null;
+		private int currentReader = 0;
+		private InetSocketAddress address; //the address we bind at
+		public Listener() throws IOException {
+			address = new InetSocketAddress(bindAddress, port);
+			acceptChannel = ServerSocketChannel.open();
+			bind(acceptChannel.socket(), address, backlogLength, conf, portRangeConfig);
+			port = acceptChannel.socket().getLocalPort(); //Could be an ephemeral port
+			selector = Selector.open();
+			readers = new Reader[readThreads];
+			for (int i = 0; i < readThreads; i++) {
+				Reader reader = new Reader("Socket Reader #" + (i + 1) + " for port " + port);
+				readers[i] = reader;
+				reader.start();
+			}
+			acceptChannel.register(selector, SelectionKey.OP_ACCEPT);
+		}
+		public void run() {
+			while (running) {
+				SelectionKey key = null;
+				getSelector().select();
+				Iterator<SelectionKey> iter = getSelector().selectedKeys().iterator();
+				while (iter.hasNext()) {
+					key = iter.next();
+					iter.remove();
+					if (key.isAcceptable()) doAccept(key);
+				}
+			}
+		}
+		void doAccept(SelectionKey key) throws InterruptedException, IOException,  OutOfMemoryError {
+			ServerSocketChannel server = (ServerSocketChannel) key.channel();
+			SocketChannel channel;
+			while ((channel = server.accept()) != null) {
+				Reader reader = getReader();
+				Connection c = connectionManager.register(channel);
+				key.attach(c);  // so closeCurrentConnection can get the object
+				reader.addConnection(c);
+			}
+		}
+		Reader getReader() {
+			currentReader = (currentReader + 1) % readers.length;
+			return readers[currentReader];
+		}
+		private class Reader extends Thread {
+			final private BlockingQueue<Connection> pendingConnections;
+			private final Selector readSelector;
+			Reader(String name) throws IOException {
+				super(name);
+				this.pendingConnections = new LinkedBlockingQueue<Connection>(readerPendingConnectionQueue);
+				this.readSelector = Selector.open();
+			}
+			public void run() {
+				doRunLoop();
+			}
+			private synchronized void doRunLoop() {
+				while (running) {
+					SelectionKey key = null;
+					int size = pendingConnections.size();
+					for (int i=size; i>0; i--) {
+						Connection conn = pendingConnections.take();
+						conn.channel.register(readSelector, SelectionKey.OP_READ, conn);
+					}
+					readSelector.select();
+					Iterator<SelectionKey> iter = readSelector.selectedKeys().iterator();
+					while (iter.hasNext()) {
+						key = iter.next();
+						iter.remove();
+						if (key.isValid()) {
+							if (key.isReadable()) {
+								doRead(key);
+							}
+						}
+						key = null;
+					}
+				}
+			}
+			public void addConnection(Connection conn) throws InterruptedException {
+				pendingConnections.put(conn);
+				readSelector.wakeup();
+			}
+		}
+		void doRead(SelectionKey key) throws InterruptedException {
+			int count = 0;
+			Connection c = (Connection)key.attachment();
+			c.setLastContact(Time.now());
+			count = c.readAndProcess();
+		}
+	
+	}
+	public class Connection {
+		private SocketChannel channel;
+		private ByteBuffer data;
+		private LinkedList<Call> responseQueue;
+		public Connection(SocketChannel channel, long lastContact) {
+			this.channel = channel;
+		}
+		private void processRpcRequest(RpcRequestHeaderProto header, DataInputStream dis) throws WrappedRpcServerException, InterruptedException {
+			Class<? extends Writable> rpcRequestClass = getRpcRequestWrapper(header.getRpcKind());
+			Writable rpcRequest = ReflectionUtils.newInstance(rpcRequestClass, conf);// 撸了一遍好恶心不必再细看了，就是个 Writable 
+			rpcRequest.readFields(dis);
+			Call call = new Call(header.getCallId(), header.getRetryCount(), rpcRequest, this, ProtoUtil.convert(header.getRpcKind()), header.getClientId().toByteArray(), traceSpan);
+			callQueue.put(call);
+		}
+		public int readAndProcess() throws WrappedRpcServerException, IOException, InterruptedException {
+			while (true) {
+				count = channelRead(channel, data);// 就是往 data 中读数据
+				if (data.remaining() == 0) {
+					processOneRpc(data.array());
+				}
+				return count;
+			}
+		}
+		private void processOneRpc(byte[] buf) throws IOException, WrappedRpcServerException, InterruptedException {
+			final DataInputStream dis = new DataInputStream(new ByteArrayInputStream(buf));
+			final RpcRequestHeaderProto header = decodeProtobufFromStream(RpcRequestHeaderProto.newBuilder(), dis);
+			callId = header.getCallId();
+			retry = header.getRetryCount();
+			processRpcRequest(header, dis);
+		}
+	}
+	private class ConnectionManager {
+		final private Set<Connection> connections;
+		Connection register(SocketChannel channel) {
+			Connection connection = new Connection(channel, Time.now());
+			add(connection); // 就是往 connections 中添加元素
+			return connection;
+		}
+	}
+	private class Handler extends Thread {
+		public void run() {
+			SERVER.set(Server.this);
+			ByteArrayOutputStream buf = new ByteArrayOutputStream(INITIAL_RESP_BUF_SIZE);
+			while (running) {
+				final Call call = callQueue.take(); // pop the queue; maybe blocked here
+				RpcStatusProto returnStatus = RpcStatusProto.SUCCESS;
+				RpcErrorCodeProto detailedErr = null;
+				CurCall.set(call);
+				Writable value = call(call.rpcKind, call.connection.protocolName, call.rpcRequest, call.timestamp);
+				CurCall.set(null);
+				synchronized (call.connection.responseQueue) {
+					setupResponse(buf, call, returnStatus, detailedErr, value, errorClass, error);// 近似静态方法，就是往 call 里塞 value
+					responder.doRespond(call);
+				}
+			}
+		}
+	}
+	static class RpcKindMapValue {
+		final Class<? extends Writable> rpcRequestWrapperClass;
+		final RpcInvoker rpcInvoker;
+		RpcKindMapValue (Class<? extends Writable> rpcRequestWrapperClass, RpcInvoker rpcInvoker) {
+			this.rpcInvoker = rpcInvoker;
+			this.rpcRequestWrapperClass = rpcRequestWrapperClass;
+		}   
+	}
+	public static RpcInvoker  getRpcInvoker(RPC.RpcKind rpcKind) {
+		RpcKindMapValue val = rpcKindMap.get(rpcKind);
+		return (val == null) ? null : val.rpcInvoker; 
+	}
+	public static void registerProtocolEngine(RPC.RpcKind rpcKind, Class<? extends Writable> rpcRequestWrapperClass, RpcInvoker rpcInvoker) {
+		RpcKindMapValue old = rpcKindMap.put(rpcKind, new RpcKindMapValue(rpcRequestWrapperClass, rpcInvoker));
+	}
+	public abstract Writable call(RPC.RpcKind rpcKind, String protocol, Writable param, long receiveTime) throws Exception;
+	public static class Call implements Schedulable {
+		private final int callId;             // the client's call id
+		private final int retryCount;        // the retry count of the call
+		private final Writable rpcRequest;    // Serialized Rpc request from client
+		private final Connection connection;  // connection to client
+		private long timestamp;               // time received when response is null
+		private ByteBuffer rpcResponse;       // the response for this call
+		private final RPC.RpcKind rpcKind;
+		private final byte[] clientId;
+		private final Span traceSpan; // the tracing span on the server side
+	}
+}
+public interface org.apache.hadoop.ipc.RpcEngine {
+	<T> ProtocolProxy<T> getProxy(Class<T> protocol, long clientVersion, InetSocketAddress addr, UserGroupInformation ticket, Configuration conf, SocketFactory factory, int rpcTimeout, RetryPolicy connectionRetryPolicy, AtomicBoolean fallbackToSimpleAuth) throws IOException;
+}
+public class org.apache.hadoop.ipc.ProtobufRpcEngine implements org.apache.hadoop.ipc.RpcEngine {
+	private static final ClientCache CLIENTS = new ClientCache();
+	static {
+		org.apache.hadoop.ipc.Server.registerProtocolEngine(RPC.RpcKind.RPC_PROTOCOL_BUFFER, RpcRequestWrapper.class, new Server.ProtoBufRpcInvoker());
+	}
+	public <T> ProtocolProxy<T> getProxy(Class<T> protocol, long clientVersion, InetSocketAddress addr, UserGroupInformation ticket, Configuration conf, SocketFactory factory, int rpcTimeout, RetryPolicy connectionRetryPolicy, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		final Invoker invoker = new Invoker(protocol, addr, ticket, conf, factory, rpcTimeout, connectionRetryPolicy, fallbackToSimpleAuth);
+		return new ProtocolProxy<T>(protocol, (T) Proxy.newProxyInstance(protocol.getClassLoader(), new Class[]{protocol}, invoker), false);
+	}
+	public static class Server extends RPC.Server {
+		public Server(Class<?> protocolClass, Object protocolImpl, Configuration conf, String bindAddress, int port, int numHandlers, int numReaders, int queueSizePerHandler, boolean verbose, SecretManager<? extends TokenIdentifier> secretManager, String portRangeConfig) throws IOException {
+			super(bindAddress, port, null, numHandlers, numReaders, queueSizePerHandler, conf, classNameBase(protocolImpl.getClass().getName()), secretManager, portRangeConfig);
+			registerProtocolAndImpl(RPC.RpcKind.RPC_PROTOCOL_BUFFER, protocolClass, protocolImpl);
+		}
+	}
+	public RPC.Server getServer(Class<?> protocol, Object protocolImpl, String bindAddress, int port, int numHandlers, int numReaders, int queueSizePerHandler, boolean verbose, Configuration conf, SecretManager<? extends TokenIdentifier> secretManager, String portRangeConfig) throws IOException {
+		return new Server(protocol, protocolImpl, conf, bindAddress, port, numHandlers, numReaders, queueSizePerHandler, verbose, secretManager, portRangeConfig);
+	}
+	public Writable call(RPC.Server server, String protocol, Writable writableRequest, long receiveTime) throws Exception {
+		RpcRequestWrapper request = (RpcRequestWrapper) writableRequest;
+		RequestHeaderProto rpcRequest = request.requestHeader;
+		String methodName = rpcRequest.getMethodName();
+		String protoName = rpcRequest.getDeclaringClassProtocolName();
+		long clientVersion = rpcRequest.getClientProtocolVersion();
+		ProtoClassProtoImpl protocolImpl = getProtocolImpl(server, protoName, clientVersion);
+		
+		BlockingService service = (BlockingService) protocolImpl.protocolImpl;
+		MethodDescriptor methodDescriptor = service.getDescriptorForType().findMethodByName(methodName);
+		Message prototype = service.getRequestPrototype(methodDescriptor);
+		Message param = prototype.newBuilderForType().mergeFrom(request.theRequestRead).build();
+		server.rpcDetailedMetrics.init(protocolImpl.protocolClass);		
+		Message result = service.callBlockingMethod(methodDescriptor, null, param);
+		return new RpcResponseWrapper(result);
+	}	
+	private static class Invoker implements RpcInvocationHandler {
+		private final org.apache.hadoop.ipc.Client client;
+		private Invoker(Class<?> protocol, Client.ConnectionId connId, Configuration conf, SocketFactory factory) {
+			this.remoteId = connId;
+			this.client = CLIENTS.getClient(conf, factory, RpcResponseWrapper.class);
+			this.protocolName = RPC.getProtocolName(protocol);
+		}
+		public Object invoke(Object proxy, Method method, Object[] args) throws ServiceException {
+			RequestHeaderProto rpcRequestHeader = constructRpcRequestHeader(method);
+			Message theRequest = (Message) args[1];
+			final RpcResponseWrapper val = (RpcResponseWrapper) client.call(RPC.RpcKind.RPC_PROTOCOL_BUFFER, new RpcRequestWrapper(rpcRequestHeader, theRequest), remoteId, fallbackToSimpleAuth);
+			return returnMessage;// val 解析的结果
+		}
+	}
+}
+static class ProtoBufRpcInvoker implements RpcInvoker {
+	private static ProtoClassProtoImpl getProtocolImpl(RPC.Server server, String protoName, long clientVersion) throws RpcServerException {
+		ProtoNameVer pv = new ProtoNameVer(protoName, clientVersion);
+		ProtoClassProtoImpl impl = server.getProtocolImplMap(RPC.RpcKind.RPC_PROTOCOL_BUFFER).get(pv);        
+		return impl;
+	}
+}
+public class org.apache.hadoop.ipc.RPC {
+	private static final Map<Class<?>,RpcEngine> PROTOCOL_ENGINES = new HashMap<Class<?>,RpcEngine>();
+	private static final String ENGINE_PROP = "rpc.engine";
+	public static <T> ProtocolProxy<T> getProtocolProxy(Class<T> protocol, long clientVersion, InetSocketAddress addr, UserGroupInformation ticket, Configuration conf, SocketFactory factory, int rpcTimeout, RetryPolicy connectionRetryPolicy, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		return getProtocolEngine(protocol, conf).getProxy(protocol, clientVersion, addr, ticket, conf, factory, rpcTimeout, connectionRetryPolicy, fallbackToSimpleAuth);
+	}
+	public static <T> T getProxy(Class<T> protocol, long clientVersion, InetSocketAddress addr, Configuration conf) throws IOException {
+		return getProtocolProxy(protocol, clientVersion, addr, conf).getProxy();
+	}
+	public static void setProtocolEngine(Configuration conf, Class<?> protocol, Class<?> engine) {
+		conf.setClass(ENGINE_PROP+"."+protocol.getName(), engine, RpcEngine.class);
+	}
+	static synchronized RpcEngine getProtocolEngine(Class<?> protocol, Configuration conf) {
+		RpcEngine engine = PROTOCOL_ENGINES.get(protocol);
+		if (engine == null) {
+			Class<?> impl = conf.getClass(ENGINE_PROP+"."+protocol.getName(), WritableRpcEngine.class);
+			engine = (RpcEngine)ReflectionUtils.newInstance(impl, conf);
+			PROTOCOL_ENGINES.put(protocol, engine);
+		}
+		return engine;
+	}
+
+	public abstract static class Server extends org.apache.hadoop.ipc.Server {
+		ArrayList<Map<ProtoNameVer, ProtoClassProtoImpl>> protocolImplMapArray = new ArrayList<Map<ProtoNameVer, ProtoClassProtoImpl>>(RpcKind.MAX_INDEX);
+		protected Server(String bindAddress, int port, Class<? extends Writable> paramClass, int handlerCount, int numReaders, int queueSizePerHandler, 
+		Configuration conf, String serverName, SecretManager<? extends TokenIdentifier> secretManager, String portRangeConfig) throws IOException {
+			super(bindAddress, port, paramClass, handlerCount, numReaders, queueSizePerHandler, conf, serverName, secretManager, portRangeConfig);
+		}
+		public Writable call(RPC.RpcKind rpcKind, String protocol, Writable rpcRequest, long receiveTime) throws Exception {
+			RpcInvoker rpcInvoker = getRpcInvoker(rpcKind);
+			return rpcInvoker.call(this, protocol, rpcRequest, receiveTime);
+		}
+		Map<ProtoNameVer, ProtoClassProtoImpl> getProtocolImplMap(RPC.RpcKind rpcKind) {
+			if (protocolImplMapArray.size() == 0) {
+				for (int i=0; i <= RpcKind.MAX_INDEX; ++i) {
+					protocolImplMapArray.add(new HashMap<ProtoNameVer, ProtoClassProtoImpl>(10));
+				}
+			}
+			return protocolImplMapArray.get(rpcKind.ordinal());   
+		}
+		void registerProtocolAndImpl(RpcKind rpcKind, Class<?> protocolClass, Object protocolImpl) {
+			String protocolName = RPC.getProtocolName(protocolClass);
+			version = RPC.getProtocolVersion(protocolClass);
+			getProtocolImplMap(rpcKind).put(new ProtoNameVer(protocolName, version),
+			new ProtoClassProtoImpl(protocolClass, protocolImpl)); 
+		}
+	}
+	public static class Builder {
+		private Class<?> protocol = null;
+		private Object instance = null;
+		private String bindAddress = "0.0.0.0";
+		private int port = 0;
+		public Server build() throws IOException, HadoopIllegalArgumentException {
+			// getProtocolEngine(this.protocol, this.conf) 的结果是 org.apache.hadoop.ipc.ProtobufRpcEngine
+			return getProtocolEngine(this.protocol, this.conf)
+				.getServer(this.protocol, this.instance, this.bindAddress, this.port, this.numHandlers, this.numReaders, this.queueSizePerHandler, this.verbose, this.conf, this.secretManager, this.portRangeConfig);
+		}
+	}
+}
+
+======================================== Client ========================================
+1、两层动态代理? 两层好像是为了 Retry
+2、动态代理与 PB 本质是一样的，就是接收一个方法名的参数，通过网络发给服务端，把所有方法调用收到一个口子
+PB 经动态代理一包装，在客户端完全发挥不出 PB 的作用, 反而很蹩脚。应该是 hadoop 需要的协议太多了
+获取各协议的 RPC 引擎 org.apache.hadoop.ipc.RPC#getProtocolProxy		--> getProtocolProxy===579
+协议和引擎的绑定本质是协议的实现类中用的哪种引擎, 而协与实现类的绑定是在 org.apache.hadoop.yarn.factories.impl.pb.RpcClientFactoryPBImpl#getClient 方法中根据协议的类名拼起来的
+实现类初始化时会 RPC.setProtocolEngine, 还有一件重要的事 RPC.getProxy(xxxProtocolPB.class...), 用 PB 引擎实现的协议, 会有 proto 文件与协议对应, 也有例外
+org.apache.hadoop.hdfs.protocol.ClientProtocol	--> ClientNamenodeProtocolProtos:ClientNamenodeProtocol
+org.apache.hadoop.mapreduce.protocol.ClientProtocol	--> MRClientProtocol:MRClientProtocolService
+WritableRpcEngine 引擎用起来好简单啊, 直接 RPC.getProxy(TaskUmbilicalProtocol.class..., address,...) 就可以了, 有一点需要特别注意, 返回值要继承 Writable
+
+3、 Client 动态代理分两套, NameNode 和 yarn 
+
+
+public interface org.apache.hadoop.hdfs.protocol.ClientProtocol {}
+public class org.apache.hadoop.hdfs.DFSClient implements java.io.Closeable, RemotePeerFactory, DataEncryptionKeyFactory {
+	private final Configuration conf;
+	final org.apache.hadoop.hdfs.protocol.ClientProtocol namenode;
+	// 这个方法不用多说了，很重要
+	public LocatedBlocks getLocatedBlocks(String src, long start, long length) throws IOException {
+		return callGetBlockLocations(namenode, src, start, length);
+	}
+	static LocatedBlocks callGetBlockLocations(ClientProtocol namenode, String src, long start, long length) throws IOException {
+		return namenode.getBlockLocations(src, start, length);
+	}
+	public DFSClient(URI nameNodeUri, ClientProtocol rpcNamenode, Configuration conf, FileSystem.Statistics stats) throws IOException {
+		NameNodeProxies.ProxyAndInfo<ClientProtocol> proxyInfo = NameNodeProxies.createProxy(conf, nameNodeUri, ClientProtocol.class, nnFallbackToSimpleAuth);
+		this.namenode = proxyInfo.getProxy();
+	}
+}
+  
+public class NameNodeProxies {
+	public static <T> ProxyAndInfo<T> createProxy(Configuration conf, URI nameNodeUri, Class<T> xface, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		AbstractNNFailoverProxyProvider<T> failoverProxyProvider = createFailoverProxyProvider(conf, nameNodeUri, xface, true, fallbackToSimpleAuth);
+		// Non-HA case
+		return createNonHAProxy(conf, NameNode.getAddress(nameNodeUri), xface, UserGroupInformation.getCurrentUser(), true, fallbackToSimpleAuth);
+	}
+	public static <T> ProxyAndInfo<T> createNonHAProxy(Configuration conf, InetSocketAddress nnAddr, Class<T> xface, UserGroupInformation ugi, boolean withRetries, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		T proxy;
+		if (xface == ClientProtocol.class) {
+			proxy = (T) createNNProxyWithClientProtocol(nnAddr, conf, ugi, withRetries, fallbackToSimpleAuth);
+		}else if (xface == [JournalProtocol/NamenodeProtocol ...].class) {
+		}
+		return new ProxyAndInfo<T>(proxy, SecurityUtil.buildTokenService(nnAddr), nnAddr);
+	}
+	private static ClientProtocol createNNProxyWithClientProtocol(InetSocketAddress address, Configuration conf, UserGroupInformation ugi, boolean withRetries, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		RPC.setProtocolEngine(conf, ClientNamenodeProtocolPB.class, ProtobufRpcEngine.class);
+		final RetryPolicy defaultPolicy = RetryUtils.getDefaultRetryPolicy(conf, DFSConfigKeys.DFS_CLIENT_RETRY_POLICY_ENABLED_KEY, DFSConfigKeys.DFS_CLIENT_RETRY_POLICY_ENABLED_DEFAULT, DFSConfigKeys.DFS_CLIENT_RETRY_POLICY_SPEC_KEY, DFSConfigKeys.DFS_CLIENT_RETRY_POLICY_SPEC_DEFAULT, SafeModeException.class);
+		final long version = RPC.getProtocolVersion(ClientNamenodeProtocolPB.class);
+		ClientNamenodeProtocolPB proxy = RPC.getProtocolProxy(ClientNamenodeProtocolPB.class, version, address, ugi, conf, NetUtils.getDefaultSocketFactory(conf), org.apache.hadoop.ipc.Client.getTimeout(conf), defaultPolicy, fallbackToSimpleAuth).getProxy();
+		Map<String, RetryPolicy> methodNameToPolicyMap = new HashMap<String, RetryPolicy>();
+		ClientProtocol translatorProxy = new ClientNamenodeProtocolTranslatorPB(proxy);
+		return (ClientProtocol) RetryProxy.create(ClientProtocol.class,
+			new DefaultFailoverProxyProvider<ClientProtocol>(ClientProtocol.class, translatorProxy), methodNameToPolicyMap, defaultPolicy);
+	}
+}
+
+public class org.apache.hadoop.hdfs.protocolPB.ClientNamenodeProtocolTranslatorPB implements ProtocolMetaInterface, ClientProtocol, Closeable, ProtocolTranslator {
+	final private ClientNamenodeProtocolPB rpcProxy;
+	public ClientNamenodeProtocolTranslatorPB(ClientNamenodeProtocolPB proxy) {
+		rpcProxy = proxy;
+	}
+}
+
+public class org.apache.hadoop.io.retry.DefaultFailoverProxyProvider<T> implements FailoverProxyProvider<T> {
+	private T proxy;
+	private Class<T> iface;
+	public DefaultFailoverProxyProvider(Class<T> iface, T proxy) {
+		this.proxy = proxy;
+		this.iface = iface;
+	}
+}
+
+public class org.apache.hadoop.io.retry.RetryProxy {
+	public static <T> Object create(Class<T> iface, FailoverProxyProvider<T> proxyProvider, Map<String,RetryPolicy> methodNameToPolicyMap, RetryPolicy defaultPolicy) {
+		return java.lang.reflect.Proxy.newProxyInstance(proxyProvider.getInterface().getClassLoader(), new Class<?>[] { iface },
+			new RetryInvocationHandler<T>(proxyProvider, defaultPolicy, methodNameToPolicyMap) );
+	}
+}
+
+public class org.apache.hadoop.io.retry.RetryInvocationHandler<T> implements RpcInvocationHandler {
+	protected RetryInvocationHandler(FailoverProxyProvider<T> proxyProvider, RetryPolicy defaultPolicy, Map<String, RetryPolicy> methodNameToPolicyMap) {
+		this.proxyProvider = proxyProvider;
+		this.defaultPolicy = defaultPolicy;
+		this.methodNameToPolicyMap = methodNameToPolicyMap;
+		this.currentProxy = proxyProvider.getProxy();
+	}
+	
+	public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+		while (true) {
+			Object ret = invokeMethod(method, args);
+			return ret;
+		}
+	}
+	protected Object invokeMethod(Method method, Object[] args) throws Throwable {
+		return method.invoke(currentProxy.proxy, args);
+	}
+
+}
+public interface org.apache.hadoop.ipc.RpcInvocationHandler extends java.lang.reflect.InvocationHandler, Closeable {
+	ConnectionId getConnectionId();
+}
+
+public class org.apache.hadoop.ipc.Client {
+	public Client(Class<? extends Writable> valueClass, Configuration conf, SocketFactory factory) {
+		this.valueClass = valueClass;
+		this.conf = conf;
+		this.socketFactory = factory;
+	}
+	private SocketFactory socketFactory;
+	private Class<? extends Writable> valueClass;   // class of call values
+	private Hashtable<ConnectionId, Connection> connections = new Hashtable<ConnectionId, Connection>();
+	public Writable call(RPC.RpcKind rpcKind, Writable rpcRequest, ConnectionId remoteId, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		return call(rpcKind, rpcRequest, remoteId, RPC.RPC_SERVICE_CLASS_DEFAULT, fallbackToSimpleAuth);
+	}
+	
+	public Writable call(RPC.RpcKind rpcKind, Writable rpcRequest, ConnectionId remoteId, int serviceClass, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		final Call call = createCall(rpcKind, rpcRequest);
+		Connection connection = getConnection(remoteId, call, serviceClass, fallbackToSimpleAuth);
+		connection.sendRpcRequest(call);
+		while (!call.done) {
+			call.wait();
+		}
+		return call.getRpcResponse();
+	}
+	private Connection getConnection(ConnectionId remoteId, Call call, int serviceClass, AtomicBoolean fallbackToSimpleAuth) throws IOException {
+		Connection connection;
+		do {
+			synchronized (connections) {
+				connection = connections.get(remoteId);
+				if (connection == null) {
+					connection = new Connection(remoteId, serviceClass);
+					connections.put(remoteId, connection);
+				}
+			}
+		} while (!connection.addCall(call));
+		connection.setupIOstreams(fallbackToSimpleAuth);
+		return connection;
+	}
+	private class Connection extends Thread {
+		private InetSocketAddress server;  
+		private synchronized void setupIOstreams(AtomicBoolean fallbackToSimpleAuth) {
+			if (socket != null || shouldCloseConnection.get()) {// 这里保证了下面的 start() 不会调用
+				return;
+			}
+			while (true) {
+			  setupConnection();
+			  InputStream inStream = NetUtils.getInputStream(socket);
+			  OutputStream outStream = NetUtils.getOutputStream(socket);
+			  writeConnectionHeader(outStream);        
+			  this.in = new DataInputStream(new BufferedInputStream(inStream));
+			  this.out = new DataOutputStream(outStream);          
+			  writeConnectionContext(remoteId, authMethod);// ugi 就是在这里写进去的, IpcConnectionContextProto
+			  start();
+			  return;
+			}
+		}
+		private synchronized void setupConnection() throws IOException {
+			short ioFailures = 0;
+			short timeoutFailures = 0;
+			while (true) {
+				this.socket = socketFactory.createSocket();
+				NetUtils.connect(this.socket, server, connectionTimeout);
+				return;
+			}
+		}
+		public void run() {
+			while (waitForWork()) {//wait here for work - read or close connection
+				receiveRpcResponse();
+			}
+		}
+		private void receiveRpcResponse() {
+			int totalLen = in.readInt();
+			RpcResponseHeaderProto header = RpcResponseHeaderProto.parseDelimitedFrom(in);
+			int callId = header.getCallId();
+			Call call = calls.get(callId);
+			Writable value = ReflectionUtils.newInstance(valueClass, conf);
+			value.readFields(in);                 // read value
+			calls.remove(callId);
+			call.setRpcResponse(value);
+		}
+		
+		private synchronized boolean waitForWork() {
+			if (calls.isEmpty() && !shouldCloseConnection.get()  && running.get())  {
+				long timeout = maxIdleTime- (Time.now()-lastActivity.get());
+				if (timeout>0) {
+					wait(timeout);
+				}
+			}      
+			if (!calls.isEmpty() && !shouldCloseConnection.get() && running.get()) {
+				return true;
+			} else if (...) {
+				return false;
+			}
+		}
+	}
+	static class Call {
+		final Writable rpcRequest;  // the serialized rpc request
+		Writable rpcResponse;       // null if rpc has error
+		final RPC.RpcKind rpcKind;      // Rpc EngineKind
+		boolean done;               // true when call is done
+		public synchronized void setRpcResponse(Writable rpcResponse) {
+			this.rpcResponse = rpcResponse;
+			callComplete();
+		}
+		protected synchronized void callComplete() {
+			this.done = true;
+			notify();                                 // notify caller
+		}
+	}
+}
+======================================== Yarn ========================================
+public abstract class org.apache.hadoop.yarn.ipc.YarnRPC {}
+public class org.apache.hadoop.yarn.ipc.HadoopYarnProtoRPC extends YarnRPC {
+	public Server getServer(Class protocol, Object instance, InetSocketAddress addr, Configuration conf, SecretManager<? extends TokenIdentifier> secretManager, int numHandlers, String portRangeConfig) {
+		return RpcFactoryProvider.getServerFactory(conf).getServer(protocol,  instance, addr, conf, secretManager, numHandlers, portRangeConfig);
+	}
+}
+public class org.apache.hadoop.yarn.factory.providers.RpcFactoryProvider {
+	public static RpcClientFactory getClientFactory(Configuration conf) {
+		String clientFactoryClassName = conf.get(YarnConfiguration.IPC_CLIENT_FACTORY_CLASS,YarnConfiguration.DEFAULT_IPC_CLIENT_FACTORY_CLASS);
+		return (RpcClientFactory) getFactoryClassInstance(clientFactoryClassName);// 反射调用该类的 get 方法
+	}
+}
+public class org.apache.hadoop.yarn.factories.impl.pb.RpcServerFactoryPBImpl implements RpcServerFactory {
+	public Server getServer(Class<?> protocol, Object instance, InetSocketAddress addr, Configuration conf, SecretManager<? extends TokenIdentifier> secretManager, int numHandlers, String portRangeConfig) {
+		Constructor<?> constructor = serviceCache.get(protocol);
+		if (constructor == null) {
+			Class<?> pbServiceImplClazz = localConf.getClassByName(getPbServiceImplClassName(protocol));
+			constructor = pbServiceImplClazz.getConstructor(protocol);
+			constructor.setAccessible(true);
+			serviceCache.putIfAbsent(protocol, constructor);
+		}
+		Object service = constructor.newInstance(instance);
+		Class<?> pbProtocol = service.getClass().getInterfaces()[0];
+		Method method = protoCache.get(protocol);
+		if (method == null) {
+			Class<?> protoClazz = localConf.getClassByName(getProtoClassName(protocol));
+			method = protoClazz.getMethod("newReflectiveBlockingService",
+			pbProtocol.getInterfaces()[0]);
+			method.setAccessible(true);
+		}
+		return createServer(pbProtocol, addr, conf, secretManager, numHandlers, (BlockingService)method.invoke(null, service), portRangeConfig);
+	}
+	private Server createServer(Class<?> pbProtocol, InetSocketAddress addr, Configuration conf, SecretManager<? extends TokenIdentifier> secretManager, int numHandlers, BlockingService blockingService, String portRangeConfig) throws IOException {
+		RPC.setProtocolEngine(conf, pbProtocol, ProtobufRpcEngine.class);
+		RPC.Server server = new RPC.Builder(conf).setProtocol(pbProtocol)
+			.setInstance(blockingService).setBindAddress(addr.getHostName())
+			.setPort(addr.getPort()).setNumHandlers(numHandlers).setVerbose(false)
+			.setSecretManager(secretManager).setPortRangeConfig(portRangeConfig)
+			.build();
+		server.addProtocol(RPC.RpcKind.RPC_PROTOCOL_BUFFER, pbProtocol, blockingService);
+		return server;
+	}  
+}

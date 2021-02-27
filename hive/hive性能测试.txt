@@ -1,0 +1,111 @@
+create table words(str1 string,str2 string,str3 string,str4 string,str5 string,str6 string,str7 string,str8 string,str9 string,str10 string)row format delimited fields terminated by " ";
+create table words_little(str1 string,str2 string,str3 string,str4 string,str5 string,str6 string,str7 string,str8 string,str9 string,str10 string)row format delimited fields terminated by " ";
+create table words_many(str1 string,str2 string,str3 string,str4 string,str5 string,str6 string,str7 string,str8 string,str9 string,str10 string)row format delimited fields terminated by " ";
+create table words_1(str1 string);
+create table words_many_1(str1 string);
+create table words_little_1(str1 string);
+----
+insert overwrite table words_1 (select str1 from words union all select str2 from words union all select str3 from words union all select str4 from words union all select str5 from words union all select str6 from words union all select str7 from words union all select str8 from words union all select str9 from words union all select str10 from words);
+insert overwrite table words_little_1 (select str1 from words_little union all select str2 from words_little union all select str3 from words_little union all select str4 from words_little union all select str5 from words_little union all select str6 from words_little union all select str7 from words_little union all select str8 from words_little union all select str9 from words_little union all select str10 from words_little);
+insert overwrite table words_many_1 (select str1 from words_many union all select str2 from words_many union all select str3 from words_many union all select str4 from words_many union all select str5 from words_many union all select str6 from words_many union all select str7 from words_many union all select str8 from words_many union all select str9 from words_many union all select str10 from words_many);
+
+union 和 union all
+===========================================
+测试压缩比--单字段表
+set hive.exec.compress.output=true;
+set mapred.output.compress=true;----spark引擎也要设置
+set mapred.output.compression.codec=org.apache.hadoop.io.compress.GzipCodec;----spark引擎也要设置
+set io.compression.codecs=org.apache.hadoop.io.compress.GzipCodec;
+
+create table words_1_gz like words_1;
+insert overwrite table words_1_gz select * from words_1;
+create table words_little_1_gz like words_little_1;
+insert overwrite table words_little_1_gz select * from words_little_1;
+create table words_many_1_gz like words_many_1;
+insert overwrite table words_many_1_gz select * from words_many_1;
+----
+	SET hive.exec.compress.output=true;
+	SET mapred.output.compression.codec=org.apache.hadoop.io.compress.SnappyCodec;
+----
+create table words_1_sn like words_1;
+insert overwrite table words_1_sn select * from words_1;
+create table words_little_1_sn like words_little_1;
+insert overwrite table words_little_1_sn select * from words_little_1;
+create table words_many_1_sn like words_many_1;
+insert overwrite table words_many_1_sn select * from words_many_1;
+===========================================
+测试压缩比--多字段表
+set hive.exec.compress.output=true;
+set mapred.output.compress=true;
+set mapred.output.compression.codec=org.apache.hadoop.io.compress.GzipCodec;
+set io.compression.codecs=org.apache.hadoop.io.compress.GzipCodec;
+create table words_gz like words;
+create table words_little_gz like words_little;
+create table words_many_gz like words_many;
+insert overwrite table words_gz select * from words;
+insert overwrite table words_little_gz select * from words_little;
+insert overwrite table words_many_gz select * from words_many;
+----
+set hive.exec.compress.output=true;
+set mapred.output.compress=true;
+set mapred.output.compression.codec=org.apache.hadoop.io.compress.SnappyCodec;
+set io.compression.codecs=org.apache.hadoop.io.compress.SnappyCodec;
+create table words_sn like words;
+create table words_little_sn like words_little;
+create table words_many_sn like words_many;
+insert overwrite table words_sn select * from words;
+insert overwrite table words_little_sn select * from words_little;
+insert overwrite table words_many_sn select * from words_many;
+=========================================
+测试各种压缩格式的读取速率
+drop table if exists words_copy;
+create table words_copy like words;
+insert overwrite table words_copy select * from words;	--mr:12s,14s,14s	--spark:7.1s,8.04s,8.03s
+
+drop table if exists words_sn_copy;
+create table words_sn_copy like words;
+insert overwrite table words_sn_copy select * from words_sn;	--mr:14s,14s,13s	--spark:7.1s,7.03s,7.01 s
+
+drop table if exists words_gz_copy;
+create table words_gz_copy like words;
+insert overwrite table words_gz_copy select * from words_gz;	--mr:15s,14s,14s	--spark:8.01s,8.01s,8.02s
+----
+drop table if exists words_little_copy;
+create table words_little_copy like words;
+insert overwrite table words_little_copy select * from words;	--mr:14s,14s,14s	--spark:8.07s,9.10s,8.08s
+
+drop table if exists words_little_sn_copy;
+create table words_little_sn_copy like words;
+insert overwrite table words_little_sn_copy select * from words_little_sn;	--mr:11s,12s,11s	--spark:5.01s,5.01s,5.02s
+
+drop table if exists words_little_gz_copy;
+create table words_little_gz_copy like words;
+insert overwrite table words_little_gz_copy select * from words_little_gz;	--mr:12s,12s,11s	--spark:5.01s,5.01s,5.01s
+----
+drop table if exists words_many_copy;
+create table words_many_copy like words;
+insert overwrite table words_many_copy select * from words;	--mr:12s,14s,12s	--spark:8.03s,8.05s,8.04s
+
+drop table if exists words_many_sn_copy;
+create table words_many_sn_copy like words;
+insert overwrite table words_many_sn_copy select * from words_many_sn;	--mr:12s,12s,12s	--spark:6.01s,6.01s,6.02s
+
+drop table if exists words_many_gz_copy;
+create table words_many_gz_copy like words;
+insert overwrite table words_many_gz_copy select * from words_many_gz;	--mr:14s,14s,14s	--spark:7.01s,7.03s,7.01s
+
+
+
+
+常规数据：
+--mr:12s,14s,14s	--spark:7.1s,8.04s,8.03s
+--mr:14s,14s,13s	--spark:7.1s,7.03s,7.01 s
+--mr:15s,14s,14s	--spark:8.01s,8.01s,8.02s
+大量重复数据
+--mr:14s,14s,14s	--spark:8.07s,9.10s,8.08s
+--mr:11s,12s,11s	--spark:5.01s,5.01s,5.02s
+--mr:12s,12s,11s	--spark:5.01s,5.01s,5.01s
+无重复数据
+--mr:12s,14s,12s	--spark:8.03s,8.05s,8.04s
+--mr:12s,12s,12s	--spark:6.01s,6.01s,6.02s
+--mr:14s,14s,14s	--spark:7.01s,7.03s,7.01s

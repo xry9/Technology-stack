@@ -1,0 +1,312 @@
+mvn clean package -DskipTests && cp target/hbase-server-1.3.0.jar /usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar
+    hadoop dependence 2.5.1  --> 2.7.2 , but not delete hbase-server/src/test
+    but delete many project */src/test ,is OK
+----
+服务端代码开撸,从类名看就得从 RpcServer 开始了
+
+1、从 RpcServer.Listener.Reader#doRunLoop 方法开始,里面可认为是个 while 死循环,nio 框架的东东就不细探讨了,主要也是不会
+  1.1、携带着 SelectionKey,进入了 RpcServer.Listener#doRead 方法,有个神操作 Connection c = (Connection) key.attachment();
+  1.2、接着就是 RpcServer.Connection#readAndProcess 的事了,插一句 Connection 这个哥们并不是一个 Thread
+  1.2.1 进入了 RpcServer.Connection#process --> Connection#processOneRpc,在这里面经过一系列神操作把 request 的信息封装到了 RpcServer.Call,又是这样一个操作 scheduler.dispatch(new CallRunner(RpcServer.this, call))
+  1.3、到了 SimpleRpcScheduler#dispatch 里,有点儿复杂,省略一些直接说 FastPathBalancedQueueRpcExecutor#dispatch 吧
+  1.3.1、到了 FastPathHandler#loadCallRunner,这方法里有点意思,this.semaphore.release();这原来是个锁呀,此处解锁
+  1.3.2、看下加锁是在 semaphore.acquire(); 往上追一下到了 RpcExecutor.Handler#run() 中,不多说了吧,看怎么 run 的就完事了
+  1.3.3、接着说就到了 CallRunner#run,调了一下 this.rpcServer.call --> RpcServer#call
+  1.3.4、以 get 方法为例接下来就进行了 ClientProtos$ClientService$2 调用
+  1.4、说下 ClientProtos 类,与 hadoop 不一样,这里面代码改完编译可以生效的
+  1.4.1、也不讨论 GP 框架了,反正到了 com.google.protobuf.BlockingService#callBlockingMethod 中（还是在 ClientProtos 类里）
+
+
+
+
+RpcServer 
+	doRunLoop
+	doRead
+	readAndProcess
+	process
+	processOneRpc
+	processRequest
+	scheduler.dispatch(new CallRunner(RpcServer.this, call))
+SimpleRpcScheduler
+	dispatch
+FastPathBalancedQueueRpcExecutor
+	dispatch
+BalancedQueueRpcExecutor
+	dispatch
+	super
+RpcExecutor
+	startHandlers
+----
+CallRunner
+	run
+RpcServer
+	call
+ClientProtos
+	newReflectiveBlockingService
+		com.google.protobuf.BlockingService
+			callBlockingMethod
+RSRpcServices
+	get
+-------------------- 客户端 --------------------===
+org.apache.hadoop.hbase.client.ConnectionManager.HConnectionImplementation#getClient
+  BlockingRpcChannel channel =
+      this.rpcClient.createBlockingRpcChannel(sn, user, rpcTimeout);
+  stub = ClientService.newBlockingStub(channel);
+----
+Create Thread :
+<init>:55, ResultBoundedCompletionService$QueueingFuture (org.apache.hadoop.hbase.client)
+submit:145, ResultBoundedCompletionService (org.apache.hadoop.hbase.client)
+addCallsForCurrentReplica:287, ScannerCallableWithReplicas (org.apache.hadoop.hbase.client)
+call:170, ScannerCallableWithReplicas (org.apache.hadoop.hbase.client)
+call:60, ScannerCallableWithReplicas (org.apache.hadoop.hbase.client)
+callWithoutRetries:212, RpcRetryingCaller (org.apache.hadoop.hbase.client)
+loadCache:212, ClientSmallReversedScanner (org.apache.hadoop.hbase.client)
+next:186, ClientSmallReversedScanner (org.apache.hadoop.hbase.client)
+locateRegionInMeta:1277, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+locateRegion:1183, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+locateRegion:1167, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+locateRegion:1124, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+getRegionLocation:959, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+getRegionLocation:74, HRegionLocator (org.apache.hadoop.hbase.client)
+prepare:82, RegionServerCallable (org.apache.hadoop.hbase.client)
+callWithRetries:135, RpcRetryingCaller (org.apache.hadoop.hbase.client)
+get:864, HTable (org.apache.hadoop.hbase.client)
+get:830, HTable (org.apache.hadoop.hbase.client)
+main:31, MyDemo (org.apache.hbase)
+
+
+
+--------------------------------------------
+----
+org.apache.hadoop.hbase.client.HTable#get(org.apache.hadoop.hbase.client.Get)
+org.apache.hadoop.hbase.client.HTable#get(org.apache.hadoop.hbase.client.Get, boolean)
+org.apache.hadoop.hbase.client.RpcRetryingCaller#callWithRetries
+org.apache.hadoop.hbase.client.RegionServerCallable#call(HTable.java 中内部类)
+org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ClientService.BlockingStub#get
+org.apache.hadoop.hbase.ipc.AbstractRpcClient.BlockingRpcChannelImplementation#callBlockingMethod
+org.apache.hadoop.hbase.ipc.AbstractRpcClient#callBlockingMethod
+org.apache.hadoop.hbase.ipc.RpcClientImpl#call
+----
+submit:145, ResultBoundedCompletionService (org.apache.hadoop.hbase.client)
+addCallsForCurrentReplica:287, ScannerCallableWithReplicas (org.apache.hadoop.hbase.client)
+call:170, ScannerCallableWithReplicas (org.apache.hadoop.hbase.client)
+call:60, ScannerCallableWithReplicas (org.apache.hadoop.hbase.client)
+callWithoutRetries:212, RpcRetryingCaller (org.apache.hadoop.hbase.client)
+loadCache:212, ClientSmallReversedScanner (org.apache.hadoop.hbase.client)
+next:186, ClientSmallReversedScanner (org.apache.hadoop.hbase.client)
+locateRegionInMeta:1277, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+locateRegion:1183, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+locateRegion:1167, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+locateRegion:1124, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+getRegionLocation:959, ConnectionManager$HConnectionImplementation (org.apache.hadoop.hbase.client)
+getRegionLocation:74, HRegionLocator (org.apache.hadoop.hbase.client)
+prepare:82, RegionServerCallable (org.apache.hadoop.hbase.client)
+callWithRetries:135, RpcRetryingCaller (org.apache.hadoop.hbase.client)
+get:864, HTable (org.apache.hadoop.hbase.client)
+get:830, HTable (org.apache.hadoop.hbase.client)
+main:31, MyDemo (org.apache.hbase)
+
+--------
+
+  setupIOstreams();
+  writeRequest:908, RpcClientImpl$Connection (org.apache.hadoop.hbase.ipc)
+  tracedWriteRequest:873, RpcClientImpl$Connection (org.apache.hadoop.hbase.ipc)
+  call:1244, RpcClientImpl (org.apache.hadoop.hbase.ipc)
+  callBlockingMethod:227, AbstractRpcClient (org.apache.hadoop.hbase.ipc)
+  callBlockingMethod:336, AbstractRpcClient$BlockingRpcChannelImplementation (org.apache.hadoop.hbase.ipc)
+  scan:35400, ClientProtos$ClientService$BlockingStub (org.apache.hadoop.hbase.protobuf.generated)
+  call:201, ClientSmallScanner$SmallScannerCallable (org.apache.hadoop.hbase.client)
+  call:180, ClientSmallScanner$SmallScannerCallable (org.apache.hadoop.hbase.client)
+  callWithoutRetries:212, RpcRetryingCaller (org.apache.hadoop.hbase.client)
+  call:364, ScannerCallableWithReplicas$RetryingRPC (org.apache.hadoop.hbase.client)
+  call:338, ScannerCallableWithReplicas$RetryingRPC (org.apache.hadoop.hbase.client)
+  callWithRetries:137, RpcRetryingCaller (org.apache.hadoop.hbase.client)
+  run:65, ResultBoundedCompletionService$QueueingFuture (org.apache.hadoop.hbase.client)
+  runWorker:1142, ThreadPoolExecutor (java.util.concurrent)
+  run:617, ThreadPoolExecutor$Worker (java.util.concurrent)
+  run:745, Thread (java.lang)
+  
+----
+新建线程在些处：
+org.apache.hadoop.hbase.ipc.RpcClientImpl#call
+org.apache.hadoop.hbase.ipc.RpcClientImpl.Connection#tracedWriteRequest
+org.apache.hadoop.hbase.ipc.RpcClientImpl.Connection#writeRequest
+org.apache.hadoop.hbase.ipc.RpcClientImpl.Connection#setupIOstreams
+	start();
+而start();上一行的writeConnectionHeader();是client端真正把数据发送到server端
+
+=====================================
+HMaster extends HRegionServer
+
+MasterRpcServices extends RSRpcServices implements MasterService.BlockingInterface, RegionServerStatusService.BlockingInterface
+
+MasterRpcServices#getServices
+MasterService
+RegionServerStatusService
+
+HMaster#createRpcServices 方法,返回值是 RSRpcServices ,内容是 return new MasterRpcServices(this); 
+  调用处是 HRegionServer#HRegionServer 的 rpcServices = createRpcServices(); 
+
+--------
+
+
+
+		  
+说下 HRegionServer,HMaster 的 PRC,有点像套娃呀,理解起来不费劲,但表述好有点难度。说一下吧
+
+1、目前认为 RSRpcServices rpcServices 是 HRegionServer RPC 是重要的属性,而 RSRpcServices 最重要的属性是 RpcServerInterface rpcServer
+  1.1、看到他实现了哪些接口 RSRpcServices implements AdminService.BlockingInterface, ClientService.BlockingInterface,ClientService.BlockingInterface 里就是客户端的方法 get/scan ... 的接口了
+  1.2、rpcServices 的初始化：HRegionServer#HRegionServer 的 rpcServices = createRpcServices(); createRpcServices 方法内 return new RSRpcServices(this); 
+  1.3、该说 RpcServerInterface rpcServer 的初始化了,在 RSRpcServices#RSRpcServices 构造方法中：
+        rpcServer = new RpcServer(rs, name, getServices(), bindAddress, rs.conf, rpcSchedulerFactory.create(rs.conf, this, rs));最重要的是 getServices()
+  1.3.1、RSRpcServices#getServices 方法中定死的两个 AdminService, ClientService
+
+
+说说 RpcServer 
+  0、要说 RpcServer 最好是从 start 方法说起,看看里面有什么硬核代码：responder.start();listener.start();scheduler.start();started = true; 当然也要说说他的类层级,RpcServer implements RpcServerInterface,这个接口挺水的,所以撸 RpcServer 内部方法就好了
+  1、从 listener.start(); 说起,没错这回没被骗,这哥们是个 Thread 
+
+
+还得另起一章说 NIO 的事,
+
+从 CallRunner#run 这条线捋更容易通顺,
+  1、resultPair = this.rpcServer.call(call.service, call.md, call.param, call.cellScanner, call.timestamp, this.status, call.startTime, call.timeout); 这行代码最关键了,
+  2、CellScanner cells = resultPair != null ? resultPair.getSecond() : null;
+      call.setResponse(param, cells, errorThrowable, error);
+      call.sendResponseIfReady();
+  2.1、Call#sendResponseIfReady 里是个 this.responder.doRespond(this);
+  2.2、再往里 Responder#doRespond(Call call) 中是,call.connection.responseQueue.addLast(call); 到此时我实在忍不住要说一句话了,为什么要用一个小小的 RpcServer.Call 来承受这样多和负载呢,再往下足可以扩展出多个分支
+  2.3、此几处调用并没有
+  
+  
+RpcServer.Connection
+
+  
+  
+com.google.protobuf.BlockingService 的创建过程,传入 org.apache.hadoop.hbase.regionserver.RSRpcServices： 
+
+===============================================
+说下 RPCClient ,此时我刚补完 GPB,如果忘了自行脑补
+  1、从 AbstractRpcClient#callBlockingMethod 开始说了
+  1.1、不用多说,能代码能直到这,肯定会传入 md, param 这些东东,然后到了 RpcClientImpl#call,这里是比较关键的操作了
+  1.1.1、final Connection connection = getConnection(ticket, call, addr);这行代码看到了吧,方法里是 
+      connection = connections.get(remoteId);if (connection == null) {connection = createConnection(remoteId, this.codec, this.compressor);...}
+	这样的
+    1.1.1.1、先说下 RpcClientImpl.Connection 吧,这哥们是个线程,属性有 Socket socket;DataInputStream in;DataOutputStream out,别的不用说了,确实人如其名啊
+    1.1.1.2、connections 是个 Map 也是一目了然的事,remoteId 是个啥,他是 ConnectionId ,属性有 User ticket;String serviceName;InetSocketAddress address; hashcode 正是取此三属性值
+    1.1.1.3、createConnection(remoteId, this.codec, this.compressor);调用只是 new 了一个 Connection,但是并没有对 socket 等属性初始化
+  1.1.2、往下走是 connection.tracedWriteRequest(call, pcrc.getPriority(), Trace.currentSpan());然后到了 Connection#writeRequest 中,这里太有必要详解了
+    1.1.2.1、几行核心代码列一下子： RequestHeader header = builder.build(); setupIOstreams();calls.put(call.id, call);IPCUtil.write(this.out, header, call.param,cellBlock)
+	1.1.2.2、builder.build();这个就是 request 信息了,IPCUtil.write 就是把他写到输出流里
+	1.1.2.3、说说中间这个 setupIOstreams();里面上来就是 if (socket != null) {return;} 这个操作很硬核吧,再往下是个纯 while 死循环,里面就是初始化 socket,in,out 这些,还有一个最重要的在紧底下 start();return;把线程启动了
+  1.1.3、接着上面启动线程,该说 run 方法了,run 里近似一个死循环,然后到了 Connection#readResponse
+  1.1.3.1、readResponse 里 ResponseHeader responseHeader = ResponseHeader.parseDelimitedFrom(in);这是就是从输入流里读数据了,接着是 
+    int id = responseHeader.getCallId(); call = calls.remove(id);calls 也是刚才忘说了,他是 Connection 的一个属性,来一个 call 就放里,
+  1.1.3.2、再往下走是 call.setResponse(value, cellBlockScanner);走入 org.apache.hadoop.hbase.ipc.Call#callComplete 中,两个相当硬核的操作 
+    this.done = true;notify();既然有 notify 那肯定得有 wait 呀,在调的呢？是在 RpcClientImpl#call 中 connection.tracedWriteRequest 之后。形成闭环,结束。
+
+===============================================
+client 与 server 的 RPC 
+less hbase-tyx-master-pseudo.xryj.com.log | grep -E "processRequest===1954===|writeRequest===909==="
+less hbase-tyx-1-regionserver-pseudo.xryj.com.log | grep -E "processRequest===1954===|writeRequest===909==="
+理论上能 cover 住所有 client 与 server 的 RPC, RegionServer 与 HMaster 的. 但是 API 与 RegionServer 之前的 RPC client 看日志需要自行处理一下
+
+
+
+==============================================
+提一提 openHRegion 吧：
+
+1、RSRpcServices#openRegion 方法中这两行代码很关键：
+  for (RegionOpenInfo regionOpenInfo : request.getOpenInfoList()) {
+        final HRegionInfo region = HRegionInfo.convert(regionOpenInfo.getRegion());
+	    ...
+	    //此处用到了这个 region
+        regionServer.service.submit(new OpenPriorityRegionHandler(regionServer, regionServer, region, htd, masterSystemTime, coordination, ord));
+	    ...
+	    regionServer.service.submit(new OpenRegionHandler(regionServer, regionServer, region, htd, masterSystemTime, coordination, ord)); 
+  }
+  上面两个 submit 会进入到 OpenRegionHandler#process 中先 region = openRegion(); 而后 coordination.transitionToOpened(region, ord) 就把 region 上线的信息写到 zk 中了
+2、HRegion#HRegion(org.apache.hadoop.fs.Path, org.apache.hadoop.hbase.wal.WAL, org.apache.hadoop.fs.FileSystem, org.apache.hadoop.conf.Configuration, org.apache.hadoop.hbase.HRegionInfo, org.apache.hadoop.hbase.HTableDescriptor, org.apache.hadoop.hbase.regionserver.RegionServerServices)
+  会 new HRegionFileSystem(confParam, fs, tableDir, regionInfo),是一个非常重要的操作,看名字就知道了
+
+
+----客户端(HMaster)----
+ServerManager#onlineServers 这个是 RegionServer 上线后发过来的,出处是在 MasterRpcServices.regionServerStartup
+HMaster 端会创建 /hbase/region-in-transition 的子节点,即 regionName, region 上线后 RegionServer 会更新状态,HMaster 被回调，后再删除子节点
+
+
+
+创建是在 AssignmentManager#assign(org.apache.hadoop.hbase.master.RegionState, boolean, boolean) 的 versionOfOfflineNode = setOfflineInZooKeeper(currentState, plan.getDestination());
+感觉此方法的使命是 创建 /hbase/region-in-transition/1588230740 节点，发送 OpenRegion RPC 请求
+
+/hbase/region-in-transition 子节点创建是在 AssignmentManager.joinCluster 中走下去的，有点乱没看懂
+AssignmentManager.nodeDataChanged （ RegionServer 中更新, 监控了一下此处的 ZooKeeperWatcher 和创建 region-in-transition 节点的 ZooKeeperWatcher 是一个内存地址 ）会调用 AssignmentManager#handleAssignmentEvent ,
+  其中有 byte [] data = ZKAssign.getDataAndWatch(watcher, path, stat); 从 zk 中查出结果（ RegionServer 会把 region 上线后的状态更新到 zookeeper ）,然后又 handleRegion(rt, openRegionCoordination, zkOrd); 
+  1.1、走到 RegionStates#transitionOpenFromPendingOpenOrOpeningOnServer 里面就是 updateRegionState(transition, State.OPEN); 操作了
+  1.2、再往下走几行 new OpenedRegionHandler(server, this, regionState.getRegion(), coordination, ord).process(); process 里是
+    coordination.commitOpenOnMasterSide(assignmentManager,regionInfo, ord) commitOpenOnMasterSide 里是删除 zk 节点了,删除节点后会解发 watcher 回调
+	于是到了 AssignmentManager#nodeDeleted 里面有个 regionOnline 调用,又执行了一个 updateRegionState ,所以此 regionsInTransition.put(encodedName, regionState);代码执行了两次 OPEN 操作
+
+HMaster 发了两次 OpenRegion 请求,分别是 hbase:meta,,1 和 hbase:namespace,,1576060870151.bcfe8f63eab9e24fbe43084665afeadb.--- tab2,,1576641866009.6759af8222249ac2dd10bc2fb3eb5d36.--- tab1,,1576061093838.ce280ae740ac9eed099dab019ef42f7a
+  1、HMaster.finishActiveMasterInitialization 中调了 HMaster#assignMeta, assignMeta 中有 assignmentManager.assignMeta(hri); 此 hri 可以认为是 HRegionInfo 常量,即 hbase:meta,,1
+  1.1、于是到了 AssignmentManager#assignMeta 中,辗转又到了 AssignmentManager#assign(org.apache.hadoop.hbase.master.RegionState, boolean, boolean) 中
+    regionOpenState = serverManager.sendRegionOpen(plan.getDestination(), region, versionOfOfflineNode, favoredNodes); 打印日志,regionOpenState其结果是 OPENED
+    到了 ServerManager#sendRegionOpen 中其实已经没啥好说的,到了构建 request
+  2、同样也是到了 ServerManager#sendRegionOpen 但是重载的，直接从这里说吧 AssignmentManager#assign(java.util.List<org.apache.hadoop.hbase.HRegionInfo>) 上游来源有点蒙圈啊,
+     上游是 HMaster#startProcedureExecutor --> ProcedureExecutor#start --> ServerCrashProcedure#executeFromState 
+      case SERVER_CRASH_ASSIGN: assign(env, regionsToAssign) 
+	2.1、AssignmentManager#assign(org.apache.hadoop.hbase.ServerName, java.util.List<org.apache.hadoop.hbase.HRegionInfo>) 方法中的 
+	     List<RegionOpeningState> regionOpeningStateList = serverManager.sendRegionOpen(destination, regionOpenInfos); 是 RPC 调用到 RegionServer 了并返回结果，但是这个结果是 OPENED 状态时并不处理呀，
+		 也就是说 Master 并不知道 region 是否在 RegionServer 端真的上线？
+	
+  插叙一下 org.apache.hadoop.hbase.master.AssignmentManager#joinCluster
+  1、第一行就是 Set<ServerName> deadServers = rebuildUserRegions(); 即下线的/stop regionServer, rebuildUserRegions 方法看了个大概,就是去 meta 表里把 regionserver 查出来,他既然这么查,说明此时 meta 表存的还是以前的 regionserver
+     第二行 boolean failover = processDeadServersAndRegionsInTransition(deadServers); 把 dead 的 server 标识到 serverManager 中
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+	 
+===================================================
+RpcServer 
+  private Listener listener = null;
+  protected Responder responder = null;
+  private final RpcScheduler scheduler;
+  private final List<BlockingServiceAndInterface> services
+  细侃 RpcServer : 
+    1. 有三个重要属性,listener,responder 是 Thread ,scheduler 算是个自定义的线程池吧. start() 方法中把它仨启动了,调用处真的很好找就在 HRegionServer 的构造方法中
+    2. listener,responder,scheduler,services 的创建也并不特殊,就是在 RpcServer 的构造方法中
+    说到这应该往上追溯了 
+    ...................
+RSRpcServices 
+  上面提到的 RpcServer 是我的一个属性啊,当然了他是最重要的,真正干活的人. 我也是个相当重要的存在,实现了 GPRPC 的 BlockingInterface 接口，我还有一个子类 MasterRpcServices
+  看名字就知道他是啥了吧,就是比我多实现了一些 BlockingInterface 
+  1.我是以 HRegionServer 的属性存在着的, 创建处也是在 HRegionServer 的构造方法中，以 rpcServices = createRpcServices();的方式，不是 new 当然有一种好处，方便 HMaster 创建 MasterRpcServices
+    1.1、 createRpcServices 方法中也是简单得要死，new 一下就完事了，
+	1.2、 构造方法得细说一下,先是 bindAddress = new InetSocketAddress(..., port); 然后 rpcServer = new RpcServer(rs, name, getServices(), bindAddress, rs.conf, rpcSchedulerFactory.create(rs.conf, this, rs)); 别的似乎没啥重要的了
+
+

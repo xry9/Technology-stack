@@ -1,0 +1,55 @@
+http://carbondata.apache.org/introduction.html
+
+CarbonData supports Update and Delete on Big Data.CarbonData provides the syntax similar to Hive to support IUD operations on CarbonData tables
+CarbonData has unique concept of segments to manage incremental loads to CarbonData tables effectively
+CarbonData supports 2 kinds of partitions.1.partition similar to hive partition.2.CarbonData partition supporting hash,list,range partitioning.
+CarbonData manages incremental loads as segments. Compaction helps to compact the growing number of segments and also to improve query filter pruning.
+
+Pre-Aggregate
+CarbonData has concept of datamaps to assist in pruning of data while querying so that performance is faster.Pre Aggregate tables are kind of datamaps which can improve the query performance by order of magnitude.CarbonData will automatically pre-aggregate the incremental data and re-write the query to automatically fetch from the most appropriate pre-aggregate table to serve the query faster.
+
+CarbonData writer
+Typical usecase is to write the streaming application plugged in to kafka and use carbondata as sink(target) table for storing
+
+http://carbondata.apache.org/ddl-of-carbondata.html
+Number of Blocks generated is less in case of Local Dictionary as compression ratio is high. This may reduce the number of tasks launched during query, resulting in degradation of query performance if the pruned blocks are less compared to the number of parallel tasks which can be run. So it is recommended to configure smaller block size which in turn generates more number of blocks.
+
+    We recommend to use Local Dictionary when cardinality is high but is distributed across multiple loads
+    On a large cluster, decoding data can become a bottleneck for global dictionary as there will be many remote reads. In this scenario, it is better to use Local Dictionary.
+    When cardinality is less, but loads are repetitive, it is better to use global dictionary as local dictionary generates multiple dictionary files at blocklet level increasing redundancy.
+	
+This command is used to merge all the CarbonData index files (.carbonindex) inside a segment to a single CarbonData index merge file (.carbonindexmerge). This enhances the first query performance.
+
+REFRESH TABLE dbcarbon.productSalesTable
+This command is used to register Carbon table to HIVE meta store catalogue from existing Carbon table data.
+
+http://carbondata.apache.org/dml-of-carbondata.html
+UPDATE AND DELETE
+COMPACTION
+
+http://carbondata.apache.org/streaming-guide.html
+StreamSQL
+Streaming Job Management
+
+http://carbondata.apache.org/datamap-developer-guide.html
+http://carbondata.apache.org/datamap-management.html
+http://carbondata.apache.org/performance-tuning.html
+
+
+http://carbondata.apache.org/configuration-parameters.html
+carbon.streaming.segment.max.size
+carbon.load.sort.scope
+carbon.sort.size
+carbon.enable.calculate.size
+carbon.sort.temp.compressor
+carbon.load.skewedDataOptimization.enabled
+enable.data.loading.statistics
+carbon.dictionary.chunk.size
+carbon.column.compressor
+carbon.major.compaction.size
+carbon.horizontal.compaction.enable
+carbon.update.segment.parallelism
+carbon.numberof.preserve.segments
+carbon.allowed.compaction.days
+enable.offheap.sort
+carbon.unsafe.working.memory.in.mb

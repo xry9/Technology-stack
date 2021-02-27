@@ -1,0 +1,48 @@
+git push --set-upstream origin 20190128_FLIGHT-84903
+git branch -a (貌似执行之前要 pull一下，才能看到所有新分支)
+git checkout 20181227_FLIGHT-82109
+git branch 20181227_FLIGHT-82109
+git branch
+----
+git checkout -b 20181227_FLIGHT-82109 (由master进入分支，可以不加-b)
+git pull (从非master分支拉代码，checkout后要pull一下)
+git merge master
+=========================
+发布release 版本
+1> 保证引用没有SNAPSHOT，本身版本可以是SNAPSHOT（本身叫什么名无所谓？）
+2> scm
+3>
+git checkout release/v0.1.1
+git merge feature/nb-1.0 (根据情况看是否需要merge)
+git push
+
+4> mvn release:prepare
+--------
+What is the release version for "sophonstore-api"? (com.lvwan.sophonstore:sophonstore-api) 0.1.0: : 0.1.0
+What is SCM release tag or label for "sophonstore-api"? (com.lvwan.sophonstore:sophonstore-api) v0.1.0: : v0.1.0
+What is the new development version for "sophonstore-api"? (com.lvwan.sophonstore:sophonstore-api) 0.1.1-SNAPSHOT: : 0.1.1-SNAPSHOT
+--------
+5> mvn release:perform
+========================
+merge 代码：
+git checkout master
+git merge release/v0.1.0
+git push
+----如遇冲突，修改后 add commit push 
+
+========================
+更新替换本地代码：
+git fetch --all
+git reset --hard
+git pull
+========================
+github 再遇到 push 不上去报 403 ，可以试试 vim .git/config --> url = https://username:passwd@github.com/xry9/javaTest.git
+	产生这个问题的原因就是 http 方式而不是 git 方式
+删除远端分支, : 代表删除, git push origin :[branchName]
+======================== git windows ===================
+在 git bash 中
+cd ~/.ssh (如果不存在要创建吧)
+ssh-keygen.exe
+cat id_rsa.pub
+git config –global user.name 'xuriyongjiu'
+git config –global user.email 'xuriyongjiu@sina.com'

@@ -1,0 +1,49 @@
+<property>
+<name>yarn.nodemanager.resource.memory-mb</name>
+<value>8192</value>
+</property>
+<property>
+<name>yarn.nodemanager.resource.cpu-vcores</name>
+<value>8</value>
+</property>
+--------
+<property>
+<name>yarn.resourcemanager.scheduler.class</name>
+<value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler</value>
+</property>
+<property>
+<name>yarn.scheduler.fair.preemption</name>
+<value>true</value>
+</property>
+<!--property>
+<name>yarn.scheduler.fair.allocation.file</name>
+<value>fair-scheduler.xml</value>
+</property-->
+--------
+<?xml version="1.0"?>
+<allocations>
+<queue name="queueA">
+<minResources>1024 mb,2 vcores</minResources>
+<maxResources>14336 mb,4 vcores</maxResources>
+<maxRunningApps>50</maxRunningApps>
+<weight>1.0</weight>
+<queue name="queueB">
+<minResources>512 mb,1 vcores</minResources>
+<maxResources>4096 mb,1 vcores</maxResources>
+</queue>
+<queue name="queueC">
+<minResources>512 mb,1 vcores</minResources>
+<maxResources>10240 mb,3 vcores</maxResources>
+</queue>
+</queue>
+<user name="root">
+<maxRunningApps>30</maxRunningApps>
+</user>
+<userMaxAppsDefault>50</userMaxAppsDefault>
+</allocations>
+
+********
+yarn.nodemanager.resource.memory-mb和yarn.nodemanager.resource.cpu-vcores是针对各自节点的配置，而fair-scheduler.xml针对整个集群的
+如果只跑mr任务yarn.scheduler.maximum-allocation-vcores=1是合理的，但是跑spark任务就不合理了
+
+hadoop jar app/hadoop-2.7.2/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.2.jar wordcount -Dmapreduce.job.queuename=root.queueA.queueB  /data /result/r4

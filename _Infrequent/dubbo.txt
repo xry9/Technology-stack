@@ -1,0 +1,8 @@
+https://segmentfault.com/a/1190000012925521
+套接字有三种类型:流式套接字(SOCK_STREAM),数据报套接字(SOCK_DGRAM)及原始套接字(SOCK_RAW)
+应该是这样的吧: SOCK_STREAM:UDP, SOCK_DGRAM:TCP 
+是不是可以这样理解:
+TCP≈全双工
+1、mvn clean package -DskipTests  mvn clean install -DskipTests
+  如果出现编译报错, clean 一下删除 jvmRun1.dump ... 文件
+  

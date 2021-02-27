@@ -1,0 +1,37 @@
+有个大坑，要先把 jdbc*stalone jar 删了, 要不然 service jar 中代码不被执行
+
+public class org.apache.hive.service.cli.session.HiveSessionImpl implements HiveSession {
+	private OperationHandle executeStatementInternal(String statement, Map<String, String> confOverlay, boolean runAsync) throws HiveSQLException {
+		acquire(true);
+		OperationManager operationManager = getOperationManager();
+		ExecuteStatementOperation operation = operationManager.newExecuteStatementOperation(getSession(), statement, confOverlay, runAsync);// SQLOperation
+		OperationHandle opHandle = operation.getHandle();
+		operation.run();
+		opHandleSet.add(opHandle);
+		return opHandle;
+	}
+}
+public class org.apache.hive.service.cli.operation.SQLOperation extends ExecuteStatementOperation {
+	public SQLOperation(HiveSession parentSession, String statement, Map<String, String> confOverlay, boolean runInBackground) {
+		super(parentSession, statement, confOverlay, runInBackground);
+	}
+	public void prepare(HiveConf sqlOperationConf) throws HiveSQLException {
+		driver = new Driver(sqlOperationConf, getParentSession().getUserName());
+		String subStatement = new VariableSubstitution().substitute(sqlOperationConf, statement);
+		response = driver.compileAndRespond(subStatement);// sql, plan 应该是在这里生成了
+	}
+	public void runInternal() throws HiveSQLException {
+		final HiveConf opConfig = getConfigForOperation();
+		prepare(opConfig);	
+		runQuery(opConfig);// 另起一个线程, 然后就到 org.apache.hadoop.hive.ql.Driver#execute 中了，与 hivecli 模式相同了就
+	}
+}
+
+public abstract class org.apache.hive.service.cli.operation.ExecuteStatementOperation extends Operation {
+	protected String statement = null;
+	public ExecuteStatementOperation(HiveSession parentSession, String statement, Map<String, String> confOverlay, boolean runInBackground) {
+		super(parentSession, OperationType.EXECUTE_STATEMENT, runInBackground);
+		this.statement = statement;// 要执行的 SQL
+		setConfOverlay(confOverlay);
+	}
+}

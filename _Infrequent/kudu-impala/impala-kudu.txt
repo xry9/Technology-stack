@@ -1,0 +1,11 @@
+----版本要对上否则会让人崩溃的
+vim /etc/default/impala	（不改也可，只在建表时加TBLPROPERTIES属性，不写会报ERROR: AnalysisException: Table property 'kudu.master_addresses' is required when the impalad startup flag -kudu_master_hosts is not used）
+KUDU_MASTER_HOSTS=192.168.58.171:7051
+	-kudu_master_hosts=${KUDU_MASTER_HOSTS}
+CREATE TABLE my_first_table (id BIGINT PRIMARY KEY,name STRING)PARTITION BY HASH PARTITIONS 2 STORED AS KUDU TBLPROPERTIES('kudu.master_addresses' = '192.168.58.171:7051');
+insert into my_first_table6 values(100,'2017-08-27 21:46:04');
+insert into my_first_table6 values(101,'2017-08-28 21:46:04');
+insert into my_first_table6 values(102,'2017-08-26 21:46:04');
+insert into my_first_table6 values(103,'2017-08-29 21:46:04');
+insert into my_first_table6 values(104,'2017-08-25 21:46:04');
+select * from my_first_table6 where name > '2017-08-25 21:46:04';

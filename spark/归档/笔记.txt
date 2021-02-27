@@ -1,0 +1,65 @@
+--queue root.default \
+--conf spark.yarn.executor.memoryOverhead=2048
+spark-submit脚本里面，去用--conf的方式，去添加配置；一定要注意！！！切记，不是在你的spark作业代码中，用new SparkConf().set()这种方式去设置，不要这样去设置，
+是没有用的！一定要在spark-submit脚本中去设置。
+spark.yarn.executor.memoryOverhead（看名字，顾名思义，针对的是基于yarn的提交模式）
+默认情况下，这个堆外内存上限大概是300多M；后来我们通常项目中，真正处理大数据的时候，这里都会出现问题，导致spark作业反复崩溃，无法运行；此时就会去调节这个参数，到至少1G（1024M），甚至说2G、4G
+=================================
+executor，优先从自己本地关联的BlockManager中获取某份数据
+如果本地block manager没有的话，那么会通过TransferService，去远程连接其他节点上executor的block manager去获取
+正好碰到那个exeuctor的JVM在垃圾回收
+此时呢，就会没有响应，无法建立网络连接；会卡住；ok，spark默认的网络连接的超时时长，是60s；如果卡住60s都无法建立连接的话，那么就宣告失败了。
+碰到一种情况，偶尔，偶尔，偶尔！！！没有规律！！！某某file。一串file id。uuid（dsfsfd-2342vs--sdf--sdfsd）。not found。file lost。
+这种情况下，很有可能是有那份数据的executor在jvm gc。所以拉取数据的时候，建立不了连接。然后超过默认60s以后，直接宣告失败。
+报错几次，几次都拉取不到数据的话，可能会导致spark作业的崩溃。也可能会导致DAGScheduler，反复提交几次stage。TaskScheduler，反复提交几次task。大大延长我们的spark作业的运行时间。
+可以考虑调节连接的超时时长。
+--conf spark.core.connection.ack.wait.timeout=300
+spark-submit脚本，切记，不是在new SparkConf().set()这种方式来设置的。
+spark.core.connection.ack.wait.timeout（spark core，connection，连接，ack，wait timeout，建立不上连接的时候，超时等待时长）
+调节这个值比较大以后，通常来说，可以避免部分的偶尔出现的某某文件拉取失败，某某文件lost掉了。。。
+=====================================
+如果你不需要排序，而且你希望你的每个task输出的文件最终是会合并成一份的，你自己认为可以减少性能开销；可以去调节bypassMergeThreshold这个阈值，
+比如你的reduce task数量是500，默认阈值是200，所以默认还是会进行sort和直接merge的；可以将阈值调节成550，不会进行sort，按照hash的做法，
+每个reduce task创建一份输出文件，最后合并成一份文件。（一定要提醒大家，这个参数，其实我们通常不会在生产环境里去使用，也没有经过验证说，这样的方式，到底有多少性能的提升）
+// 默认就是，new SparkConf().set("spark.shuffle.manager", "sort")
+new SparkConf().set("spark.shuffle.sort.bypassMergeThreshold", "550")
+==================================
+比如，executor的JVM进程，可能内存不是很够用了。那么此时可能就会执行GC。minor GC or full GC。总之一旦发生了JVM之后，就会导致executor内，所有的工作线程全部停止，
+比如BlockManager，基于netty的网络通信。
+spark.shuffle.io.maxRetries 3
+第一个参数，意思就是说，shuffle文件拉取的时候，如果没有拉取到（拉取失败），最多或重试几次（会重新拉取几次文件），默认是3次。
+spark.shuffle.io.retryWait 5s
+第二个参数，意思就是说，每一次重试拉取文件的时间间隔，默认是5s钟。
+===================================
+你应该采用一些简单的调度区分的方式，比如说，你有的spark作业可能是要长时间运行的，比如运行30分钟；有的spark作业，可能是短时间运行的，可能就运行2分钟。此时，
+都提交到一个队列上去，肯定不合适。很可能出现30分钟的作业卡住后面一大堆2分钟的作业。分队列，可以申请（跟你们的YARN、Hadoop运维的同学申请）。
+你自己给自己搞两个调度队列。每个队列的根据你要执行的作业的情况来设置。在你的J2EE程序里面，要判断，如果是长时间运行的作业，就干脆都提交到某一个固定的队列里面去把；
+如果是短时间运行的作业，就统一提交到另外一个队列里面去。这样，避免了长时间运行的作业，阻塞了短时间运行的作业。
+
+你的队列里面，无论何时，只会有一个作业在里面运行。那么此时，就应该用我们之前讲过的性能调优的手段，去将每个队列能承载的最大的资源，分配给你的每一个spark作业，
+比如80个executor；6G的内存；3个cpu core。尽量让你的spark作业每一次运行，都达到最满的资源使用率，最快的速度，最好的性能；并行度，240个cpu core，720个task。
+在J2EE中，通过线程池的方式（一个线程池对应一个资源队列），来实现上述我们说的方案
+===================================
+静态内部类和非静态内部类之间的区别主要如下：
+1、内部原理的区别：
+静态内部类是属于外部类的类成员，是一种静态的成员，是属于类的，就有点类似于private static Singleton instance = null；非静态内部类，是属于外部类的实例对象的一个实例成员，也就是说，每个非静态内部类，不是属于外部类的，是属于外部类的每一个实例的，创建非静态内部类的实例以后，非静态内部类实例，是必须跟一个外部类的实例进行关联和有寄存关系的。
+2、创建方式的区别：
+创建静态内部类的实例的时候，只要直接使用“外部类.内部类()”的方式，就可以，比如new School.Teacher()；创建非静态内部类的实例的时候，必须要先创建一个外部类的实例，然后通过外部类的实例，再来创建内部类的实例，new School().Teader()
+通常来说，我们一般都会为了方便，会选择使用静态内部类。
+=====================================
+1、在sparkproject1上安装mysql。
+2、使用yum安装mysql server。
+yum install -y mysql-server
+service mysqld start
+chkconfig mysqld on
+3、使用yum安装mysql connector
+yum install -y mysql-connector-java
+4、将mysql connector拷贝到hive的lib包中
+cp /usr/share/java/mysql-connector-java-5.1.17.jar /usr/local/hive/lib
+5、在mysql上创建hive元数据库，创建hive账号，并进行授权
+create database if not exists hive_metadata;
+grant all privileges on hive_metadata.* to 'hive'@'%' identified by 'hive';
+grant all privileges on hive_metadata.* to 'hive'@'localhost' identified by 'hive';
+grant all privileges on hive_metadata.* to 'hive'@'spark1' identified by 'hive';
+flush privileges;
+use hive_metadata;

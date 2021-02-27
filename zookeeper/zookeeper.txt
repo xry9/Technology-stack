@@ -1,0 +1,163 @@
+1、https://zookeeper.apache.org/doc/r3.5.5/zookeeperOver.html#ch_DesignOverview
+	Unlike a typical file system, which is designed for storage, ZooKeeper data is kept in-memory, which means ZooKeeper can achieve high throughput and low latency numbers.
+	The strict ordering means that sophisticated synchronization primitives can be implemented at the client.
+	The servers that make up the ZooKeeper service must all know about each other. They maintain an in-memory image of state, along with a transaction logs and snapshots in a persistent store. As long as a majority of the servers are available, the ZooKeeper service will be available.
+	The data stored at each znode in a namespace is read and written atomically. Reads get all the data bytes associated with a znode and a write replaces all the data. Each node has an Access Control List (ACL) that restricts who can do what.
+	ZooKeeper also has the notion of ephemeral nodes. These znodes exists as long as the session that created the znode is active. When the session ends the znode is deleted. Ephemeral nodes are useful when you want to implement [tbd].
+	ZooKeeper supports the concept of watches. Clients can set a watch on a znode. A watch will be triggered and removed when the znode changes. When a watch is triggered, the client receives a packet saying that the znode has changed. If the connection between the client and one of the ZooKeeper servers is broken, the client will receive a local notification. These can be used to [tbd].
+	ZooKeeper is very fast and very simple. Since its goal, though, is to be a basis for the construction of more complicated services, such as synchronization, it provides a set of guarantees. These are:……
+	With the exception of the request processor, each of the servers that make up the ZooKeeper service replicates its own copy of each of the components.
+	Every ZooKeeper server services clients. Clients connect to exactly one server to submit requests. Read requests are serviced from the local replica of each server database. Requests that change the state of the service, write requests, are processed by an agreement protocol.
+	As part of the agreement protocol all write requests from clients are forwarded to a single server, called the leader. The rest of the ZooKeeper servers, called followers, receive message proposals from the leader and agree upon message delivery. The messaging layer takes care of replacing leaders on failures and syncing followers with leaders.
+	ZooKeeper uses a custom atomic messaging protocol. Since the messaging layer is atomic, ZooKeeper can guarantee that the local replicas never diverge. When the leader receives a write request, it calculates what the state of the system is when the write is to be applied and transforms this into a transaction that captures this new state.
+	
+http://zookeeper.apache.org/doc/current/zookeeperProgrammers.html
+
+
+
+mvn clean package -DskipTests && cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper0/lib/zookeeper-3.5.6.jar && cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper1/lib/zookeeper-3.5.6.jar && cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper2/lib/zookeeper-3.5.6.jar && cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper3/lib/zookeeper-3.5.6.jar 
+zookeeper1/bin/zkServer.sh stop && zookeeper2/bin/zkServer.sh stop && zookeeper3/bin/zkServer.sh stop
+rm -f zookeeper*/logs/* && zookeeper1/bin/zkServer.sh start && zookeeper2/bin/zkServer.sh start && zookeeper3/bin/zkServer.sh start
+zookeeper1/bin/zkServer.sh status && zookeeper2/bin/zkServer.sh status && zookeeper3/bin/zkServer.sh status
+
+
+
+
+客户端连接follower:
+less zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===816===|===133===|===71===|===run===69===|===run===178===|===run===180===|===127===|===297===|===100===|===158===|===226===|===278===|===247==="
+客户端连接leader:
+less zookeeper2/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===816===|===71===|===1002===|===100===|===904===|===70===|===178===|===180===|===224===|===schedule===122===|===127===|===297===|===948==="
+
+leader选举相关 zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===881===|===732==="
+
+节点之间网络连接和数据交互：
+less zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===468===|===651===|===1081===|===1217==="
+接收数据：
+less zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===1217===|===602===|WorkerReceiver-run===228==="
+发送数据：
+tail -f zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===run===455===|===sendqueue.offer===|===1081===|===476===|===608===|===run===1107|===run===1133"
+
+又是一个RPC网络：
+less zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===402===|===Learner-sock==="
+
+less zookeeper*/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===learner" 
+
+followers 接收来自客户端的请求：
+the request from the client
+void request(Request request) throws IOException {LOG.info("===request===176==="+request.type+"===");
+
+
+followers 端投票
+===processPacket===116===
+
+followers 与 leader 选举 交互:
+followers: ===141===|===158===，
+leader: ===540===|===262===
+
+leader 投票选举基本已经搞定了
+tail -f zookeeper2/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===540===|===262===|===queuedPackets.add===|===70===|===823===|===989===|===1117===|===894==="
+
+
+
+followers 和 客户端：
+tail -f zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===224===|===176===|===297===|===863==="
+
+
+=========================================================
+zk 客户端：
+  注：操作以 zk.setData 操作为例进行
+0、org.apache.zookeeper.ZooKeeper 类相当于 zk的连接，在创建 ZooKeeper 类时，会创建一个 ClientCnxn，创建时传入 sock(host port 就是客户端创建连接时传入的),sock给一个 SendThread 成员变量用了，
+掰扯一下 ClientCnxn：
+1、SendThread：
+  看名字就知道是个发送数据的线程，长这样的，org.apache.zookeeper.ClientCnxn.SendThread 所以是个内部类哈。当然最重要的是run呀，不错run方中就是个while死循环啊，我去……，这个死循环中干的事好像很多很重要：
+    1.1、有一个成员变量，名叫clientCnxnSocket ，其实就是上面说的那个小sock呀，此sock 的类是抽象的名叫ClientCnxnSocket ，他有两个实现类 ClientCnxnSocketNIO和ClientCnxnSocketNetty，netty这个默认情况应该全程与我们无关。
+      clientCnxnSocket.introduce(this, sessionId, outgoingQueue)，这样一个操作，我想说的是，传入了一个 queue呀，这个queue名叫 outgoingQueue，人家可是 ClientCnxn的成员变量的昂，
+    1.2、ClientCnxn#queuePacket 方法中干了就是 往1.1的 outgoingQueue 中添加东西的操作，说下渊源哈，ZooKeeper#setData中 cnxn.submitRequest --> ... --> queuePacket方法
+	1.3、说下1.1中提到的while循环：
+	  1.3.1、如果 ClientCnxnSocketNIO.clientCnxnSocket 没有连接则创建，如果已连接有个 sendPing() 的操作，接下往下走该是 clientCnxnSocket.doTransport(to, pendingQueue, ClientCnxn.this); 了，再起一段说吧
+	  1.3.2、ClientCnxnSocketNIO.doTransport 方法中是 selector.select 这种操作哈，如果是可读或者可写 ，有个doIO 操作，doIO里面如果
+	    可写：二话不说 从 outgoingQueue 里拿到数据就写出去了呀
+	    可读：其实也没啥好说的，sock.read 读就完了，然后是这样 sendThread.readResponse(incomingBuffer) 一个操作，没忘吧 clientCnxnSocket.introduce 是把 this 传过来的哈。接着说 readResponse 方法，应该是SendThread章节的事了
+
+    1.4、ClientCnxn.readResponse 方法中 两个比较重要的操作是 packet = pendingQueue.remove(); 和 finishPacket(packet); 了
+	  1.4.1、关于 pendingQueue, 1.3.1 中调用 doTransport 时提到过了，1.3.2 数据写出后会 pendingQueue.add(p); 意义不多说了。至于 pendingQueue 是在类 ClientCnxn 初始时初始化的，很硬核吧
+	  1.4.2、finishPacket(packet) 方法中我想说下，是执行了个它 p.notifyAll(); 看到这的话，我觉得从头捋一下就会顺了，果然不错 ClientCnxn.submitRequest 中有个死循环的packet.wait();操作呀，packet.finished了方法就可以 return，行了吧，至少在zk 客户端层面全通了
+2、大体捋完了再细化一下：
+  2.1、通过打印 1.3.2 的写日志，发现写了两次，定位发现 ClientCnxn.primeConnection 方法中也有个 outgoingQueue.addFirst 操作，脑补一下 1.1。但这次 addFirst 这个 Packet 只是个 ConnectRequest ，细想 addFirst 这个名字有点意思哈
+  2.2、1.3.2 中可读这块，发现被执行了4次，不性不中肯地先说一下：
+    a. 读取数据长度 b. 读取连接结果数据 c. 读取数据长度 d. 读取真实数据
+	猜测一下，如果不断开接连再进行一次 setData 操作，应该没有 a,b 了吧，验证果然
+
+=========================================================
+zk follower 服务端  
+  注：操作以 zk.setData 操作为例进行，且客户端连接 follower
+1、在 NIOServerCnxnFactory.configure 方法中会有一个 selectorThreads.add(new SelectorThread(i)); 操作，configure 方法是在服务启动时调用的
+  1.1、该说下 NIOServerCnxnFactory.SelectorThread 了，不想说下他是个线程了，在run方法中也有个 while 死循环，但是这个死循环经测试并不是高频调用啊，
+        方法中第一行代码就是 select()； 再往里面当然是 selector.select(); 这种东东了，往下同样是做了个可读 or 可写的判断，然后就是 handleIO(key); 了
+		handleIO 方法里面是个 IOWorkRequest workRequest = new IOWorkRequest(this, key); 操作， workRequest 本身不是个线程，但会包装成一个 ScheduledWorkRequest，
+		这哥们是个线程，run里其实就是调了 IOWorkRequest 的 doWork() 方法，多说一下，IOWorkRequest 类也是在 NIOServerCnxnFactory 类里面的内部类，再启一段说吧
+  1.2、 IOWorkRequest.doWork 方法也是 if (key.isReadable() || key.isWritable()) 这样的操作，然后 cnxn.doIO(key); 那就有必要看看 cnxn 是个啥了
+    1.2.1、 还记得 1.1 中 创建 workRequest 的方式么，记得好像也没有用哈哈，是这样的，构造方法中有 this.cnxn = (NIOServerCnxn) key.attachment();  这个操作
+	        至于 key.attach 在哪得找下了，找到了，在 processAcceptedConnections() 方法中，些方法就是1.1 中run的第二行代码，第一行是 select(); 哈，细说一下 cnxn 创建过程吧
+	1.2.2、 cnxn 是 processAcceptedConnections 方法内 NIOServerCnxn cnxn = createConnection(accepted, key, this); 这样子创建的，accepted 名字挺骚气的，其实是 SocketChannel 哈，就是可以搞 getRemoteAddress() 和 getLocalAddress() 这种命我致命喜欢操作的
+	1.2.3、 回过头来接着 1.2 cnxn.doIO(key); 说吧，进到方法里面就是真正读取数据的操作了，但是写数据略显骚气一点，又被包了一层，因这些代码确实比较重
+	        可读： 
+=========================================================
+
+
+===69=== 很重要，是个分水岭
+客户端 --> follower --> setData
+tail -f zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===321===|===166===|===1147===|===816===|===133===|===69===|===178===|===224===|===272===|===297===|===100===|===1214===|===863===|===610==="
+客户端 --> follower --> leader
+tail -f zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===69===|===176===|===141===|===158===|===92==="
+
+leader :
+tail -f zookeeper2/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===262===|===1117===|===1082===|===70===|===904===|===737===|===1002===|===619===|===540==="
+
+=========================================================
+leader端的投票就是这些了：
+tail -f zookeeper2/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===563===|===894===|===775===|===823===|===45===|===874===|===868==="
+	对===45===的补充
+	tail -f zookeeper2/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===45===|===157===|===212===|===70===|===904===|===1002===|===619===|===181==="
+
+0、leder 与 follower 交互的突破口是 oa.writeRecord , ia.readRecord，也是我解决zk如何写数据的突破口，有两套rpc机制，2888/3888 ，一开会就是没意识到这点，这块实在是花了我太多精力
+1、不瞻前不顾后地从 LearnerHandler#run 搞起吧，while 死循环中是个 ia.readRecord(qp, "packet"); 把 follower 向 leader 2888 端口发来的数据接收。
+    1.1、如果 qp.getType() 是 Leader.ACK 类型，然后调用 Leader 的 processAck 方法，并传入 sid , zxid ，话说这个 zxid 就是所谓的选举版本号吧。然后进行了我认为选举中最重要的一个方法调用 p.addAck(sid); 解释一下 p 是 Proposal。方法里的细节看起来很费劲，好在不影响大局，暂不深入了
+    1.2、接着说，然后调用 Leader#tryToCommit ，里面在调用 Leader#commit ，话说要第二次调用 tryToCommit 才会走 commit 方法，第一和第三次不会走，原因自不必说，举三个进入的 sid 顺序的例子 ：213 231 132 ，看情况进入的 sid 的顺序是随机的。当然 sid 为 2 的来源与 13 不同，正文会交待
+    1.3、Leader#commit 方法比较简单，遍历 follower 发送数据
+    1.4、上文 1.1 说的只是 leader 接收 follower 发送的数据进行投票的情况，接下来说说 leader 自己给自己投票的事。说下解题思路：是从 Leader#processAck 往上推的，即两种投票方式在此处合流
+	    1.4.1、出发点和 1 中的 [while 死循环中是个 ia.readRecord(qp, "packet");] 是一样的，只不过类型是 Leader.REQUEST 
+		1.4.3、承接上回，如果类型是 Leader.REQUEST 则操作为 leader.zk.submitLearnerRequest(si); (leader.zk:LeaderZooKeeperServer)--> PrepRequestProcessor#processRequest --> PrepRequestProcessor#pRequest --> 
+		        ProposalRequestProcessor#processRequest --> SyncRequestProcessor --> AckRequestProcessor 
+	    1.4.2、中间跳过好几步。。。，还是从下往上推吧，从 1.4 中说的 Leader#processAck 往上一步是 
+	    	/*Forward the request as an ACK to the leader*/
+    		AckRequestProcessor#processRequest(Request request) {QuorumPeer self = leader.self; leader.processAck(self.getId(), request.zxid, null);}}
+
+=========================================================
+数据写入：
+1、上面说完 leader 投票，这里说下数据写入
+    1.1、从 CommitProcessor#commit 说起，
+	    1.1.1、经几步到了 CommitProcessor.CommitWorkRequest#doWork 方法中，nextProcessor.processRequest(request); ，nextProcessor 变量的值， 
+		    follower 端是 FinalRequestProcessor ， leader 端是 ToBeAppliedRequestProcessor ，但再经一层也是 FinalRequestProcessor ， 到是 FinalRequestProcessor.processRequest
+			其实就不必说了， 里面有处调用： rc = zks.processTxn(request); ，一步步到了 setData 方法
+		1.1.2、 follower 端从 Follower#processPacket 方法 qp 参数类型为 Leader.COMMIT 进入的 1.1 中 CommitProcessor#commit 
+        1.1.3、 leader 端： Leader#tryToCommit 中调用 Leader#commit 的下几行代码就有 zk.commitProcessor.commit(p.request); 然后就进入了 1.1 中 CommitProcessor#commit 
+		
+
+===============================================================
+各端提交 setData 是在收到 leader 的 commit 之后 
+tail -f zookeeper1/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===learner-write===|===learner-read===|===863==="
+tail -f zookeeper2/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -E "===learner-write===|===learner-read===|===863==="
+
+
+[tyx@pseudo app]$ tail -f zookeeper3/logs/zookeeper-tyx-server-pseudo.xryj.com.out | grep -A 15  "\"sendToNextProcessor\""
+java.lang.NumberFormatException: For input string: "sendToNextProcessor"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.zookeeper.server.quorum.CommitProcessor.sendToNextProcessor(CommitProcessor.java:272)
+	at org.apache.zookeeper.server.quorum.CommitProcessor.processCommitted(CommitProcessor.java:243)
+	at org.apache.zookeeper.server.quorum.CommitProcessor.run(CommitProcessor.java:190)
+
+
+

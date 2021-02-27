@@ -1,0 +1,123 @@
+http://hbase.apache.org/book.html
+
+$ cat /tmp/hbase-testuser-1-master.pid |xargs kill -9
+$ .bin/local-regionservers.sh start 2 3 4 5
+Another related setting is the number of processes a user is allowed to run at once. 
+Replace the Hadoop Bundled With HBase!
+4.1.1. dfs.datanode.max.transfer.threads
+Procedure: HDFS Client Configuration
+
+hbase.regionserver.handler.count
+* hbase.regionserver.global.memstore.size
+hbase.regionserver.global.memstore.size.lower.limit
+hbase.systemtables.compacting.memstore.type
+hbase.regionserver.regionSplitLimit
+hbase.client.write.buffer  -->  hbase.client.write.buffer * hbase.regionserver.handler.count
+hbase.client.max.perregion.tasks
+hbase.client.perserver.requests.threshold
+hbase.client.scanner.caching
+
+hbase.hregion.memstore.flush.size
+* hbase.hregion.percolumnfamilyflush.size.lower.bound.min
+hbase.hregion.preclose.flush.size
+* hbase.hregion.memstore.block.multiplier
+* hbase.hregion.memstore.mslab.enabled
+* hbase.hregion.max.filesize
+* hbase.hregion.majorcompaction
+* hbase.hstore.compactionThreshold
+* hbase.hstore.blockingStoreFiles
+* hbase.hstore.compaction.min
+hbase.hstore.compaction.max
+* hbase.hstore.compaction.min.size
+hbase.hstore.compaction.ratio
+hbase.hstore.time.to.purge.deletes
+hbase.offpeak.start.hour
+* hbase.regionserver.thread.compaction.throttle
+hbase.regionserver.majorcompaction.pagecache.drop
+hbase.regionserver.minorcompaction.pagecache.drop
+* hbase.storescanner.parallel.seek.enable
+hbase.storescanner.parallel.seek.threads
+* hfile.block.cache.size
+hfile.index.block.max.size
+hbase.bucketcache.ioengine
+hbase.bucketcache.size
+hbase.bucketcache.bucket.sizes
+hfile.block.bloom.cacheonwrite
+io.storefile.bloom.block.size
+hbase.rs.cacheblocksonwrite
+hbase.rpc.timeout
+hbase.client.operation.timeout
+hbase.cells.scanned.per.heartbeat.check
+hbase.rpc.shortoperation.timeout
+hbase.ipc.client.tcpnodelay
+hadoop.policy.file
+hbase.superuser
+hbase.rest.port
+hbase.table.max.rowsize
+hbase.snapshot.enabled
+hbase.client.scanner.max.result.size
+hbase.server.scanner.max.result.size
+hbase.dynamic.jars.dir
+Set HBase environment variables in this file. Examples include options to pass the JVM on start of an HBase daemon such as heap size and garbage collector configs. You can also set configurations for HBase configuration, log directories, niceness, ssh options, where to locate process pid files, etc. Open the file at conf/hbase-env.sh and peruse its content. Each option is fairly well documented. Add your own environment variables here if you want them read by HBase daemons on startup.
+<artifactId>hbase-shaded-client</artifactId>
+The factory method on HBaseConfiguration, HBaseConfiguration.create();, on invocation, will read in the content of the first hbase-site.xml found on the client’s CLASSPATH, if one is present (Invocation will also factor in any hbase-default.xml found; an hbase-default.xml ships inside the hbase.X.X.X.jar). It is also possible to specify configuration directly without having to read from a hbase-site.xml. For example, to set the ZooKeeper ensemble for the cluster programmatically do as follows:
+7.6. Timeout settings
+zookeeper.session.timeout
+./hbase shell ./sample_commands.txt
+19. Overriding configuration starting the HBase Shell
+20.3. LOG data to timestamp
+20.4. Query Shell Configuration
+hbase>create 't14','f',SPLITS_FILE=>'splits.txt'
+--
+# create table with four regions based on random bytes keys
+hbase>create 't2','f1', { NUMREGIONS => 4 , SPLITALGO => 'UniformSplit' }
+--
+hbase> alter ‘t1′, NAME => ‘f1′, VERSIONS => 5
+----
+29.3. Optional New Version and Delete behavior in HBase-2.0.0
+Aim to have regions sized between 10 and 50 GB.
+Aim to have cells no larger than 10 MB, or 50 MB
+Around 50-100 regions is a good number for a table with 1 or 2 column families. Remember that a region is a contiguous segment of a column family.
+If you are storing time-based machine data or logging information, and the row key is based on device ID or service ID plus time, you can end up with a pattern where older data regions never have additional writes beyond a certain age. In this type of situation, you end up with a small number of active regions and a large number of older regions which have no new writes. For these situations, you can tolerate a larger number of regions because your resource consumption is driven by the active regions only.
+If only one column family is busy with writes, only that column family accomulates memory. Be aware of write patterns when allocating resources.
+
+Personally I would place the maximum disk space per machine that can be served exclusively with HBase around 6T, unless you have a very read-heavy workload. In that case the Java heap should be 32GB (20G regions, 128M memstores, the rest defaults).
+* flushing and compactions are done on a per Region basis so if one column family is carrying the bulk of the data bringing on flushes, the adjacent families will also be flushed even though the amount of data they carry is small
+* Try to make do with one column family if you can in your schemas. Only introduce a second and third column family in the case where data access is usually column scoped; i.e. you query one column family or the other but usually not both at the one time.
+* the indices that are kept on HBase storefiles (StoreFile (HFile)) to facilitate random access may end up occupying large chunks of the HBase allotted RAM because the cell value coordinates are large. Mark in the above cited comment suggests upping the block size so entries in the store file index happen at a larger interval or modify the table schema so it makes for smaller rows and column names. Compression will also make for larger indices. See the thread a question storefileIndexSize up on the user mailing list.
+This parameter should only be set when time-to-live is enabled for a column family and must be less than the number of row versions.
+41. Time To Live (TTL)
+42. Keeping Deleted Cells
+Scan.setReversed()
+46.4. Optimize on the Server Side for Low Latency
+46.5. JVM Tuning
+47. Special Cases
+67.1. hbase:meta
+67.2. Startup Sequencing
+This information is cached in the client so that subsequent requests need not go through the lookup process. 
+For the asynchronous table, most methods have the same meaning with the old Table interface, expect that the return value is wrapped with a CompletableFuture usually. We do not have any buffer here so there is no close method for asynchronous table, you do not need to close it. And it is thread safe.
+68.3. Asynchronous Client
+* So while the cluster can still run for a short time without the Master, the Master should be restarted as soon as possible
+70.5. MasterProcWAL
+HBase provides two different BlockCache implementations to cache data read from HDFS: the default on-heap LruBlockCache and the BucketCache
+* 71.4.3. LruBlockCache Design
+* 71.4.4. LruBlockCache Usage
+* 71.4.5. Off-heap Block Cache
+* 71.4.6. Compressed BlockCache
+71.5. RegionServer Offheap Read/Write Path
+* 71.6. RegionServer Splitting Implementation
+71.7. Write Ahead Log (WAL)
+72.1.1. Why should I keep my Region count low?
+72.2. Region-RegionServer Assignment
+72.3. Region-RegionServer Locality
+72.4. Region Splits
+72.5. Manual Region Splitting
+* 72.6. Online Region Merges
+72.7. Store
+	Note that when the flush happens, MemStores that belong to the same region will all be flushed.
+72.7.5. Blocks
+72.7.7. Compaction
+	The end result of a major compaction is a single StoreFile per Store
+	Compactions do not perform region merges. See Merge for more information on region merging.
+73. Bulk Loading
+75. Timeline-consistent High Available Reads

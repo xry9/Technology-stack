@@ -1,0 +1,558 @@
+1、结果文件都是在 org.apache.hadoop.mapreduce.lib.output.TextOutputFormat#getRecordWriter 中 Path file = getDefaultWorkFile(job, extension);// hdfs://cluster01:9000/result/r1/_temporary/1/_temporary/attempt_1588246858105_0025_r_000000_0/part-r-00000
+  多路径输出暂时不探讨了
+2、AM 会提交到 CommitterEventHandler, 完成最终 rename
+
+public class org.apache.hadoop.mapred.ReduceTask extends Task {
+	public void run(JobConf job, final TaskUmbilicalProtocol umbilical) throws IOException, InterruptedException, ClassNotFoundException {
+		RawKeyValueIterator rIter = null;
+		ShuffleConsumerPlugin shuffleConsumerPlugin = null;    
+		Class combinerClass = conf.getCombinerClass();
+		CombineOutputCollector combineCollector = (null != combinerClass) ? new CombineOutputCollector(reduceCombineOutputCounter, reporter, conf) : null;
+		Class<? extends ShuffleConsumerPlugin> clazz = job.getClass(MRConfig.SHUFFLE_CONSUMER_PLUGIN, Shuffle.class, ShuffleConsumerPlugin.class);					
+		shuffleConsumerPlugin = ReflectionUtils.newInstance(clazz, job);// org.apache.hadoop.mapreduce.task.reduce.Shuffle
+		ShuffleConsumerPlugin.Context shuffleContext = new ShuffleConsumerPlugin.Context(getTaskID(), job, FileSystem.getLocal(job), umbilical, super.lDirAlloc, reporter, codec, combinerClass, combineCollector, spilledRecordsCounter, reduceCombineInputCounter, shuffledMapsCounter, reduceShuffleBytes, failedShuffleCounter, mergedMapOutputsCounter, taskStatus, copyPhase, sortPhase, this, mapOutputFile, localMapFiles);
+		shuffleConsumerPlugin.init(shuffleContext);
+		rIter = shuffleConsumerPlugin.run();// 创建两组线程, 取已运行成功 maptask 的 url, 并合并
+		mapOutputFilesOnDisk.clear();
+		sortPhase.complete();// sort is complete
+		setPhase(TaskStatus.Phase.REDUCE); 
+		statusUpdate(umbilical);
+		Class keyClass = job.getMapOutputKeyClass();
+		Class valueClass = job.getMapOutputValueClass();
+		// 这就是所谓的 Grouping, 就是个行比较器, 在 org.apache.hadoop.mapreduce.task.ReduceContextImpl#nextKeyValue 看用到
+		RawComparator comparator = job.getOutputValueGroupingComparator();
+		runNewReducer(job, umbilical, reporter, rIter, comparator, keyClass, valueClass);
+		done(umbilical, reporter);
+	}
+	private <INKEY,INVALUE,OUTKEY,OUTVALUE> void runNewReducer(JobConf job, final TaskUmbilicalProtocol umbilical, final TaskReporter reporter, RawKeyValueIterator rIter, RawComparator<INKEY> comparator, Class<INKEY> keyClass, Class<INVALUE> valueClass) throws IOException,InterruptedException, ClassNotFoundException {
+		final RawKeyValueIterator rawIter = rIter;
+		rIter = new RawKeyValueIterator() {
+			public void close() throws IOException { rawIter.close(); }
+			public DataInputBuffer getKey() throws IOException { return rawIter.getKey(); }
+			public Progress getProgress() {　return rawIter.getProgress();　}
+			public DataInputBuffer getValue() throws IOException {　return rawIter.getValue();　}
+			public boolean next() throws IOException {　boolean ret = rawIter.next();　reporter.setProgress(rawIter.getProgress().getProgress());　return ret;　}
+		};
+		org.apache.hadoop.mapreduce.TaskAttemptContext taskContext = new org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl(job, getTaskID(), reporter);
+		org.apache.hadoop.mapreduce.Reducer<INKEY,INVALUE,OUTKEY,OUTVALUE> reducer = (org.apache.hadoop.mapreduce.Reducer<INKEY,INVALUE,OUTKEY,OUTVALUE>) ReflectionUtils.newInstance(taskContext.getReducerClass(), job);
+		org.apache.hadoop.mapreduce.RecordWriter<OUTKEY,OUTVALUE> trackedRW = new NewTrackingRecordWriter<OUTKEY, OUTVALUE>(this, taskContext);// this 可以认为是 server 创建的
+		org.apache.hadoop.mapreduce.Reducer.Context reducerContext = createReduceContext(reducer, job, getTaskID(), rIter, reduceInputKeyCounter, reduceInputValueCounter, trackedRW, committer, reporter, comparator, keyClass, valueClass);
+		reducer.run(reducerContext);
+	}
+	static class NewTrackingRecordWriter<K,V> extends org.apache.hadoop.mapreduce.RecordWriter<K,V> {
+		private final org.apache.hadoop.mapreduce.RecordWriter<K,V> real;
+		private final org.apache.hadoop.mapreduce.Counter outputRecordCounter;
+		private final org.apache.hadoop.mapreduce.Counter fileOutputByteCounter;
+		private final List<Statistics> fsStats;
+
+		NewTrackingRecordWriter(ReduceTask reduce, org.apache.hadoop.mapreduce.TaskAttemptContext taskContext) throws InterruptedException, IOException {
+			this.outputRecordCounter = reduce.reduceOutputCounter;
+			this.fileOutputByteCounter = reduce.fileOutputByteCounter;
+			List<Statistics> matchedStats = null;
+			if (reduce.outputFormat instanceof org.apache.hadoop.mapreduce.lib.output.FileOutputFormat) {
+				matchedStats = getFsStatistics(org.apache.hadoop.mapreduce.lib.output.FileOutputFormat.getOutputPath(taskContext), taskContext.getConfiguration());
+			}
+			fsStats = matchedStats;
+			long bytesOutPrev = getOutputBytes(fsStats);
+			this.real = (org.apache.hadoop.mapreduce.RecordWriter<K, V>) reduce.outputFormat.getRecordWriter(taskContext);// org.apache.hadoop.mapreduce.lib.output.TextOutputFormat$LineRecordWriter
+			long bytesOutCurr = getOutputBytes(fsStats);
+			fileOutputByteCounter.increment(bytesOutCurr - bytesOutPrev);
+		}
+	}
+}
+
+public class org.apache.hadoop.mapreduce.Reducer<KEYIN,VALUEIN,KEYOUT,VALUEOUT> {
+	public void run(Context context) throws IOException, InterruptedException {
+		setup(context);
+		while (context.nextKey()) {
+			reduce(context.getCurrentKey(), context.getValues(), context);
+		}
+		cleanup(context);
+	}
+}
+
+public class org.apache.hadoop.mapreduce.task.reduce.Shuffle<K, V> implements ShuffleConsumerPlugin<K, V>, ExceptionReporter {
+	private Map<TaskAttemptID, MapOutputFile> localMapFiles;
+	private MergeManager<K, V> merger;
+	private ShuffleSchedulerImpl<K,V> scheduler;
+	public void init(ShuffleConsumerPlugin.Context context) {
+		this.umbilical = context.getUmbilical();
+		this.reporter = context.getReporter();
+		this.reduceTask = context.getReduceTask();
+		this.localMapFiles = context.getLocalMapFiles();
+		scheduler = new ShuffleSchedulerImpl<K, V>(jobConf, taskStatus, reduceId, this, copyPhase, context.getShuffledMapsCounter(), context.getReduceShuffleBytes(), context.getFailedShuffleCounter());
+		merger = createMergeManager(context);
+	}
+	protected MergeManager<K, V> createMergeManager(ShuffleConsumerPlugin.Context context) {
+		return new MergeManagerImpl<K, V>(reduceId, jobConf, context.getLocalFS(), context.getLocalDirAllocator(), reporter, context.getCodec(), context.getCombinerClass(), context.getCombineCollector(), context.getSpilledRecordsCounter(), context.getReduceCombineInputCounter(), context.getMergedMapOutputsCounter(), this, context.getMergePhase(), context.getMapOutputFile());
+	}
+	public RawKeyValueIterator run() throws IOException, InterruptedException {
+		final EventFetcher<K,V> eventFetcher = new EventFetcher<K,V>(reduceId, umbilical, scheduler, this, maxEventsToFetch);
+		eventFetcher.start();
+		final int numFetchers = isLocal ? 1 : jobConf.getInt(MRJobConfig.SHUFFLE_PARALLEL_COPIES, 5);
+		Fetcher<K,V>[] fetchers = new Fetcher[numFetchers];
+		for (int i=0; i < numFetchers; ++i) {
+			fetchers[i] = new Fetcher<K,V>(jobConf, reduceId, scheduler, merger, reporter, metrics, this, reduceTask.getShuffleSecret());
+			fetchers[i].start();
+		}
+		copyPhase.complete(); // copy is already complete
+		taskStatus.setPhase(TaskStatus.Phase.SORT);
+		reduceTask.statusUpdate(umbilical);
+		RawKeyValueIterator kvIter = null;
+		kvIter = merger.close();
+		return kvIter;
+	}
+}
+
+
+class org.apache.hadoop.mapreduce.task.reduce.EventFetcher<K,V> extends Thread {
+	private final TaskAttemptID reduce;
+	private final TaskUmbilicalProtocol umbilical;
+	public EventFetcher(TaskAttemptID reduce, TaskUmbilicalProtocol umbilical, ShuffleScheduler<K,V> scheduler, ExceptionReporter reporter, int maxEventsToFetch) {
+		this.reduce = reduce;
+		this.umbilical = umbilical;
+		this.scheduler = scheduler;
+		exceptionReporter = reporter;
+		this.maxEventsToFetch = maxEventsToFetch;
+	}
+	public void run() {
+		while (!stopped && !Thread.currentThread().isInterrupted()) {
+			int numNewMaps = getMapCompletionEvents();
+			Thread.sleep(SLEEP_TIME);
+		}
+	}	
+	protected int getMapCompletionEvents() throws IOException, InterruptedException {
+		TaskCompletionEvent events[] = null;
+		MapTaskCompletionEventsUpdate update = umbilical.getMapCompletionEvents((org.apache.hadoop.mapred.JobID)reduce.getJobID(), fromEventIdx, maxEventsToFetch, (org.apache.hadoop.mapred.TaskAttemptID)reduce);
+		events = update.getMapTaskCompletionEvents();
+		for (TaskCompletionEvent event : events) {
+			scheduler.resolve(event);// 去解析 event 了
+			if (TaskCompletionEvent.Status.SUCCEEDED == event.getTaskStatus()) { ++numNewMaps; }
+		}
+		return numNewMaps;
+	}
+	public void shutDown() {
+		this.stopped = true;
+		interrupt();
+		join(5000);
+	}
+}
+public class org.apache.hadoop.mapreduce.task.reduce.ShuffleSchedulerImpl<K,V> implements ShuffleScheduler<K,V> {
+	private Map<String, MapHost> mapLocations = new HashMap<String, MapHost>();
+	private Set<MapHost> pendingHosts = new HashSet<MapHost>();
+	public void resolve(TaskCompletionEvent event) {
+		switch (event.getTaskStatus()) {
+			case SUCCEEDED:
+			URI u = getBaseURI(reduceId, event.getTaskTrackerHttp());
+			addKnownMapOutput(u.getHost() + ":" + u.getPort(), u.toString(), event.getTaskAttemptId());
+			break;
+		}
+	}
+	public synchronized void addKnownMapOutput(String hostName, String hostUrl, TaskAttemptID mapId) {
+		MapHost host = mapLocations.get(hostName);
+		if (host == null) {
+			host = new MapHost(hostName, hostUrl);
+			mapLocations.put(hostName, host);
+		}
+		host.addKnownMap(mapId);
+		if (host.getState() == State.PENDING) {
+			pendingHosts.add(host);
+			notifyAll();
+		}
+	}
+	public synchronized MapHost getHost() throws InterruptedException {
+		MapHost host = null;
+		Iterator<MapHost> iter = pendingHosts.iterator();
+		for (int i=0; i <= numToPick; ++i) {
+			host = iter.next();
+		}
+		pendingHosts.remove(host);
+		return host;
+	}
+  
+}
+class org.apache.hadoop.mapreduce.task.reduce.Fetcher<K,V> extends Thread {
+	protected HttpURLConnection connection;
+	protected final MergeManager<K,V> merger;
+	protected final ShuffleSchedulerImpl<K,V> scheduler;
+	public Fetcher(JobConf job, TaskAttemptID reduceId, ShuffleSchedulerImpl<K,V> scheduler, MergeManager<K,V> merger, Reporter reporter, ShuffleClientMetrics metrics, ExceptionReporter exceptionReporter, SecretKey shuffleKey) {
+		this(job, reduceId, scheduler, merger, reporter, metrics, exceptionReporter, shuffleKey, ++nextId);
+	}
+	public void run() {
+		while (!stopped && !Thread.currentThread().isInterrupted()) {
+			MapHost host = null;
+			merger.waitForResource();
+			host = scheduler.getHost();
+			copyFromHost(host);
+		}
+	}
+	protected void copyFromHost(MapHost host) throws IOException {
+		retryStartTime = 0;
+		List<TaskAttemptID> maps = scheduler.getMapsForHost(host);    
+		Set<TaskAttemptID> remaining = new HashSet<TaskAttemptID>(maps);
+		URL url = getMapOutputURL(host, maps);// http://pseudo:13562/mapOutput?job=job_1583191981326_0005&reduce=0&map=attempt_1583191981326_0005_m_000000_0
+		DataInputStream input = openShuffleUrl(host, remaining, url);
+		TaskAttemptID[] failedTasks = null;
+		while (!remaining.isEmpty() && failedTasks == null) {
+			failedTasks = copyMapOutput(host, input, remaining, fetchRetryEnabled);// 返回 null 
+		}
+	}
+	private URL getMapOutputURL(MapHost host, Collection<TaskAttemptID> maps) throws MalformedURLException {
+		StringBuffer url = new StringBuffer(host.getBaseUrl());
+		boolean first = true;
+		for (TaskAttemptID mapId : maps) {
+			if (!first) {
+				url.append(",");
+			}
+			url.append(mapId);
+			first = false;
+		}
+		return new URL(url.toString());
+	}
+	private DataInputStream openShuffleUrl(MapHost host, Set<TaskAttemptID> remaining, URL url) {
+		DataInputStream input = null;
+		setupConnectionsWithRetry(host, remaining, url);
+		if (stopped) {
+			abortConnect(host, remaining);
+		} else {
+			input = new DataInputStream(connection.getInputStream());
+		}
+		return input;
+	}
+	private void setupConnectionsWithRetry(MapHost host, Set<TaskAttemptID> remaining, URL url) throws IOException {
+		openConnectionWithRetry(host, remaining, url);
+		connect(connection, connectionTimeout);
+	}
+	private void openConnectionWithRetry(MapHost host, Set<TaskAttemptID> remaining, URL url) throws IOException {
+		while (shouldWait) {
+			openConnection(url);
+			shouldWait = false;
+		}
+	}
+	protected synchronized void openConnection(URL url) throws IOException {
+		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+		connection = conn;
+	}
+	private void connect(URLConnection connection, int connectionTimeout) throws IOException {
+		while (true) {
+			connection.connect();
+			break;
+		}
+	}
+	private TaskAttemptID[] copyMapOutput(MapHost host, DataInputStream input, Set<TaskAttemptID> remaining, boolean canRetry) throws IOException {
+		TaskAttemptID mapId = null;
+		ShuffleHeader header = new ShuffleHeader();
+		header.readFields(input);
+		mapId = TaskAttemptID.forName(header.mapId);
+		compressedLength = header.compressedLength;
+		decompressedLength = header.uncompressedLength;
+		InputStream is = input;
+		// Get the location for the map output - either in-memory or on-disk
+		MapOutput<K,V> mapOutput = merger.reserve(mapId, decompressedLength, id);// OnDiskMapOutput
+		mapOutput.shuffle(host, is, compressedLength, decompressedLength, metrics, reporter);
+		scheduler.copySucceeded(mapId, host, compressedLength, startTime, endTime, mapOutput);
+		return null;
+	}  
+}
+
+public class org.apache.hadoop.mapreduce.task.reduce.MergeManagerImpl<K, V> implements MergeManager<K, V> {
+	private final OnDiskMerger onDiskMerger;
+	public MergeManagerImpl(TaskAttemptID reduceId, JobConf jobConf, FileSystem localFS, LocalDirAllocator localDirAllocator, Reporter reporter, CompressionCodec codec, Class<? extends Reducer> combinerClass, CombineOutputCollector<K,V> combineCollector, Counters.Counter spilledRecordsCounter, Counters.Counter reduceCombineInputCounter, Counters.Counter mergedMapOutputsCounter, ExceptionReporter exceptionReporter, Progress mergePhase, MapOutputFile mapOutputFile) {
+		boolean allowMemToMemMerge = jobConf.getBoolean(MRJobConfig.REDUCE_MEMTOMEM_ENABLED, false);
+		if (allowMemToMemMerge) {
+			this.memToMemMerger = new IntermediateMemoryToMemoryMerger(this, memToMemMergeOutputsThreshold);
+			this.memToMemMerger.start();
+		} else {
+			this.memToMemMerger = null;
+		}
+		this.inMemoryMerger = createInMemoryMerger();
+		this.inMemoryMerger.start();
+		this.onDiskMerger = new OnDiskMerger(this);
+		this.onDiskMerger.start();
+	}
+	public synchronized MapOutput<K,V> reserve(TaskAttemptID mapId, long requestedSize, int fetcher) throws IOException {
+		if (!canShuffleToMemory(requestedSize)) {// "mapreduce.reduce.memory.totalbytes", Runtime.getRuntime().maxMemory()
+			return new OnDiskMapOutput<K,V>(mapId, reduceId, this, requestedSize, jobConf, mapOutputFile, fetcher, true);
+		}
+		if (usedMemory > memoryLimit) {// 内存使用超过阈值便不在使用了呀
+			return null;
+		}
+		return unconditionalReserve(mapId, requestedSize, true);
+	}
+	private synchronized InMemoryMapOutput<K, V> unconditionalReserve(TaskAttemptID mapId, long requestedSize, boolean primaryMapOutput) {
+		usedMemory += requestedSize;
+		return new InMemoryMapOutput<K,V>(jobConf, mapId, this, (int)requestedSize, codec, primaryMapOutput);
+	}
+	public synchronized void closeInMemoryFile(InMemoryMapOutput<K,V> mapOutput) { 
+		inMemoryMapOutputs.add(mapOutput);
+	}
+	public synchronized void closeOnDiskFile(CompressAwarePath file) {
+		onDiskMapOutputs.add(file);
+		if (onDiskMapOutputs.size() >= (2 * ioSortFactor - 1)) {// 这里是决定是否 merge 的关键呀
+			onDiskMerger.startMerge(onDiskMapOutputs);
+		}
+	}
+	public RawKeyValueIterator close() throws Throwable {
+		if (memToMemMerger != null) { 
+			memToMemMerger.close();
+		}
+		inMemoryMerger.close();
+		onDiskMerger.close();
+		List<InMemoryMapOutput<K, V>> memory = new ArrayList<InMemoryMapOutput<K, V>>(inMemoryMergedMapOutputs);
+		inMemoryMergedMapOutputs.clear();
+		memory.addAll(inMemoryMapOutputs);
+		inMemoryMapOutputs.clear();
+		List<CompressAwarePath> disk = new ArrayList<CompressAwarePath>(onDiskMapOutputs);
+		onDiskMapOutputs.clear();
+		return finalMerge(jobConf, rfs, memory, disk);
+	}
+	private class OnDiskMerger extends MergeThread<CompressAwarePath,K,V> {
+		public OnDiskMerger(MergeManagerImpl<K, V> manager) {
+			super(manager, ioSortFactor, exceptionReporter);
+			setName("OnDiskMerger - Thread to merge on-disk map-outputs");
+			setDaemon(true);
+		}
+		public void merge(List<CompressAwarePath> inputs) throws IOException {
+			// 这里干的就是 merge 的活吧，以后再看吧
+		}
+	}
+}
+
+public class org.apache.hadoop.mapreduce.task.reduce.ShuffleSchedulerImpl<K,V> implements ShuffleScheduler<K,V> {
+	public synchronized List<TaskAttemptID> getMapsForHost(MapHost host) {
+		List<TaskAttemptID> list = host.getAndClearKnownMaps();
+		Iterator<TaskAttemptID> itr = list.iterator();
+		List<TaskAttemptID> result = new ArrayList<TaskAttemptID>();
+		int includedMaps = 0;
+		int totalSize = list.size();
+		while (itr.hasNext()) {
+			TaskAttemptID id = itr.next();
+			if (!obsoleteMaps.contains(id) && !finishedMaps[id.getTaskID().getId()]) {
+				result.add(id);
+				if (++includedMaps >= MAX_MAPS_AT_ONCE) {
+					break;
+				}
+			}
+		}
+		while (itr.hasNext()) {
+			TaskAttemptID id = itr.next();
+			if (!obsoleteMaps.contains(id) && !finishedMaps[id.getTaskID().getId()]) {
+				host.addKnownMap(id);
+			}
+		}
+		return result;
+	}
+}
+
+
+public class org.apache.hadoop.mapreduce.task.reduce.MapHost {
+	private List<TaskAttemptID> maps = new ArrayList<TaskAttemptID>();
+	public synchronized void addKnownMap(TaskAttemptID mapId) {
+		maps.add(mapId);
+		if (state == State.IDLE) {
+			state = State.PENDING;
+		}
+	}
+	public static enum State {
+    // No map outputs available, Map outputs are being fetched, Known map outputs which need to be fetched, Host penalized due to shuffle failures
+		IDLE, BUSY, PENDING, PENALIZED           
+	}
+	public synchronized List<TaskAttemptID> getAndClearKnownMaps() {
+		List<TaskAttemptID> currentKnownMaps = maps;
+		maps = new ArrayList<TaskAttemptID>();
+		return currentKnownMaps;
+	}
+}
+class org.apache.hadoop.mapreduce.task.reduce.OnDiskMapOutput<K, V> extends MapOutput<K, V> {
+	private final FileSystem fs;
+	private final Path tmpOutputPath;
+	private final Path outputPath;
+	private final MergeManagerImpl<K, V> merger;
+	private final OutputStream disk;
+	public OnDiskMapOutput(TaskAttemptID mapId, TaskAttemptID reduceId, MergeManagerImpl<K,V> merger, long size, JobConf conf, MapOutputFile mapOutputFile, int fetcher, boolean primaryMapOutput) throws IOException {
+		this(mapId, reduceId, merger, size, conf, mapOutputFile, fetcher, primaryMapOutput, FileSystem.getLocal(conf).getRaw(), mapOutputFile.getInputFileForWrite(mapId.getTaskID(), size));
+	}
+	OnDiskMapOutput(TaskAttemptID mapId, TaskAttemptID reduceId, MergeManagerImpl<K,V> merger, long size, JobConf conf, MapOutputFile mapOutputFile, int fetcher, boolean primaryMapOutput, FileSystem fs, Path outputPath) throws IOException {
+		super(mapId, size, primaryMapOutput);
+		this.fs = fs;// org.apache.hadoop.fs.RawLocalFileSystem
+		this.merger = merger;
+		this.outputPath = outputPath;
+		tmpOutputPath = getTempPath(outputPath, fetcher);
+		disk = CryptoUtils.wrapIfNecessary(conf, fs.create(tmpOutputPath));
+		this.conf = conf;
+	}
+	public void shuffle(MapHost host, InputStream input, long compressedLength, long decompressedLength, ShuffleClientMetrics metrics, Reporter reporter) throws IOException {
+		input = new IFileInputStream(input, compressedLength, conf);
+		byte[] buf = new byte[BYTES_TO_READ];
+		while (bytesLeft > 0) {
+			int n = ((IFileInputStream)input).readWithChecksum(buf, 0, (int) Math.min(bytesLeft, BYTES_TO_READ));
+			disk.write(buf, 0, n);
+			bytesLeft -= n;
+			reporter.progress();
+		}
+		this.compressedSize = compressedLength;
+	}
+	public void commit() throws IOException {
+		fs.rename(tmpOutputPath, outputPath);
+		CompressAwarePath compressAwarePath = new CompressAwarePath(outputPath, getSize(), this.compressedSize);
+		merger.closeOnDiskFile(compressAwarePath);
+	}
+}
+class org.apache.hadoop.mapreduce.task.reduce.InMemoryMapOutput<K, V> extends MapOutput<K, V> {
+	Set<InMemoryMapOutput<K, V>> inMemoryMapOutputs = new TreeSet<InMemoryMapOutput<K,V>>(new MapOutputComparator<K, V>());
+	public void commit() throws IOException {
+		merger.closeInMemoryFile(this);
+	}
+}
+public class org.apache.hadoop.mapreduce.task.reduce.ShuffleSchedulerImpl<K,V> implements ShuffleScheduler<K,V> {
+	public synchronized void copySucceeded(TaskAttemptID mapId, MapHost host, long bytes, long startMillis, long endMillis, MapOutput<K,V> output) throws IOException {
+		if (!finishedMaps[mapIndex]) {
+			output.commit();
+			finishedMaps[mapIndex] = true;
+		}
+	}
+}
+abstract class org.apache.hadoop.mapreduce.task.reduce.MergeThread<T,K,V> extends Thread {
+	private LinkedList<List<T>> pendingToBeMerged;
+	public MergeThread(MergeManagerImpl<K,V> manager, int mergeFactor, ExceptionReporter reporter) {
+		this.pendingToBeMerged = new LinkedList<List<T>>();
+		this.manager = manager;
+		this.mergeFactor = mergeFactor;
+		this.reporter = reporter;
+	}
+	public void startMerge(Set<T> inputs) {
+		if (!closed) {
+			List<T> toMergeInputs = new ArrayList<T>();
+			Iterator<T> iter=inputs.iterator();
+			for (int ctr = 0; iter.hasNext() && ctr < mergeFactor; ++ctr) {
+				toMergeInputs.add(iter.next());
+				iter.remove();
+			}
+			pendingToBeMerged.addLast(toMergeInputs);
+		}
+	}
+	public void run() {
+		while (true) {
+			List<T> inputs = pendingToBeMerged.removeFirst();
+			merge(inputs);
+		}
+	}
+  
+}
+
+
+abstract public class org.apache.hadoop.mapred.Task implements Writable, Configurable {
+	protected static <INKEY,INVALUE,OUTKEY,OUTVALUE> org.apache.hadoop.mapreduce.Reducer<INKEY,INVALUE,OUTKEY,OUTVALUE>.Context createReduceContext(org.apache.hadoop.mapreduce.Reducer<INKEY,INVALUE,OUTKEY,OUTVALUE> reducer, Configuration job, org.apache.hadoop.mapreduce.TaskAttemptID taskId, RawKeyValueIterator rIter, org.apache.hadoop.mapreduce.Counter inputKeyCounter, org.apache.hadoop.mapreduce.Counter inputValueCounter, org.apache.hadoop.mapreduce.RecordWriter<OUTKEY,OUTVALUE> output, org.apache.hadoop.mapreduce.OutputCommitter committer, org.apache.hadoop.mapreduce.StatusReporter reporter, RawComparator<INKEY> comparator, Class<INKEY> keyClass, Class<INVALUE> valueClass) throws IOException, InterruptedException {
+		org.apache.hadoop.mapreduce.ReduceContext<INKEY, INVALUE, OUTKEY, OUTVALUE> reduceContext = new ReduceContextImpl<INKEY, INVALUE, OUTKEY, OUTVALUE>(job, taskId, rIter, inputKeyCounter, inputValueCounter, output, committer, reporter, comparator, keyClass, valueClass);
+		org.apache.hadoop.mapreduce.Reducer<INKEY,INVALUE,OUTKEY,OUTVALUE>.Context reducerContext = new WrappedReducer<INKEY, INVALUE, OUTKEY, OUTVALUE>().getReducerContext(reduceContext);
+		return reducerContext;
+	}
+	public void done(TaskUmbilicalProtocol umbilical, TaskReporter reporter) throws IOException, InterruptedException {
+		commit(umbilical, reporter, committer);
+	}
+	private void commit(TaskUmbilicalProtocol umbilical, TaskReporter reporter, org.apache.hadoop.mapreduce.OutputCommitter committer) throws IOException {    
+		committer.commitTask(taskContext);
+	}
+}
+
+public class org.apache.hadoop.mapreduce.task.ReduceContextImpl<KEYIN,VALUEIN,KEYOUT,VALUEOUT> extends TaskInputOutputContextImpl<KEYIN,VALUEIN,KEYOUT,VALUEOUT> implements ReduceContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> {
+	private RawKeyValueIterator input;
+	public ReduceContextImpl(Configuration conf, TaskAttemptID taskid, RawKeyValueIterator input, Counter inputKeyCounter, Counter inputValueCounter, RecordWriter<KEYOUT,VALUEOUT> output, OutputCommitter committer, StatusReporter reporter, RawComparator<KEYIN> comparator, Class<KEYIN> keyClass, Class<VALUEIN> valueClass) throws InterruptedException, IOException{
+		super(conf, taskid, output, committer, reporter);
+		this.input = input;
+		this.inputKeyCounter = inputKeyCounter;
+		this.inputValueCounter = inputValueCounter;
+		this.keyClass = keyClass;
+		this.valueClass = valueClass;
+	}
+	public boolean nextKey() throws IOException,InterruptedException {
+    while (hasMore && nextKeyIsSame) {
+      nextKeyValue();
+    }
+    if (hasMore) {
+      if (inputKeyCounter != null) {
+        inputKeyCounter.increment(1);
+      }
+      return nextKeyValue();
+    } else {
+      return false;
+    }
+  }
+	public boolean nextKeyValue() throws IOException, InterruptedException {
+	// input.next(); 并将值塞给 key value 并将值塞给 key value
+	}
+	public KEYIN getCurrentKey() {
+		return key;
+	}
+	public VALUEIN getCurrentValue() {
+		return value;
+	}
+}
+
+public class WrappedReducer<KEYIN, VALUEIN, KEYOUT, VALUEOUT> extends Reducer<KEYIN, VALUEIN, KEYOUT, VALUEOUT> {
+	public Reducer<KEYIN, VALUEIN, KEYOUT, VALUEOUT>.Context getReducerContext(ReduceContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> reduceContext) {
+		return new Context(reduceContext);
+	}
+	public class Context extends Reducer<KEYIN, VALUEIN, KEYOUT, VALUEOUT>.Context {
+		protected ReduceContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> reduceContext;
+		public Context(ReduceContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> reduceContext) {
+			this.reduceContext = reduceContext; 
+		}
+		public KEYIN getCurrentKey() throws IOException, InterruptedException {
+			return reduceContext.getCurrentKey();
+		}
+		public VALUEIN getCurrentValue() throws IOException, InterruptedException {
+			return reduceContext.getCurrentValue();
+		}
+		public boolean nextKeyValue() throws IOException, InterruptedException {
+			return reduceContext.nextKeyValue();
+		}
+	}
+}
+public abstract class org.apache.hadoop.mapreduce.task.TaskInputOutputContextImpl<KEYIN,VALUEIN,KEYOUT,VALUEOUT> extends TaskAttemptContextImpl implements TaskInputOutputContext<KEYIN, VALUEIN, KEYOUT, VALUEOUT> {
+	private RecordWriter<KEYOUT,VALUEOUT> output;
+	private OutputCommitter committer;
+	public TaskInputOutputContextImpl(Configuration conf, TaskAttemptID taskid, RecordWriter<KEYOUT,VALUEOUT> output, OutputCommitter committer, StatusReporter reporter) {
+		super(conf, taskid, reporter);
+		this.output = output;
+		this.committer = committer;
+	}
+	public void write(KEYOUT key, VALUEOUT value) throws IOException, InterruptedException {
+		output.write(key, value);
+	}
+}
+public class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter extends OutputCommitter {
+	public void commitTask(TaskAttemptContext context) throws IOException {
+		commitTask(context, null);
+	}
+	public void commitTask(TaskAttemptContext context, Path taskAttemptPath) throws IOException {
+		// 有 rename 操作 //hdfs://cluster01:9000/result/r1/_temporary/1/_temporary/attempt_1588413011860_0001_r_000000_0===hdfs://cluster01:9000/result/r1/_temporary/1/task_1588413011860_0001_r_000000
+	}
+	public void commitJob(JobContext context) throws IOException {
+		mergePaths(fs, stat, finalOutput);
+	}
+	private void mergePaths(FileSystem fs, final FileStatus from, final Path to) throws IOException {
+		mergePaths(fs, subFrom, subTo);
+	}
+	private void mergePaths(FileSystem fs, final FileStatus from, final Path to) throws IOException {
+		//  /result/r1/_temporary/1/task_1588413011860_0001_r_000000/part-r-00000===/result/r1/part-r-00000
+		if (!fs.rename(from.getPath(), to)) { throw new IOException("Failed to rename " + from + " to " + to); }
+	}
+}
+public class org.apache.hadoop.mapreduce.v2.app.commit.CommitterEventHandler extends AbstractService implements EventHandler<CommitterEvent> {
+	public void handle(CommitterEvent event) {
+		eventQueue.put(event);// AM 调用
+	}
+	private class EventProcessor implements Runnable {
+		public void run() {
+			switch (event.getType()) {
+				case JOB_COMMIT:
+				handleJobCommit((CommitterJobCommitEvent) event);
+				break;
+			}
+		}
+		protected void handleJobCommit(CommitterJobCommitEvent event) {
+			committer.commitJob(event.getJobContext());
+		}
+	}
+}

@@ -1,0 +1,6 @@
+create table emp_i(empno int PRIMARY KEY,ename string,age int,gender string,salary double,address string,birthday string,deptid int)
+PARTITION BY HASH PARTITIONS 2 STORED AS KUDU TBLPROPERTIES('kudu.master_addresses' = '192.168.58.172:7051');
+
+create 'emp_h_i','info',SPLITS => ['3','7']
+CREATE EXTERNAL TABLE emp_h_i(empno int ,ename string,age int,gender string,salary double,address string,birthday string,deptid int)ROW FORMAT SERDE 'org.apache.hadoop.hive.hbase.HBaseSerDe' STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler' WITH SERDEPROPERTIES ("hbase.columns.mapping"=":key,info:ename, info:age, info:gender, info:salary, info:address, info:birthday, info:deptid")TBLPROPERTIES("hbase.table.name" = "emp_h_i");
+insert into emp_h_i select empno,address,age,birthday,deptid,ename,gender,salary from emp;

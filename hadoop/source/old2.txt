@@ -1,0 +1,95 @@
+mvn clean package -DskipTests -Pdist,native -Dtar -Dmaven.javadoc.skip=true && cp target/hadoop-hdfs-2.7.2.jar /usr/local/app/hadoop/hadoop-2.7.2-1/share/hadoop/hdfs/hadoop-hdfs-2.7.2.jar && scp target/hadoop-hdfs-2.7.2.jar pseudo.xryj.com2:/usr/local/app/hadoop/hadoop-2.7.2-1/share/hadoop/hdfs/hadoop-hdfs-2.7.2.jar && scp target/hadoop-hdfs-2.7.2.jar pseudo.xryj.com3:/usr/local/app/hadoop/hadoop-2.7.2-1/share/hadoop/hdfs/hadoop-hdfs-2.7.2.jar
+
+
+一、namenode RPC ：
+tail -f hadoop-tyx-namenode-pseudo.xryj.com.log | grep -E "Starting tyx|===637===|===771===|===1541===|===1783===|===1873===|===2036==="
+
+1、从这里开始 ：org.apache.hadoop.ipc.Server.Listener.Reader#run，此处是个单线程，会执行 org.apache.hadoop.ipc.Server.Listener.Reader#doRunLoop ，此时方法中有个 while 死循环 ，循环内部 if (key.isReadable()) doRead(key);
+  1.1、doRead 方法内部是个我熟悉的套路， Connection c = (Connection)key.attachment();  c.readAndProcess(); 
+  1.2、然后说 readAndProcess方法 ，其中有 processOneRpc(data.array()); 这样的操作，说下 data 是怎么来的就好了，上面有这样一行代码 channelRead(channel, data); 其实就是从channel 中把数据读入 data 中
+  1.3、然后说 processOneRpc 方法吧，我去，转手就是个 processRpcRequest 方法调用，真是没啥好说的 ， 说 processRpcRequest 吧 ，把字节数据转成 Writable rpcRequest; 又封到 org.apache.hadoop.ipc.Server.Call 中，接着就是个 callQueue.put(call);
+  1.4、接着要看哪块代码，当然闭着眼睛都知道是 callQueue.take(); 不错，这代码在 org.apache.hadoop.ipc.Server.Handler#run 中，然后怎么使用这个 call ，真是得另起一大节了
+2、调用会到 org.apache.hadoop.ipc.RPC.Server#call 中，但是如何过来的，我还真不太懂，然后又到了 org.apache.hadoop.ipc.ProtobufRpcEngine.Server.ProtoBufRpcInvoker#call 中
+  2.1、说说 call 里边吧，BlockingService service = (BlockingService) protocolImpl.protocolImpl; 这行代码很重要的吧，然后 service.callBlockingMethod(methodDescriptor, null, param); 这样就是走 google protobuffer 那套东东了，先不细扣了，感觉不太好扣
+  2.2、然后到了 ClientNamenodeProtocolServerSideTranslatorPB 类的各个方法中了 mkdirs/getListing ，prc的事应该是结束了
+  
+--------------------------------
+二、以 getListing 和 mkdirs 为例解读一下 namenode 读写数据过程
+
+读：tail -f hadoop-tyx-namenode-pseudo.xryj.com.log | grep -E "===616===|===997===|===57===|===220===|===458==="
+写：tail -f hadoop-tyx-namenode-pseudo.xryj.com.log | grep -E "===616===|===975===|===196===|===564==="
+
+  0、书接上回的 ClientNamenodeProtocolServerSideTranslatorPB 类中， getListing 和 mkdirs 方法中又是经过 server 调用了 getListing 和 mkdirs ，这个 server 是 NameNodeRpcServer
+  1、我想先说写，NameNodeRpcServer#mkdirs 方法中调用了 namesystem.mkdirs ， FSNamesystem#mkdirs 中 FSDirMkdirOp.mkdirs(this, src, permissions, createParent);  和 getEditLog().logSync(); 操作
+  1.1、FSDirMkdirOp.mkdirs 方法中有一个具关键的存在 INodesInPath iip = fsd.getINodesInPath4Write(src); 目测 INodesInPath 这个得细说一下，但是有可能不完全准确
+  1.1.1、INodesInPath 类最重要的一个属性是 INode[] inodes ，举例：/data/data6/d6 ，其存在开式为 [/], [/data], [/data/data6], [/data/data6/d6]
+  1.1.2、getINodesInPath4Write 方法中，执行 INodesInPath.resolve(rootDir, components,resolveLink); 操作，rootDir 其实就是 / ，components 对应要查找的节点，resolve 方法内其实是一级级地去内存中找传入节点的 INodesInPath ，
+    本质就是一级级遍历当前 INodeDirectory 的 children 属性
+  1.1.3、接着 1.1 中的 iip ，会有一个 final INode lastINode = iip.getLastINode(); 操作，if (lastINode == null) 表示该节点需要创建啊，最后到了 FSDirMkdirOp#unprotectedMkdir 方法中，
+    有两个操作： final INodeDirectory dir = new INodeDirectory(inodeId, name, permission, timestamp);INodesInPath iip = fsd.addLastINode(parent, dir, true); 不必多说，其实是创建一个 INodeDirectory ，再将其加入父目录
+	addLastINode 方法中还有个 addToInodeMap(inode);操作，感觉这是一个将当前 inode 添加到全局内存的操作，是的下面会有解释
+  1.2、接着说 1 说 getEditLog().logSync();操作，此操作其实是个流的 flush ，找到该流的 write 就好了，它在 FSEditLog.logEdit() 方法中
+  1.2.1、此方法的调用与 1 中 FSDirMkdirOp.mkdirs(this, src, permissions, createParent); 操作 一直到 FSDirMkdirOp#createSingleDirectory 之前还保持统一呢，此方法中 mkdir 创建完结节后会执行 fsd.getEditLog().logMkDir(cur, newNode); 于是乎就到了 FSEditLog.logEdit()
+
+  2、接着说读，NameNodeRpcServer#getListing 方法中，不想多说了，本质上也是执行了 INodesInPath.resolve
+
+=================================
+三、namenode 加载文件数据到内存
+less hadoop-tyx-namenode-pseudo.xryj.com.log | grep -E "loadINodeDirectorySection===242===|loadINodeSection===261==="
+
+1、从这个方法开始展开 FSImage#loadFSImage(FSNamesystem target, StartupOption startOpt, MetaRecoveryContext recovery)，往上追溯也是到了启动 namenode 的 main 方法
+  1.1、loadFSImage 方法内会遍历 imageFiles 集合调用 loadFSImageFile 方法，传入 imageFile ，关于 imageFiles 的创建来源，参见方法 ： org.apache.hadoop.hdfs.server.namenode.FSImageTransactionalStorageInspector#inspectDirectory
+  1.2、经过好几步到了，FSImage#loadFSImage 方法中，会有一个 loader.load(curFile, requireSameLayoutVersion); 这样的操作
+  1.3、又经过几步到了，FSImageFormatProtobuf.Loader#loadInternal 中，这是一个很关键的方法，FileSummary summary = FSImageUtil.loadSummary(raFile); 相当于从流数据中读取出概要信息，转成一个 FileSummary.Section 集合，遍历集合
+  1.3.1、取出 SectionName ，去匹配相应的类型，这里只看 INODE 和 INODE_DIR，说明一下两种类型在数据流中的长度,INODE --> 691, INODE_DIR --> 57
+  1.3.2、case INODE: 处理很简单，从流中解析出 inode 将该 inode 并放入一个全局的 inodeMap 中
+  1.3.3、case INODE_DIR: 从流中解析出 inodeId， INodeDirectory p = dir.getInode(e.getParent()).asDirectory(); for (long id : e.getChildrenList()) ，其中 dir.getInode 就是根据 inodeId 去全局的 inodeMap 中获取 inode 数据，
+    for 循环遍历将据有子节点和其父目录关联起来，这也解释得能为什么 INODE 类型数据比 INODE_DIR 数据少很多
+2、经不严格测试，执行一个 mkdir 操作后 stop-dfs.sh 再启动，就会有下面操作了
+  2.1、接着 1 中的	FSImage#loadFSImage(FSNamesystem target, StartupOption startOpt, MetaRecoveryContext recovery) 方法说
+  2.2、loadFSImage 方法内会有一个 long txnsAdvanced = loadEdits(editStreams, target, startOpt, recovery); 操作，其中 editStreams 是怎么由文件转化来的，追了一下其实也并不复杂，在 FileJournalManager#addStreamsToCollectionFromFiles 中有体现
+  2.3、到了 org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader#loadEditRecords 方法中，这个方法也挺重要的，while 死循环中有 op = in.readOp(); 接下来调用 FSEditLogLoader#applyEditLogOp
+  2.4、applyEditLogOp 方法内也是 switch (op.opCode) 这种操作了，然后当然是看 OP_MKDIR 了，然后中间跳过好几步吧，到了 org.apache.hadoop.hdfs.server.namenode.FSDirMkdirOp#mkdirForEditLog 中，接下来干的事和在线 mkdir 的一样了，
+    即调用到了 org.apache.hadoop.hdfs.server.namenode.FSDirMkdirOp#unprotectedMkdir 方法中
+
+=================================
+Runtime.getRuntime().exec(new String[]{"/bin/sh", "/usr/local/app/hadoop-2.7.2/a.sh"}).getInputStream().read(bb);LOG.info("===writeTransactionIdFile===1243==="+new String(bb));
+
+四、edits 文件创建与写入和 SecondaryNameNode Checkpoint
+ tail -f hadoop-tyx-namenode-pseudo.xryj.com.log | grep -E "logEdit===427===|logEdit===1423===|===writeTransactionIdFile===|currentInProgress===112===|finalizeLogSegment===133===|beginTransaction===484==="
+ 1、从配置说起吧，dfs.namenode.checkpoint.period --> 60 ，60s创建一个 edits 文件
+  1.1、然后要说 NameNodeRpcServer.rollEditLog 方法了，也是通过 RPC 调用到了此处，但是客户端在哪我还没找到，估计是 secondarynamenode
+  1.2、几经辗转到了 FSEditLog#rollEditLog，这里有两个重要的方法调用 endCurrentLogSegment, startLogSegment
+  1.2.1、endCurrentLogSegment 方法中调用到了 FSEditLog#logEdit(FSEditLogOp)，感觉就是写了一个结束标识吧，其实这个方法很熟悉了，但是没有细说，有必要单独聊一下子，给自己挖个坑。。。还有一个 FSEditLog#logSync 调用，也不细说了
+    好像没完事啊，下面还一个 journalSet.finalizeLogSegment 操作，此操作到了 FileJournalManager#finalizeLogSegment 中，这里就是把当前使用的 edits 文件改了一名，当然就不在使用了
+  1.2.2、startLogSegment 方法中内容很丰富，除与 endCurrentLogSegment 写入一个标识一样的功能外，还有个 FSEditLog.startLogSegment 方法调用， 几经辗转到了 FileJournalManager#startLogSegment 中，这里面其实是根据 txid 号创建了一个新的 edits 文件
+  1.3、填一下 FSEditLog#logEdit(FSEditLogOp) 这个坑，此方法里面有一个 beginTransaction(); 调用操作，其实是把 txid++ ，即 mkdir/endCurrentLogSegment/startLogSegment 都会把 txid++ ，
+  1.4、想聊一下子 NameNodeRpcServer.rollEditLog 调用的客户端 ，找到了，SecondaryNameNode#doCheckpoint 中有一个 namenode.rollEditLog(); doCheckpoint 会细说，其义如其名
+  
+ tail -f * | grep -E "===renameImageFileInDir===1281===|===saveDigestAndRenameCheckpointImage===1377===|saveFSImage===983|Start checkpoint at txid|doCheckpoint===506===|doMerge===1071===|saveThread===1166|saveFSImage===983===|===serializeINodeSection===561===|doWork===378==="
+ 2、  
+=================================
+tail -f hadoop-tyx-datanode-pseudo.xryj.com.log | grep -E "initDataXceiver===898===|run===136===|run===253===|run===187===|===515===|===521===|===384===|===1998==="
+
+五、说一下客户端读取数据，本以为很简单，然并卵啊，姿势没摆好
+ 1、前面费话也不多说，直接从 org.apache.hadoop.hdfs.DFSClient#open 开撸，可以认为只有 new DFSInputStream(this, src, verifyChecksum); 一行代码
+   1.1、下沉进去，又调用了 org.apache.hadoop.hdfs.DFSInputStream#openInfo，这里有个相当重要的方法调用 lastBlockBeingWrittenLength = fetchLocatedBlocksAndGetLastBlockLength();
+   1.1.1、再下沉有一行这个操作 LocatedBlocks newInfo = dfsClient.getLocatedBlocks(src, 0); 
+   1.1.2、又经历了几步操作到了 org.apache.hadoop.hdfs.DFSClient#callGetBlockLocations，这往下就是 RPC 那些东东了，不细讨论，主要是我对动态代理 PRC 这套东西确实也没搞懂
+   1.1.3、在 server 端的方法 org.apache.hadoop.hdfs.server.namenode.NameNodeRpcServer#getBlockLocations 中看了下，果然进来了
+ 2、1 中的 DFSClient#open 方法返回值是个 DFSInputStream，下面就说怎么用这个流了
+   2.1、直接从 DFSInputStream#read(byte[], int, int) 开说吧，然后到了 DFSInputStream#readWithStrategy 中，这个方法会重要啊
+   2.1.1、首先就是一个 if (pos < getFileLength())，getFileLength()方法调用其实用的是上面 dfsClient.getLocatedBlocks 返回的结果
+   2.1.2、再往下是个 if(pos > blockEnd || currentNode == null) 这个也很重要吧，if(true)则 currentNode = blockSeekTo(pos); 
+   2.1.3、blockSeekTo 方法里内容也很多不得不展开说了，有个它 LocatedBlock targetBlock = getBlockAt(target); 首先说一下，也是利用到了 dfsClient.getLocatedBlocks 返回的结果，
+     this.blockEnd = targetBlock.getStartOffset() + targetBlock.getBlockSize() - 1; 这行代码也挺重要的，2.1.2 的判断中用到了
+   2.1.4、接下来一个重要操作是 blockReader = new BlockReaderFactory(...).build(); 这是一个真正的 reader 了，而且对应一个block的，实现类是 RemoteBlockReader2 里面的成员变量 ReadableByteChannel in ，是可以直接读数据的哈
+   2.1.5、其实这个 build() 的逻辑也并不简单，底层 org.apache.hadoop.hdfs.RemoteBlockReader2#newBlockReader 方法中有 new Sender(out).readBlock(block, blockToken, clientName, startOffset, len, verifyChecksum, cachingStrategy);
+     out 就是往 DataNode 中写入要读取数据的信息，当然最重要的是 blockId，RemoteBlockReader2 类保持了与远程 DataNode 的读写 sock 连接，关于 DataNode 端的数据读取后面介详细介绍
+   2.2、这下该回到 DFSInputStream#readWithStrategy 方法中了，说完 blockSeekTo 往下是，int result = readBuffer(strategy, off, realLen, corruptedBlockMap); if (result >= 0) {pos += result;} 
+   2.2.1、细说 org.apache.hadoop.hdfs.DFSInputStream#readBuffer, 里面是 reader.doRead(blockReader, off, len);blockReader 很熟悉吧
+   2.2.2、而后到了 RemoteBlockReader2#read(byte[], int, int)中，里面有 curDataSlice.get(buf, off, nRead); curDataSlice 是个 ByteBuffer 类成员变量，但是 ByteBuffer.get 能往 buf 里塞数据我还真不知道，那就探讨一下 curDataSlice 吧，
+     此方法的 curDataSlice.get 调用上面还有一个 readNextPacket();调用，此处的 buf 就是 2.1 中 DFSInputStream#read 中那个 buf 也即客户端接收数据那个 buf
+   2.2.3、RemoteBlockReader2#readNextPacket 里面是 packetReceiver.receiveNextPacket(in);很无语，怎么又出来个 packetReceiver, receiveNextPacket 方法里面看过了不细说，然后 curDataSlice = packetReceiver.getDataSlice(); 完事
+ 3、org.apache.hadoop.hdfs.server.datanode.DataXceiverServer#run
+   if (pos > blockEnd || currentNode == null)

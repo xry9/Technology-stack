@@ -1,0 +1,336 @@
+编译是注释掉 clickhouse 这个 module
+mvn -U clean package assembly:assembly -Dmaven.test.skip=true
+python datax.py ./stream2stream.json 
+
+content 下有多级 reader/writer 应该是没有用的
+为什么用 reader writer 两个线程, 应该是两个线程可以加大读写速度, 应该会比启两个线程, 每个线程做读写快, 其实我也感觉不清楚, 要测试才知道
+
+宏观上讲决定 Task(r/w 两个线程) 数的是 job.setting.speed.channel, 但是还有一级 TaskGroupContainer, 由参数 core.container.taskGroup.channel (conf/core.json) 
+决定, 但是这样做的意义是什么呢?
+
+HdfsReader.Job#split((int adviceNumber)) 这个参数根本就没用到, 所以 job.setting.speed.channel 起不到作用
+-- 总结一下就是真他妈混, 这代码写的不咋地
+
+// 在 bin/datax.py 脚本中 java -server ${jvm} %s -classpath %s ${params} com.alibaba.datax.core.Engine
+public class com.alibaba.datax.core.Engine {
+	public static void main(String[] args) throws Exception {
+        Engine.entry(args);
+    }
+    public void start(Configuration allConf) {
+		AbstractContainer container;
+        container = new JobContainer(allConf);
+        container.start();
+    }
+	public static void entry(final String[] args) throws Throwable {
+        Engine engine = new Engine();
+        CommandLine cl = parser.parse(options, args);
+        String jobPath = cl.getOptionValue("job");
+		Configuration configuration = ConfigParser.parse(jobPath);// 这里面 String readerPluginName = configuration.getString(CoreConstant.DATAX_JOB_CONTENT_READER_NAME); "job.content[0].reader.name" 所以 content 写多个也没用
+        engine.start(configuration);
+    }
+}
+public class com.alibaba.datax.core.job.JobContainer extends AbstractContainer {
+	public void start() {
+		this.init();// 初始化 jobReader, jobWriter
+		this.totalStage = this.split();
+		this.schedule();
+		//最后打印 cpu 的平均消耗，GC 的统计
+		VMInfo vmInfo = VMInfo.getVmInfo();
+		vmInfo.getDelta(false);
+		LOG.info(vmInfo.totalString());
+		LOG.info(PerfTrace.getInstance().summarizeNoException());
+		this.logStatistics();
+    }
+	private int split() {
+        this.adjustChannelNumber();
+        List<Configuration> readerTaskConfigs = this.doReaderSplit(this.needChannelNumber); // 这里也重要 readerOriginConfig.clone(); 
+        int taskNumber = readerTaskConfigs.size();
+        List<Configuration> writerTaskConfigs = this.doWriterSplit(taskNumber);
+        List<Configuration> transformerList = this.configuration.getListConfiguration(CoreConstant.DATAX_JOB_CONTENT_TRANSFORMER);// 一般是 null
+		// 这里太重要了, 本质上在这里创建 task, 生成 taskId, task 个数为 readerTaskConfigs.size
+        List<Configuration> contentConfig = mergeReaderAndWriterTaskConfigs(readerTaskConfigs, writerTaskConfigs, transformerList);
+        this.configuration.set(CoreConstant.DATAX_JOB_CONTENT, contentConfig);// 这里太重要了
+        return contentConfig.size();
+    }
+	private void schedule() {
+        int channelsPerTaskGroup = this.configuration.getInt(CoreConstant.DATAX_CORE_CONTAINER_TASKGROUP_CHANNEL, 5);// conf/core.json
+        int taskNumber = this.configuration.getList(CoreConstant.DATAX_JOB_CONTENT).size();// job.content 就是根据这 content 来确定 taskNumber, 但是此处的 configuration 已经是重设过的, 并不是配置文件中
+        this.needChannelNumber = Math.min(this.needChannelNumber, taskNumber);
+		/* 大体上是根据 needChannelNumber 判断需要多少个 TaskGroupContainerRunner, 根据 job.content 与 job.setting.speed.channel, 具体是在 
+		com.alibaba.datax.core.container.util.JobAssignUtil#doAssign 中操作的, 没看太明白, 能猜出个大概
+		TaskGroupContainerRunner 对应多个 TaskExecutor, 而 TaskExecutor 里就只有 reader writer 两个线程了
+		本质上是两级任务拆分, job.setting.speed.channel(在 json 配置中) core.container.taskGroup.channel(默认是 5 就在上面), 共同调节
+		就对应两个真实的 reader 和 writer 线程了 */
+        List<Configuration> taskGroupConfigs = JobAssignUtil.assignFairly(this.configuration, this.needChannelNumber, channelsPerTaskGroup);
+		scheduler.schedule(taskGroupConfigs);
+        this.checkLimit();
+    }
+	public void schedule(List<Configuration> configurations) {
+        int totalTasks = calculateTaskCount(configurations);
+        startAllTaskGroup(configurations);
+    }
+	private void adjustChannelNumber() {
+        this.needChannelNumber = this.configuration.getInt(CoreConstant.DATAX_JOB_SETTING_SPEED_CHANNEL);// 就是在配置文件中取值 job.setting.speed.channel
+    }
+}
+public abstract class com.alibaba.datax.core.job.scheduler.processinner.ProcessInnerScheduler extends AbstractScheduler {
+    public void startAllTaskGroup(List<Configuration> configurations) {
+        this.taskGroupContainerExecutorService = Executors.newFixedThreadPool(configurations.size());
+        for (Configuration taskGroupConfiguration : configurations) {
+            TaskGroupContainerRunner taskGroupContainerRunner = newTaskGroupContainerRunner(taskGroupConfiguration);
+            this.taskGroupContainerExecutorService.execute(taskGroupContainerRunner);
+        }
+    }
+	private TaskGroupContainerRunner newTaskGroupContainerRunner(Configuration configuration) {
+        TaskGroupContainer taskGroupContainer = new TaskGroupContainer(configuration);
+        return new TaskGroupContainerRunner(taskGroupContainer);
+    }
+}
+public class com.alibaba.datax.core.taskgroup.runner.TaskGroupContainerRunner implements Runnable {
+	public TaskGroupContainerRunner(TaskGroupContainer taskGroup) {
+		this.taskGroupContainer = taskGroup;
+	}
+	public void run() {
+		this.taskGroupContainer.start();
+	}
+}
+public class TaskGroupContainer extends AbstractContainer {
+	class TaskExecutor {
+		public TaskExecutor(Configuration taskConf, int attemptCount) {
+            // 获取该taskExecutor的配置
+            this.taskConfig = taskConf;
+            // 得到taskId
+            this.taskId = this.taskConfig.getInt(CoreConstant.TASK_ID);
+            this.attemptCount = attemptCount;
+            this.taskCommunication = containerCommunicator.getCommunication(taskId);
+            Validate.notNull(this.taskCommunication, String.format("taskId[%d]的Communication没有注册过", taskId));
+            this.channel = ClassUtil.instantiate(channelClazz, Channel.class, configuration);
+            this.channel.setCommunication(this.taskCommunication);
+            List<TransformerExecution> transformerInfoExecs = TransformerUtil.buildTransformerInfo(taskConfig);
+            writerRunner = (WriterRunner) generateRunner(PluginType.WRITER);
+            this.writerThread = new Thread(writerRunner, String.format("%d-%d-%d-writer", jobId, taskGroupId, this.taskId));
+            //通过设置 thread 的 contextClassLoader, 即可实现同步和主程序不通的加载器
+            this.writerThread.setContextClassLoader(LoadUtil.getJarLoader(PluginType.WRITER, this.taskConfig.getString(CoreConstant.JOB_WRITER_NAME)));
+            readerRunner = (ReaderRunner) generateRunner(PluginType.READER,transformerInfoExecs);
+            this.readerThread = new Thread(readerRunner, String.format("%d-%d-%d-reader", jobId, taskGroupId, this.taskId));
+        }
+		private AbstractRunner generateRunner(PluginType pluginType, List<TransformerExecution> transformerInfoExecs) {
+            AbstractRunner newRunner = null;
+            TaskPluginCollector pluginCollector;
+            switch (pluginType) {
+                case READER:
+                    newRunner = LoadUtil.loadPluginRunner(pluginType, this.taskConfig.getString(CoreConstant.JOB_READER_NAME));
+                    newRunner.setJobConf(this.taskConfig.getConfiguration(CoreConstant.JOB_READER_PARAMETER));
+                    pluginCollector = ClassUtil.instantiate(taskCollectorClass, AbstractTaskPluginCollector.class, configuration, this.taskCommunication, PluginType.READER);
+                    RecordSender recordSender;
+					recordSender = new BufferedRecordExchanger(this.channel, pluginCollector);
+                    ((ReaderRunner) newRunner).setRecordSender(recordSender);
+                    newRunner.setTaskPluginCollector(pluginCollector);
+                    break;
+                case WRITER:
+                    newRunner = LoadUtil.loadPluginRunner(pluginType, this.taskConfig.getString(CoreConstant.JOB_WRITER_NAME));
+                    newRunner.setJobConf(this.taskConfig.getConfiguration(CoreConstant.JOB_WRITER_PARAMETER));
+                    pluginCollector = ClassUtil.instantiate(taskCollectorClass, AbstractTaskPluginCollector.class, configuration, this.taskCommunication, PluginType.WRITER);
+                    ((WriterRunner) newRunner).setRecordReceiver(new BufferedRecordExchanger(this.channel, pluginCollector));
+                    newRunner.setTaskPluginCollector(pluginCollector);
+                    break;
+            }
+            newRunner.setTaskGroupId(taskGroupId);
+            newRunner.setTaskId(this.taskId);
+            newRunner.setRunnerCommunication(this.taskCommunication);
+            return newRunner;
+        }
+		public void doStart() {
+			this.writerThread.start();
+			this.readerThread.start();
+		}
+	}
+	public void start() {
+		int channelNumber = this.configuration.getInt(CoreConstant.DATAX_CORE_CONTAINER_TASKGROUP_CHANNEL);
+		int taskMaxRetryTimes = this.configuration.getInt(CoreConstant.DATAX_CORE_CONTAINER_TASK_FAILOVER_MAXRETRYTIMES, 1);
+		long taskRetryIntervalInMsec = this.configuration.getLong(CoreConstant.DATAX_CORE_CONTAINER_TASK_FAILOVER_RETRYINTERVALINMSEC, 10000);
+		long taskMaxWaitInMsec = this.configuration.getLong(CoreConstant.DATAX_CORE_CONTAINER_TASK_FAILOVER_MAXWAITINMSEC, 60000);
+		List<Configuration> taskConfigs = this.configuration.getListConfiguration(CoreConstant.DATAX_JOB_CONTENT);// job.content
+		int taskCountInThisTaskGroup = taskConfigs.size();
+		this.containerCommunicator.registerCommunication(taskConfigs);
+		Map<Integer, Configuration> taskConfigMap = buildTaskConfigMap(taskConfigs); //taskId与task配置
+		List<Configuration> taskQueue = buildRemainTasks(taskConfigs); //待运行task列表
+		Map<Integer, TaskExecutor> taskFailedExecutorMap = new HashMap<Integer, TaskExecutor>(); //taskId与上次失败实例
+		List<TaskExecutor> runTasks = new ArrayList<TaskExecutor>(channelNumber); //正在运行task
+		Map<Integer, Long> taskStartTimeMap = new HashMap<Integer, Long>(); //任务开始时间
+		Communication lastTaskGroupContainerCommunication = new Communication();
+		while (true) {
+			//3.有任务未执行，且正在运行的任务数小于最大通道限制
+			Iterator<Configuration> iterator = taskQueue.iterator();
+			while(iterator.hasNext() && runTasks.size() < channelNumber){
+				Configuration taskConfig = iterator.next();
+				Integer taskId = taskConfig.getInt(CoreConstant.TASK_ID);
+				int attemptCount = 1;
+				TaskExecutor lastExecutor = taskFailedExecutorMap.get(taskId);
+				if(lastExecutor!=null){
+					attemptCount = lastExecutor.getAttemptCount() + 1;
+					long now = System.currentTimeMillis();
+					long failedTime = lastExecutor.getTimeStamp();
+					if(now - failedTime < taskRetryIntervalInMsec){  //未到等待时间，继续留在队列
+						continue;
+					}
+				}
+				Configuration taskConfigForRun = taskMaxRetryTimes > 1 ? taskConfig.clone() : taskConfig;
+				TaskExecutor taskExecutor = new TaskExecutor(taskConfigForRun, attemptCount);
+				taskStartTimeMap.put(taskId, System.currentTimeMillis());
+				taskExecutor.doStart();
+				iterator.remove();
+				runTasks.add(taskExecutor);
+				taskMonitor.registerTask(taskId, this.containerCommunicator.getCommunication(taskId));
+				taskFailedExecutorMap.remove(taskId);
+			}
+		}
+    }
+}	
+
+public class com.alibaba.datax.core.taskgroup.runner.ReaderRunner extends AbstractRunner implements Runnable {
+    private RecordSender recordSender;
+    public void setRecordSender(RecordSender recordSender) {
+        this.recordSender = recordSender;
+    }
+	public void run() {
+        Reader.Task taskReader = (Reader.Task) this.getPlugin();
+		taskReader.startRead(recordSender);
+    }
+}
+public class com.alibaba.datax.plugin.reader.hdfsreader.HdfsReader extends Reader {
+	public static class Task extends Reader.Task {
+		public void startRead(RecordSender recordSender) {
+            for (String sourceFile : this.sourceFiles) {
+                if(specifiedFileType.equalsIgnoreCase(Constant.TEXT) || specifiedFileType.equalsIgnoreCase(Constant.CSV)) {
+                    InputStream inputStream = dfsUtil.getInputStream(sourceFile);
+                    UnstructuredStorageReaderUtil.readFromStream(inputStream, sourceFile, this.taskConfig, recordSender, this.getTaskPluginCollector());
+                }
+            }
+        }
+	}
+}
+
+public class com.alibaba.datax.plugin.unstructuredstorage.reader.UnstructuredStorageReaderUtil {
+
+	public static void readFromStream(InputStream inputStream, String context, Configuration readerSliceConfig, RecordSender recordSender, TaskPluginCollector taskPluginCollector) {
+		UnstructuredStorageReaderUtil.doReadFromStream(reader, context, readerSliceConfig, recordSender, taskPluginCollector);
+	}
+	public static void doReadFromStream(BufferedReader reader, String context, Configuration readerSliceConfig, RecordSender recordSender, TaskPluginCollector taskPluginCollector) {
+		csvReader = new CsvReader(reader);
+		csvReader.setDelimiter(fieldDelimiter);
+		while ((parseRows = UnstructuredStorageReaderUtil.splitBufferedReader(csvReader)) != null) {
+			UnstructuredStorageReaderUtil.transportOneRecord(recordSender, column, parseRows, nullFormat, taskPluginCollector);
+		}
+	}
+	public static Record transportOneRecord(RecordSender recordSender, List<ColumnEntry> columnConfigs, String[] sourceLine, String nullFormat, TaskPluginCollector taskPluginCollector) {
+		Record record = recordSender.createRecord();
+		for (ColumnEntry columnConfig : columnConfigs) {
+			recordSender.sendToWriter(record);// 这是把一行数据向下发送了呀
+		}
+		return record;
+	}
+}
+
+public class com.alibaba.datax.core.transport.exchanger.BufferedRecordExchanger implements RecordSender, RecordReceiver {
+	public void flush() {
+		this.channel.pushAll(this.buffer);
+		this.buffer.clear();
+		this.bufferIndex = 0;
+		this.memoryBytes.set(0);
+	}
+
+	public void sendToWriter(Record record) {
+		boolean isFull = (this.bufferIndex >= this.bufferSize || this.memoryBytes.get() + record.getMemorySize() > this.byteCapacity);
+		if (isFull) { flush(); }
+		this.buffer.add(record);
+		this.bufferIndex++;
+		memoryBytes.addAndGet(record.getMemorySize());
+	}
+	public Record getFromReader() {
+		boolean isEmpty = (this.bufferIndex >= this.buffer.size());
+		if (isEmpty) { receive(); }
+		Record record = this.buffer.get(this.bufferIndex++);
+		return record;
+	}
+	private void receive() {
+		this.channel.pullAll(this.buffer);
+		this.bufferIndex = 0;
+		this.bufferSize = this.buffer.size();
+	}
+}
+public class com.alibaba.datax.core.taskgroup.runner.WriterRunner extends AbstractRunner implements Runnable {
+    private RecordReceiver recordReceiver;
+    public void setRecordReceiver(RecordReceiver receiver) {
+        this.recordReceiver = receiver;
+    }
+	public void run() {
+        Writer.Task taskWriter = (Writer.Task) this.getPlugin();
+        PerfRecord channelWaitRead = new PerfRecord(getTaskGroupId(), getTaskId(), PerfRecord.PHASE.WAIT_READ_TIME);
+		channelWaitRead.start();
+		taskWriter.startWrite(recordReceiver);
+    }
+}
+
+public class com.alibaba.datax.plugin.writer.streamwriter.StreamWriter extends Writer {
+	public static class Task extends Writer.Task {
+		public void startWrite(RecordReceiver recordReceiver) {
+			BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(System.out, "UTF-8"));
+			while ((record = recordReceiver.getFromReader()) != null) {
+				writer.write(recordToString(record));
+			}
+			writer.flush();
+        }
+	}
+}
+public abstract class com.alibaba.datax.core.transport.channel.Channel {
+    public void pushAll(final Collection<Record> rs) {
+        Validate.notNull(rs);
+        Validate.noNullElements(rs);
+        this.doPushAll(rs);
+        this.statPush(rs.size(), this.getByteSize(rs));
+    }
+
+    public void pullAll(final Collection<Record> rs) {
+        Validate.notNull(rs);
+        this.doPullAll(rs);
+        this.statPull(rs.size(), this.getByteSize(rs));
+    }
+}
+public class com.alibaba.datax.core.transport.channel.memory.MemoryChannel extends Channel {
+	protected void doPush(Record r) {
+		this.queue.put(r);
+	}
+	protected void doPushAll(Collection<Record> rs) {
+		try {
+			this.queue.addAll(rs);
+			lock.lockInterruptibly();
+			int bytes = getRecordBytes(rs);
+			while (memoryBytes.get() + bytes > this.byteCapacity || rs.size() > this.queue.remainingCapacity()) {
+				notInsufficient.await(200L, TimeUnit.MILLISECONDS);
+            }
+			memoryBytes.addAndGet(bytes);
+			notEmpty.signalAll();
+		} catch (InterruptedException e) { } finally {
+			lock.unlock();
+		}
+	}
+	protected void doPullAll(Collection<Record> rs) {
+		assert rs != null;
+		rs.clear();
+		try {
+			long startTime = System.nanoTime();
+			lock.lockInterruptibly();
+			while (this.queue.drainTo(rs, bufferSize) <= 0) {
+				notEmpty.await(200L, TimeUnit.MILLISECONDS);
+			}
+			waitReaderTime += System.nanoTime() - startTime;
+			int bytes = getRecordBytes(rs);
+			memoryBytes.addAndGet(-bytes);
+			notInsufficient.signalAll();
+		} catch (InterruptedException e) { throw DataXException.asDataXException(FrameworkErrorCode.RUNTIME_ERROR, e);
+		} finally {
+			lock.unlock();
+		}
+	}
+}

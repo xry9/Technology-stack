@@ -1,0 +1,44 @@
+1、
+select dept,sum(age) from db.emp group by dept;
+10184===TableScanOperator-TS[0]-855206842[GroupByOperator-GBY[1]-628599133[ReduceSinkOperator-RS[2]-225507106[GroupByOperator-GBY[3]-2127123542[SelectOperator-SEL[4]-1695301724[FileSinkOperator-FS[5]-601520619]]]]] ===true
+10186===TableScanOperator-TS[0]-855206842[GroupByOperator-GBY[1]-628599133[ReduceSinkOperator-RS[2]-225507106[GroupByOperator-GBY[3]-2127123542[FileSinkOperator-FS[5]-601520619]]]] 
+
+select concat(dept,'-','dept'),sum(age) from db.emp group by dept;
+10184===TableScanOperator-TS[0]-104105431[GroupByOperator-GBY[1]-2083220171[ReduceSinkOperator-RS[2]-1012975233[GroupByOperator-GBY[3]-113676940[SelectOperator-SEL[4]-2061011390[FileSinkOperator-FS[5]-1836531952]]]]] ===true
+10186===TableScanOperator-TS[0]-104105431[GroupByOperator-GBY[1]-2083220171[ReduceSinkOperator-RS[2]-1012975233[GroupByOperator-GBY[3]-113676940[SelectOperator-SEL[4]-2061011390[FileSinkOperator-FS[5]-1836531952]]]]] 
+
+select dept,collect_set(concat(age,'-','s')) from db.emp group by dept;
+10184===TableScanOperator-TS[0]-6650683[GroupByOperator-GBY[1]-1211533832[ReduceSinkOperator-RS[2]-967306405[GroupByOperator-GBY[3]-637365534[SelectOperator-SEL[4]-2120115571[FileSinkOperator-FS[5]-1182463628]]]]] ===true
+10186===TableScanOperator-TS[0]-6650683[GroupByOperator-GBY[1]-1211533832[ReduceSinkOperator-RS[2]-967306405[GroupByOperator-GBY[3]-637365534[FileSinkOperator-FS[5]-1182463628]]]] 
+
+TableScanOperator 与 GroupByOperator 之间不会插入 SelectOperator, 因为可以把对 field 的函数操作加到 ReduceSinkOperator 的函数上
+
+2、select e.id,d.addr from db.emp_min e left join db.dept_min d on e.dept=d.id;
+
+TableScanOperator-TS[0]-587142002[
+	ReduceSinkOperator-RS[2]-2106614863[
+		JoinOperator-JOIN[4]-1862077038[
+			SelectOperator-SEL[5]-776916472[FileSinkOperator-FS[6]-657626056]
+		]
+	]
+]
+TableScanOperator-TS[1]-333281415[
+	ReduceSinkOperator-RS[3]-302256620[
+		JoinOperator-JOIN[4]-1862077038[
+			SelectOperator-SEL[5]-776916472[FileSinkOperator-FS[6]-657626056]
+		]
+	]
+]
+
+3、
+select e.id,d.addr from db.emp_min e left join db.dept_min d on e.dept=d.id union all select e.id,d.addr from db.emp_max e left join db.dept_max d on e.dept=d.id;
+  -- 两个 rootTask
+select e.id,d.addr from db.emp_min e left join (select id,addr,count(1) from db.dept_min group by id, addr) d on e.dept=d.id;
+  -- 一个 rootTask
+4、所料不错 task 依赖是在这里完成的
+select sid,sum(age) from (select age,sum(id) sid from db.emp_min group by age)t group by sid;
+public final class org.apache.hadoop.hive.ql.optimizer.GenMapRedUtils {
+	private static void splitTasks(ReduceSinkOperator op, Task<? extends Serializable> parentTask, Task<? extends Serializable> childTask, GenMRProcContext opProcCtx) throws SemanticException {
+		parentTask.addDependentTask(childTask);
+	}
+}

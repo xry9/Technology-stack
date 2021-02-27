@@ -1,0 +1,48 @@
+https://blog.csdn.net/weixin_40802676/article/details/106851345
+
+http://cxy7.com/articles/2017/11/10/1510310104765.html	--hive 血缘
+	http://lxw1234.com/archives/2015/09/476.htm
+
+https://blog.csdn.net/thwsir/article/details/86480956 -- presto 编译引起
+	https://baijiahao.baidu.com/s?id=1666437918312235143&wfr=spider&for=pc
+	http://www.10qianwan.com/articledetail/206558.html
+
+https://blog.csdn.net/hellozhxy/article/details/82687863	--特征工程
+https://www.cnblogs.com/ling1995/p/7339424.html	--hive
+
+
+https://www.cnblogs.com/mq0036/p/11187138.html	--抓包
+	https://www.jianshu.com/p/c9750cd1c8c6?utm_campaign=maleskine&utm_content=note&utm_medium=seo_notes&utm_source=recommendation
+	https://blog.csdn.net/gui951753/article/details/79503650
+	https://blog.csdn.net/a627088424/article/details/47421531
+https://www.cnblogs.com/jianyungsun/p/9261632.html	--MPP
+	https://www.jianshu.com/p/fb18dae3340b
+	https://blog.csdn.net/fervor_heart/article/details/8889037
+	
+https://www.easyice.cn/archives/332?utm_source=tuicool&utm_medium=referral	--es
+
+https://my.oschina.net/u/4408529/blog/3239567	-- nio 源码
+	http://imushan.com/2018/08/01/java/language/JDK%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-InterruptibleChannel%E4%B8%8E%E5%8F%AF%E4%B8%AD%E6%96%ADIO/
+
+https://blog.csdn.net/qq_31967569/article/details/102953756 --epoll
+
+https://blog.csdn.net/iter_zc/article/details/39959563	--jvm
+https://www.jianshu.com/p/aaf769fdbd20	--ConcurrentHashMap
+https://www.iteye.com/blog/lyb520320-720478	--JAAS
+https://blog.csdn.net/sky_jiangcheng/article/details/81070240	--kerbos
+https://www.cnblogs.com/onepixel/articles/7674659.html	--排序
+http://www.blogchong.com/post/data_mining_20141202.html	--mapreduce 排序
+http://www.hollischuang.com/archives/943	--事务
+https://www.cnblogs.com/chenyangyao/p/5269622.html	--内存屏障
+https://mp.weixin.qq.com/s/800RieJs06kpc9l-_b9LvQ	--物化
+https://baijiahao.baidu.com/s?id=1651811922803043004&wfr=spider&for=pc	--物化
+https://blog.csdn.net/lin443514407lin/article/details/86472938	--spark transform
+
+https://mp.weixin.qq.com/s?__biz=MzUyMDA4OTY3MQ==&mid=2247487159&amp;idx=1&amp;sn=115e1e9434e473022315cfc915ee5907&source=41#wechat_redirect	--kafka 消费者的三种语义
+
+https://cloud.tencent.com/developer/article/1149669	--kafka
+https://www.cnblogs.com/huxi2b/p/6223228.html	--kafka
+https://mp.weixin.qq.com/s?__biz=MzA3MDY0NTMxOQ==&mid=2247485744&idx=1&sn=42cdc89f5318519ec07fb81c2bd28f54&chksm=9f38ea18a84f630e448c0eb5fe1a43eaac6ee227ef85d063f66a378e1293923740797a8a3ec5&mpshare=1&scene=1&srcid=1118IM0hjg7hnQgXb6ZcjpIo#rd	--kafka
+https://blog.csdn.net/BULpreZHt1ImlN4N/article/details/84801437	--go
+https://github.com/Gourouting/singo	--go
+https://zhuanlan.zhihu.com/p/79665055	--spark

@@ -1,0 +1,5 @@
+hadoop 与 hbase RPC 对比：
+1、hbase 只支持 PB 一种框架, 处理起来很简单，没比一个 Demo 程序复杂太多。而 hadoop 除 PB 外还支持 writeable RPC 引擎, 是不是这个原因才让 hadoop 必须要有
+各种协议接口, 而各种接口的存在才导致了动态代理的引入。
+2、hadoop 的 RPC 协议接口中只有 TaskUmbilicalProtocol 协议(mr 中用到)用 writeable 引擎实现, 什么原因呢, 是为了支持多语言 mr? 好像也解释不通
+3、简单总结一下, hadoop 中的 PB 只用了类序列化部分, callBlockingMethod 那块即便用了也是很少我没看到

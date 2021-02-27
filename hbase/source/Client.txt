@@ -1,0 +1,482 @@
+create_namespace 'nametest'
+drop_namespace 'nametest'
+describe_namespace 'nametest'
+list_namespace
+
+
+1、去 zk 中查到 HRegionLocation(region=hbase:meta,,...)
+2、scan meta 表得到 HRegionLocation(region=tab,,...)
+3、HConnectionImplementation.getClient(final ServerName sn) 方法的返回值是 ClientService.BlockingInterface, 所以说此 connection只是 rpc 的
+句柄, 内还有 HRegionLocation, 需要连zk. 而 rpc 连接里才会有 socket, 可以认为是两级线程与两级连接, batchPool 是维护 rpc 请求的线程池, 而 RpcClientImpl.Connection 
+即是一个线程, ConnectionId(User ticket, String serviceName, InetSocketAddress address) 对应一个 connection
+  a. 第一级 Connection 的使命更大, 需要维护的太多, 第二级只需要一个 ServerName 就行了, 什么都不用操心了
+  b. 那个 batchPool 好像连 zk 时用了多线程, 一开始还没想明白, 其实连 zk 最好是多个连接的
+  
+5、如果遇到 region 不在此 regionServer 中是会抛一个异常吧, 否则客户端没法感觉到 region 与 regionServer 之间关系变了
+  果然 org.apache.hadoop.hbase.regionserver.HRegionServer#getRegionByEncodedName(byte[], java.lang.String) 这里有体现
+6、细看没看太懂, 猜测一下吧, 首先 retry 这个机制很好
+  只要不是第 0 次, 就要 reload
+  每次 retry 时, RetryingCallerInterceptor 都会拦截, 判断需不需要 throws PreemptiveFastFailException
+  我自行脑补的: 如果 server 坏了, 连续失败又超过了 1min, 就要抛异常了
+7、协处理器 客户端需要调用 HTable#coprocessorService, 里面 getStartKeysInRange(startKey, endKey); 获取相应的所有 region, 然后对每个 region 都
+  RegionCoprocessorRpcChannel channel = new RegionCoprocessorRpcChannel(connection, tableName, r); 此 channel 就是 BlockingRpcChannel
+  在 RegionCoprocessorRpcChannel 中对真正要调用的用户自定义方法进行了一个转换, 执行了 execService CoprocessorServiceRequest, 此 request 包含
+  ClientProtos.CoprocessorServiceCall call = CoprocessorRpcUtils.buildServiceCall(row, method, request);// 真的 method request
+  在服务端是这样的 RSRpcServices.execService--> RSRpcServices.execServiceOnRegion --> HRegion.execService --> RowCountEndpoint.getRowCount
+  
+public class MyDemo {
+	static Configuration conf ;
+	public static Connection conn;
+	static {
+		conf = HBaseConfiguration.create();
+		conf.set("hbase.zookeeper.quorum", "localhost");
+		conn = ConnectionFactory.createConnection(conf);
+	}
+	public static void main(String[] args) throws IOException {
+		Table table = conn.getTable(TableName.valueOf("tab"));
+		Get get = new Get(Bytes.toBytes("r1"));
+		Result result = table.get(get);
+	}
+}
+
+public class org.apache.hadoop.hbase.client.ConnectionFactory {
+	public static Connection createConnection(Configuration conf) throws IOException {
+		return createConnection(conf, null, null);
+	}
+	public static Connection createConnection(Configuration conf, ExecutorService pool, User user) throws IOException {
+		return createConnection(conf, false, pool, user);
+	}
+	static Connection createConnection(final Configuration conf, final boolean managed, final ExecutorService pool, final User user) throws IOException {
+		String className = conf.get(HConnection.HBASE_CLIENT_CONNECTION_IMPL, ConnectionManager.HConnectionImplementation.class.getName());
+		Class<?> clazz = Class.forName(className);// org.apache.hadoop.hbase.client.ConnectionManager.HConnectionImplementation
+		Constructor<?> constructor = clazz.getDeclaredConstructor(Configuration.class, boolean.class, ExecutorService.class, User.class);
+		return (Connection) constructor.newInstance(conf, managed, pool, user);
+	}
+}
+
+class org.apache.hadoop.hbase.client.ConnectionManager {
+	static class HConnectionImplementation implements ClusterConnection, Closeable {
+		HConnectionImplementation(Configuration conf, boolean managed, ExecutorService pool, User user) throws IOException {
+			this.conf = conf;
+			this.user = user;
+			this.batchPool = pool;
+			this.stats = ServerStatisticTracker.create(conf);
+			this.interceptor = (new RetryingCallerInterceptorFactory(conf)).build();
+			this.rpcControllerFactory = RpcControllerFactory.instantiate(conf);
+			this.rpcCallerFactory = RpcRetryingCallerFactory.instantiate(conf, interceptor, this.stats);
+			this.rpcClient = RpcClientFactory.createClient(this.conf, this.clusterId, this.metrics);// org.apache.hadoop.hbase.ipc.RpcClientImpl
+			this.registry = setupRegistry();
+		}
+		private Registry setupRegistry() throws IOException {
+			return RegistryFactory.getRegistry(this);
+		}
+		public HTableInterface getTable(TableName tableName) throws IOException {
+			return getTable(tableName, getBatchPool());
+		}
+		public HTableInterface getTable(TableName tableName, ExecutorService pool) throws IOException {
+			return new HTable(tableName, this, connectionConfig, rpcCallerFactory, rpcControllerFactory, pool);
+		}
+		private ExecutorService getBatchPool() {
+			this.batchPool = getThreadPool(conf.getInt("hbase.hconnection.threads.max", 256), conf.getInt("hbase.hconnection.threads.core", 256), "-shared-", null);
+			return this.batchPool;
+		}
+		public RegionLocator getRegionLocator(TableName tableName) throws IOException {
+			return new HRegionLocator(tableName, this);
+		}
+		public HRegionLocation getRegionLocation(final TableName tableName, final byte [] row, boolean reload) throws IOException {
+			return reload? relocateRegion(tableName, row): locateRegion(tableName, row);// false
+		}
+		public HRegionLocation locateRegion(final TableName tableName, final byte[] row) throws IOException{
+			RegionLocations locations = locateRegion(tableName, row, true, true);
+			return locations == null ? null : locations.getRegionLocation();
+		}
+		public RegionLocations locateRegion(final TableName tableName, final byte [] row, boolean useCache, boolean retry) throws IOException {
+			return locateRegion(tableName, row, useCache, retry, RegionReplicaUtil.DEFAULT_REPLICA_ID);
+		}
+		public RegionLocations locateRegion(final TableName tableName, final byte [] row, boolean useCache, boolean retry, int replicaId) throws IOException {
+			if (tableName.equals(TableName.META_TABLE_NAME)) {
+				return locateMeta(tableName, useCache, replicaId);
+			} else {
+				return locateRegionInMeta(tableName, row, useCache, retry, replicaId);
+			}
+		}
+		// 这里貌似有两层查询
+		private RegionLocations locateRegionInMeta(TableName tableName, byte[] row, boolean useCache, boolean retry, int replicaId) throws IOException {
+			byte[] metaKey = HRegionInfo.createRegionName(tableName, row, HConstants.NINES, false);
+			Scan s = new Scan();// 这个太重要了吧
+			s.setReversed(true);
+			s.setStartRow(metaKey);
+			s.setSmall(true);
+			s.setCaching(1);
+			for (int tries = 0; true; tries++) {
+				Result regionInfoRow = null;
+				ReversedClientScanner rcs = new ClientSmallReversedScanner(conf, s, TableName.META_TABLE_NAME, this, rpcCallerFactory, rpcControllerFactory, getMetaLookupPool(), 0);
+				regionInfoRow = rcs.next();
+				RegionLocations locations = MetaTableAccessor.getRegionLocations(regionInfoRow);// 解析 result 成 RegionLocations 的静态方法
+				HRegionInfo regionInfo = locations.getRegionLocation(replicaId).getRegionInfo();
+				ServerName serverName = locations.getRegionLocation(replicaId).getServerName();
+				cacheLocation(tableName, locations);
+				return locations;
+			}
+		}
+		private RegionLocations locateMeta(final TableName tableName, boolean useCache, int replicaId) throws IOException {
+			locations = this.registry.getMetaRegionLocation();// Look up from zookeeper
+			return locations;
+		}
+		public ClientService.BlockingInterface getClient(final ServerName sn) throws IOException {
+			String key = getStubKey(ClientService.BlockingInterface.class.getName(), sn.getHostname(), sn.getPort(), this.hostnamesCanChange);
+			ClientService.BlockingInterface stub = (ClientService.BlockingInterface)this.stubs.get(key);
+			if (stub == null) { // 再往后是 RPC 内容了
+				BlockingRpcChannel channel = this.rpcClient.createBlockingRpcChannel(sn, user, rpcTimeout);
+				stub = ClientService.newBlockingStub(channel);
+				this.stubs.put(key, stub);
+			}
+			return stub;
+		}
+	}
+	private ExecutorService getThreadPool(int maxThreads, int coreThreads, String nameHint, BlockingQueue<Runnable> passedWorkQueue) {
+		BlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<Runnable>(maxThreads * conf.getInt(HConstants.HBASE_CLIENT_MAX_TOTAL_TASKS, HConstants.DEFAULT_HBASE_CLIENT_MAX_TOTAL_TASKS));
+		ThreadPoolExecutor tpe = new ThreadPoolExecutor(coreThreads, maxThreads, keepAliveTime, TimeUnit.SECONDS, workQueue, Threads.newDaemonThreadFactory(toString() + nameHint));
+		return tpe;
+	}
+}
+public class org.apache.hadoop.hbase.client.HTable implements HTableInterface, RegionLocator {
+	public HTable(TableName tableName, final ClusterConnection connection, final ConnectionConfiguration tableConfig, final RpcRetryingCallerFactory rpcCallerFactory, final RpcControllerFactory rpcControllerFactory, final ExecutorService pool) throws IOException {
+		this.tableName = tableName;
+		this.connection = connection;
+		this.pool = pool;
+	}	
+	public Result get(final Get get) throws IOException {
+		return get(get, get.isCheckExistenceOnly());
+	}
+	private Result get(Get get, final boolean checkExistenceOnly) throws IOException {
+		final Get getReq = get;
+		RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection, getName(), get.getRow()) {
+			public Result call(int callTimeout) throws IOException {
+				ClientProtos.GetRequest request = RequestConverter.buildGetRequest(getLocation().getRegionInfo().getRegionName(), getReq);
+				PayloadCarryingRpcController controller = rpcControllerFactory.newController();
+				controller.setPriority(tableName);
+				controller.setCallTimeout(callTimeout);
+				ClientProtos.GetResponse response = getStub().get(controller, request);
+				return ProtobufUtil.toResult(response.getResult(), controller.cellScanner());// 结果中包含了一个 cellScanner
+			}
+		};
+		return rpcCallerFactory.<Result>newCaller(rpcTimeout).callWithRetries(callable, this.operationTimeout);
+	}
+}
+
+public class org.apache.hadoop.hbase.client.RpcRetryingCallerFactory {
+	public RpcRetryingCallerFactory(Configuration conf, RetryingCallerInterceptor interceptor) {
+		this.conf = conf;
+		pause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE, HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
+		retries = conf.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
+		this.interceptor = interceptor;
+	}
+	public <T> RpcRetryingCaller<T> newCaller(int rpcTimeout) {
+		RpcRetryingCaller<T> caller = new RpcRetryingCaller<T>(pause, retries, interceptor, startLogErrorsCnt, rpcTimeout);
+		return caller;
+	}
+	public static RpcRetryingCallerFactory instantiate(Configuration configuration, RetryingCallerInterceptor interceptor, ServerStatisticTracker stats) {
+		RpcRetryingCallerFactory factory = new RpcRetryingCallerFactory(configuration, interceptor);
+		return factory;
+	}
+	public <T> RpcRetryingCaller<T> newCaller() {
+		RpcRetryingCaller<T> caller = new RpcRetryingCaller<T>(pause, retries, interceptor, startLogErrorsCnt, rpcTimeout);
+		return caller;
+	}
+}
+
+public class org.apache.hadoop.hbase.client.RpcRetryingCaller<T> {
+	public RpcRetryingCaller(long pause, int retries, RetryingCallerInterceptor interceptor, int startLogErrorsCnt, int rpcTimeout) {
+		this.interceptor = interceptor;
+	}
+	public T callWithRetries(RetryingCallable<T> callable, int callTimeout) throws IOException, RuntimeException {
+		List<RetriesExhaustedException.ThrowableWithExtraContext> exceptions = new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
+		context.clear();
+		for (int tries = 0;; tries++) {
+			callable.prepare(tries != 0);
+			interceptor.intercept(context.prepare(callable, tries));
+			return callable.call(getTimeout(callTimeout));
+		}
+	}
+	public T callWithoutRetries(RetryingCallable<T> callable, int callTimeout) throws IOException, RuntimeException {
+		this.globalStartTime = EnvironmentEdgeManager.currentTime();
+		callable.prepare(false);
+		return callable.call(callTimeout);
+	}
+}
+
+public abstract class RegionServerCallable<T> implements RetryingCallable<T> {
+	protected HRegionLocation location;
+	public RegionServerCallable(Connection connection, TableName tableName, byte [] row) {
+		this.connection = connection;
+		this.tableName = tableName;
+		this.row = row;
+	}
+	public void prepare(final boolean reload) throws IOException {
+		try (RegionLocator regionLocator = connection.getRegionLocator(tableName)) {// 这种写法太奇葩, 
+			this.location = regionLocator.getRegionLocation(row);
+		}
+		setStub(getConnection().getClient(this.location.getServerName()));// 准备查目标表
+	}
+	void setStub(final ClientService.BlockingInterface stub) {
+		this.stub = stub;
+	}
+}
+public interface org.apache.hadoop.hbase.client.RetryingCallable<T> {
+	void prepare(final boolean reload) throws IOException;
+	T call(int callTimeout) throws Exception;
+}
+public class org.apache.hadoop.hbase.client.HRegionLocator implements RegionLocator {
+	private final TableName tableName;
+	private final ClusterConnection connection;
+	public HRegionLocator(TableName tableName, ClusterConnection connection) {
+		this.connection = connection;
+		this.tableName = tableName;
+	}
+	public HRegionLocation getRegionLocation(final byte [] row) throws IOException {
+		return connection.getRegionLocation(tableName, row, false);
+	}
+}
+public class org.apache.hadoop.hbase.client.ClientSmallReversedScanner extends ReversedClientScanner {
+	private ScannerCallableWithReplicas smallScanCallable = null;
+	public ClientSmallReversedScanner(final Configuration conf, final Scan scan, final TableName tableName, ClusterConnection connection, RpcRetryingCallerFactory rpcFactory, RpcControllerFactory controllerFactory, ExecutorService pool, int primaryOperationTimeout) throws IOException {
+		this(conf, scan, tableName, connection, rpcFactory, controllerFactory, pool, primaryOperationTimeout, new SmallScannerCallableFactory());
+	}
+	ClientSmallReversedScanner(final Configuration conf, final Scan scan, final TableName tableName, ClusterConnection connection, RpcRetryingCallerFactory rpcFactory, RpcControllerFactory controllerFactory, ExecutorService pool, int primaryOperationTimeout, SmallScannerCallableFactory callableFactory) throws IOException {
+		super(conf, scan, tableName, connection, rpcFactory, controllerFactory, pool,
+		primaryOperationTimeout);
+		this.callableFactory = callableFactory;
+	}
+	public Result next() throws IOException {
+		if (cache.size() == 0) {
+			loadCache();
+		}
+		return cache.poll();
+	}
+	private boolean nextScanner(int nbRows, final boolean done, boolean currentRegionDone) throws IOException {
+		byte[] localStartKey;
+		smallScanCallable = callableFactory.getCallable(getConnection(), getTable(), scan, getScanMetrics(), localStartKey, cacheNum, rpcControllerFactory, getPool(), getPrimaryOperationTimeout(), getRetries(), getScannerTimeout(), getConf(), caller);
+		return true;
+	}
+	protected void loadCache() throws IOException {
+		Result[] values = null;
+		long remainingResultSize = maxScannerResultSize;
+		int countdown = this.caching;
+		boolean currentRegionDone = false;
+		while (remainingResultSize > 0 && countdown > 0 && nextScanner(countdown, values == null, currentRegionDone)) {
+			values = this.caller.callWithoutRetries(smallScanCallable, scannerTimeout);
+			this.currentRegion = smallScanCallable.getHRegionInfo();
+			long currentTime = System.currentTimeMillis();
+			lastNext = currentTime;
+			if (values != null && values.length > 0) {
+				for (int i = 0; i < values.length; i++) {
+					Result rs = values[i];
+					cache.add(rs);
+					for (Cell cell : rs.rawCells()) {
+						remainingResultSize -= CellUtil.estimatedHeapSizeOf(cell);
+					}
+					countdown--;
+					this.lastResult = rs;
+				}
+			}
+			if (smallScanCallable.hasMoreResultsContext()) {
+				currentRegionDone = !smallScanCallable.getServerHasMoreResults();
+			} else {
+				currentRegionDone = countdown > 0;
+			}
+		}
+	}
+}
+
+public class org.apache.hadoop.hbase.client.ReversedClientScanner extends ClientScanner {
+	public ReversedClientScanner(Configuration conf, Scan scan, TableName tableName, ClusterConnection connection, RpcRetryingCallerFactory rpcFactory, RpcControllerFactory controllerFactory, ExecutorService pool, int primaryOperationTimeout) throws IOException {
+		super(conf, scan, tableName, connection, rpcFactory, controllerFactory, pool,
+		primaryOperationTimeout);
+	}
+}
+
+public class org.apache.hadoop.hbase.client.ClientScanner extends AbstractClientScanner {
+	public ClientScanner(final Configuration conf, final Scan scan, final TableName tableName, ClusterConnection connection, RpcRetryingCallerFactory rpcFactory, RpcControllerFactory controllerFactory, ExecutorService pool, int primaryOperationTimeout) throws IOException {
+		this.scan = scan;
+		this.tableName = tableName;
+		this.connection = connection;
+		this.pool = pool;
+		this.caller = rpcFactory.<Result[]> newCaller();
+		this.rpcControllerFactory = controllerFactory;
+		this.conf = conf;
+	}
+}
+public class org.apache.hadoop.hbase.client.ClientSmallScanner extends ClientScanner {
+	protected static class SmallScannerCallableFactory {
+		public ScannerCallableWithReplicas getCallable(ClusterConnection connection, TableName table, Scan scan, ScanMetrics scanMetrics, byte[] localStartKey, int cacheNum, RpcControllerFactory controllerFactory, ExecutorService pool, int primaryOperationTimeout, int retries, int scannerTimeout, Configuration conf, RpcRetryingCaller<Result[]> caller) {
+			scan.setStartRow(localStartKey);
+			SmallScannerCallable s = new SmallScannerCallable(connection, table, scan, scanMetrics, controllerFactory, cacheNum, 0);
+			ScannerCallableWithReplicas scannerCallableWithReplicas = new ScannerCallableWithReplicas(table, connection, s, pool, primaryOperationTimeout, scan, retries, scannerTimeout, cacheNum, conf, caller);
+			return scannerCallableWithReplicas;
+		}
+	}
+	static class SmallScannerCallable extends ScannerCallable {
+		public SmallScannerCallable(ClusterConnection connection, TableName table, Scan scan, ScanMetrics scanMetrics, RpcControllerFactory controllerFactory, int caching, int id) {
+			super(connection, table, scan, scanMetrics, controllerFactory, id);
+			this.setCaching(caching);
+		}
+		public Result[] call(int timeout) throws IOException {
+			// 此处的 regionName 是 meta 表的 region
+			ScanRequest request = RequestConverter.buildScanRequest(getLocation().getRegionInfo().getRegionName(), getScan(), getCaching(), true);
+			ScanResponse response = null;
+			controller = controllerFactory.newController();
+			controller.setPriority(getTableName());
+			controller.setCallTimeout(timeout);
+			response = getStub().scan(controller, request);
+			Result[] results = ResponseConverter.getResults(controller.cellScanner(), response);
+			updateResultsMetrics(results);
+			return results;
+		}
+	}
+}
+
+class org.apache.hadoop.hbase.client.ScannerCallableWithReplicas implements RetryingCallable<Result[]> {
+	public ScannerCallableWithReplicas(TableName tableName, ClusterConnection cConnection, ScannerCallable baseCallable, ExecutorService pool, int timeBeforeReplicas, Scan scan, int retries, int scannerTimeout, int caching, Configuration conf, RpcRetryingCaller<Result []> caller) {
+		this.currentScannerCallable = baseCallable;
+		this.cConnection = cConnection;
+		this.pool = pool;
+		this.scan = scan;
+		this.tableName = tableName;
+		this.caller = caller;
+	}
+	public void prepare(boolean reload) throws IOException {}
+	// 此方法中完成了连 zk, 并返回真正的 region
+	public Result [] call(int timeout) throws IOException {
+		if (currentScannerCallable != null && currentScannerCallable.closed) {
+			Result[] r = currentScannerCallable.call(timeout);
+			currentScannerCallable = null;
+			return r;
+		}
+		// tableName --> hbase:meta, 这里是去 zk 查数据了, 如果 meta 表传入 row 后面其实用不到, 需要返回 meta 表的所有 region, 
+		// 毕竟查任何表时都要知道 region 才能查
+		RegionLocations rl = RpcRetryingCallerWithReadReplicas.getRegionLocations(true, RegionReplicaUtil.DEFAULT_REPLICA_ID, cConnection, tableName, currentScannerCallable.getRow());
+		// pool 线程池似乎这里才用到 
+		ResultBoundedCompletionService<Pair<Result[], ScannerCallable>> cs = new ResultBoundedCompletionService<Pair<Result[], ScannerCallable>>(RpcRetryingCallerFactory.instantiate(ScannerCallableWithReplicas.this.conf), pool, rl.size() * 5);
+		AtomicBoolean done = new AtomicBoolean(false);
+		replicaSwitched.set(false);
+		addCallsForCurrentReplica(cs, rl);
+		Future<Pair<Result[], ScannerCallable>> f = cs.poll(timeBeforeReplicas, TimeUnit.MICROSECONDS); // Yes, microseconds
+		if (f != null) {
+			Pair<Result[], ScannerCallable> r = f.get(timeout, TimeUnit.MILLISECONDS);
+			if (r != null && r.getSecond() != null) {
+				updateCurrentlyServingReplica(r.getSecond(), r.getFirst(), done, pool);
+			}
+			return r == null ? null : r.getFirst(); //great we got a response
+		}
+		addCallsForOtherReplicas(cs, rl, 0, rl.size() - 1);
+		Future<Pair<Result[], ScannerCallable>> f = cs.poll(timeout, TimeUnit.MILLISECONDS);
+		if (f != null) {
+			Pair<Result[], ScannerCallable> r = f.get(timeout, TimeUnit.MILLISECONDS);
+			if (r != null && r.getSecond() != null) {
+				updateCurrentlyServingReplica(r.getSecond(), r.getFirst(), done, pool);
+			}
+			return r == null ? null : r.getFirst(); // great we got an answer
+		} else {
+		}
+	}
+  
+	private void addCallsForCurrentReplica(ResultBoundedCompletionService<Pair<Result[], ScannerCallable>> cs, RegionLocations rl) {
+		RetryingRPC retryingOnReplica = new RetryingRPC(currentScannerCallable);
+		outstandingCallables.add(currentScannerCallable);
+		cs.submit(retryingOnReplica, scannerTimeout, currentScannerCallable.id);
+	}
+	class RetryingRPC implements RetryingCallable<Pair<Result[], ScannerCallable>>, Cancellable {
+		RetryingRPC(ScannerCallable callable) {
+			this.callable = callable;
+			this.caller = ScannerCallableWithReplicas.this.caller;
+		}
+		public Pair<Result[], ScannerCallable> call(int callTimeout) throws IOException {
+			Result[] res = this.caller.callWithoutRetries(this.callable, callTimeout);
+			return new Pair<Result[], ScannerCallable>(res, this.callable);
+		}
+		public void prepare(boolean reload) throws IOException {
+			callable.prepare(reload);
+		}
+	}
+}
+
+public class org.apache.hadoop.hbase.client.ResultBoundedCompletionService<V> {
+	public ResultBoundedCompletionService(RpcRetryingCallerFactory retryingCallerFactory, Executor executor, int maxTasks) {
+		this.retryingCallerFactory = retryingCallerFactory;
+		this.executor = executor;
+		this.tasks = new QueueingFuture[maxTasks];
+	}
+	public void submit(RetryingCallable<V> task, int callTimeout, int id) {
+		QueueingFuture<V> newFuture = new QueueingFuture<V>(task, callTimeout);
+		executor.execute(Trace.wrap(newFuture));
+		tasks[id] = newFuture;
+	}
+	public QueueingFuture<V> poll(long timeout, TimeUnit unit) throws InterruptedException {
+		if (completed == null && !cancelled) unit.timedWait(tasks, timeout);
+		return completed;
+	}
+	class QueueingFuture<T> implements RunnableFuture<T> {
+		public QueueingFuture(RetryingCallable<T> future, int callTimeout) {
+			this.future = future;
+			this.callTimeout = callTimeout;
+			this.retryingCaller = retryingCallerFactory.<T>newCaller();// org.apache.hadoop.hbase.client.RpcRetryingCaller
+		}
+		public void run() {
+			result = this.retryingCaller.callWithRetries(future, callTimeout);
+			resultObtained = true;
+			if (!cancelled && completed == null) {
+				completed = (QueueingFuture<V>) QueueingFuture.this;
+			}
+			tasks.notify();
+		}
+	}
+}
+public class org.apache.hadoop.hbase.client.ScannerCallable extends RegionServerCallable<Result[]> {
+	protected final ClusterConnection cConnection;
+	public ScannerCallable (ClusterConnection connection, TableName tableName, Scan scan, ScanMetrics scanMetrics, RpcControllerFactory rpcControllerFactory, int id) {
+		super(connection, tableName, scan.getStartRow());
+		this.id = id;
+		this.cConnection = connection;
+		this.scan = scan;
+	}
+	public void prepare(boolean reload) throws IOException {
+		RegionLocations rl = RpcRetryingCallerWithReadReplicas.getRegionLocations(!reload, id, getConnection(), getTableName(), getRow());
+		location = id < rl.size() ? rl.getRegionLocation(id) : null;
+		ServerName dest = location.getServerName();
+		setStub(super.getConnection().getClient(dest));// 准备查 meta 表
+	}
+	public ClusterConnection getConnection() {
+		return cConnection;
+	}
+}
+public class org.apache.hadoop.hbase.client.RpcRetryingCallerWithReadReplicas {
+static RegionLocations getRegionLocations(boolean useCache, int replicaId, ClusterConnection cConnection, TableName tableName, byte[] row) throws RetriesExhaustedException, DoNotRetryIOException, InterruptedIOException {
+    RegionLocations rl = cConnection.locateRegion(tableName, row, useCache, true, replicaId);
+    return rl;
+  }
+}
+
+class org.apache.hadoop.hbase.client.RegistryFactory {
+	static final String REGISTRY_IMPL_CONF_KEY = "hbase.client.registry.impl";
+	static Registry getRegistry(final Connection connection) throws IOException {
+		String registryClass = connection.getConfiguration().get(REGISTRY_IMPL_CONF_KEY, ZooKeeperRegistry.class.getName());
+		Registry registry = (Registry)Class.forName(registryClass).newInstance();
+		registry.init(connection);
+		return registry;
+	}
+}
+
+class ZooKeeperRegistry implements Registry {
+	public RegionLocations getMetaRegionLocation() throws IOException {
+		ZooKeeperKeepAliveConnection zkw = hci.getKeepAliveZooKeeperWatcher();// 是个 watcher 呀
+		List<ServerName> servers = new MetaTableLocator().blockUntilAvailable(zkw, hci.rpcTimeout, hci.getConfiguration());// 不用往里看了，就是连zk getData
+		HRegionLocation[] locs = new HRegionLocation[servers.size()];
+		int i = 0;
+		for (ServerName server : servers) {
+			HRegionInfo h = RegionReplicaUtil.getRegionInfoForReplica(HRegionInfo.FIRST_META_REGIONINFO, i);
+			locs[i++] = new HRegionLocation(h, server, 0);
+		}
+		return new RegionLocations(locs);
+	}
+}

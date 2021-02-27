@@ -1,0 +1,239 @@
+1、彻底说明白 explode 吧, 如果没有其它字段则不需要 lateral view 否则要加
+select explode(split(name,",")) from tab2 ;
+select *,f.* from tab2 lateral view explode(split(name,"")) f;
+
+统计1-12月的累积销量，即1月为1月份的值，2月为1.2月份值的和，3月为123月份的和，12月为1-12月份值的和
+    SELECT  
+    month,
+	SUM(amount) month_amount,  
+    SUM( SUM(amount)) OVER (ORDER BY month ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_amount  
+    FROM table_name  
+    GROUP BY month  
+    ORDER BY month;
+	-- 在 group by sum 的基础上开开窗, 2 个 job, 所以搞出来 sum(sum)
+	--没有 partition by 则 sum 前面所有值, 通过这个现象我也理解 BETWEEN ... AND ... 用法了, 说白了 BETWEEN ... AND 是个窗口, 在组内开窗
+	--说白了, 开窗是对前面的输出结果开窗
+--------
+create table testaa (id int ,month string ,num int )row format delimited fields terminated by ',';
+insert into testaa 
+select  1,'A',100 union all
+select  2,'A',200 union all
+select  3,'A',300 union all
+select  1,'B',1000 union all
+select  2,'B',500 union all
+select  1,'C',10000 union all
+select  4,'A',50  
+
+select id,month,num,sum(num) over(partition by month order by id) from testaa group by id,month,num
+select id,month,num,sum(num) over(partition by month order by id) from testaa
+select id,month,num,sum(num) over(partition by month) from testaa
+select month, sum(num), sum(sum(num)) over(order by month) from testaa group  by month
+--------
+	
+2、关于怎么处理 session 问题:
+大于 5min 表示新 session, 我觉得可以通过一个 udf, 包含两个方法 increment get
+uid time
+1 09:09:09 new
+1 09:09:10 old
+1 09:10:09 old
+1 09:19:09 new
+select if(time - lag(time, -1) over(partition by uid, order by time asc)>5min, udf.increment(), udf.get()) from tab;
+
+3、按城市取 top10, 和全国取 top10
+select city, id, c, row_number() over(partition by city order by c desc) from v_tab; -- one job
+select city, id, c, row_number() over(partition by city order by c desc), row_number() over(order by c desc) from v_tab; --two job 
+--我自己真是想不到这样搞啊, 对谁开窗我之前一直没明白, 第二个 row_number 是对前面结果开窗
+
+4、这个差不多是我遇到的最难的 sql 之一了吧
+表名 online_ft
+user_id entry_time flag(1 进入，0 离开)  
+1001 2020-06-01 00:01:01 1  
+1001 2020-06-01 00:01:03 0  
+1001 2020-06-01 00:01:25 1  
+1002 2020-06-01 00:01:02 1  
+1002 2020-06-01 00:02:02 0  
+1002 2020-06-01 00:03:02 1  
+1003 2020-06-01 00:03:02 1  
+1003 2020-06-01 00:04:02 1
+哪一分钟在线人数达到最高峰
+
+5、留存:
+
+select day, c, (c*1.0/first_value(c) over(order by day asc)) from 
+(select day, count(1)c from 
+  (select t1.id, t2.day from
+    (select id from u_tab where day=1)t1
+    left join
+    u_tab t2
+    on t1.id=t2.id
+  )t group by day
+)t
+;
+3、https://cwiki.apache.org/confluence/display/Hive/LanguageManual+WindowingAndAnalytics
+
+4、ods 层为什么是外表，mysql增加列，删表的话数据没了
+旅行社用户定义：【同天购买相同出行日期相同航线的不同乘机人票数在10~20(包含10和20)且95%的乘机人年龄差不超过5；】这种hive几乎是不能统计的
+鑫哥说 group by id 有空值是不会数据倾斜，因为有默认开启combiner，但是distinct就不行，是在reduce端去重
+7. 怎样决定reducer个数
+Hadoop MapReduce程序中，reducer个数的设定极大影响执行效率，这使得Hive怎样决定reducer个数成为一个关键问题。遗憾的是Hive的估计机制很弱，
+1. hive.exec.reducers.bytes.per.reducer(默认为1000^3)
+2. hive.exec.reducers.max(默认为999)
+计算reducer数的公式很简单：
+N=min(参数2，总输入数据量/参数1)
+
+8. 合并 MapReduce 操作
+Multi-group by 
+Multi-group by是Hive的一个非常好的特性，它使得Hive中利用中间结果变得非常方便。例如:
+FROM (
+  SELECT a.status, b.school, b.gender FROM status_updates a JOIN profiles b ON (a.userid = b.userid and a.ds='2009-03-20' )
+)subq1
+
+INSERT OVERWRITE TABLE gender_summary PARTITION(ds='2009-03-20') SELECT subq1.gender, COUNT(1) GROUP BY subq1.gender
+INSERT OVERWRITE TABLE school_summary PARTITION(ds='2009-03-20') SELECT subq1.school, COUNT(1) GROUP BY subq1.school
+
+上述查询语句使用了Multi-group by特性连续group by了2次数据，使用不同的group by key。这一特性可以减少一次MapReduce操作
+
+Multi-distinct
+Multi-distinct是淘宝开发的另一个multi-xxx特性，使用Multi-distinct可以在同一查询/子查询中使用多个distinct，这同样减少了多次MapReduce操作
+https://www.cnblogs.com/end/archive/2013/01/15/2861432.html
+
+Multi-group by 
+hive.multigroupby.singlemr 要设为 ture, 但是原生不支持, 我觉得利用 cube 函数是不是能做到啊
+淘宝还有个 Multi-distinct, 如果 ditinct 操作很多也是很有用的哈
+
+
+15、应该将条目少的表/子查询放在 Join 操作符的左边。原因是在 Join 操作的 Reduce 阶段，位于 Join 操作符左边的表的内容会被加载进内存，
+将条目少的表放在左边，可以有效减少发生 OOM 错误的几率。我怎么觉得无所谓呀，加内存也只是每个 key 的数据呀，除非数据倾斜了，否则无所谓
+但是别忽略多表相同key的情况
+
+12、map 端 join 解决数据倾斜，如果小表过大，可以采用分片方式，小表分成两个，两个 map 端 join, 本质大表被读两次
+20、
+
+
+6、不执行mapreduce，提高速度 set hive.fetch.task.conversion=more;
+7、distribute by 产生多少个 reduce
+15、distribute by 与 sort by 配合使用时, 在 reduce 结果是个全局排序, 所以造成 distribute by 的列是无序的, 这样并不是我们想要的
+这样用才能达到预期效果 select age, sal from emp cluster by age, sal;
+
+hive.exec.reducers.bytes.per.reducer   ＃这个参数控制一个job会有多少个reducer来处理，依据的是输入文件的总大小。默认1GB。
+hive.exec.reducers.max    ＃这个参数控制最大的reducer的数量， 如果 input / bytes per reduce > max  则会启动这个参数所指定的reduce个数。  这个并不会影响mapre.reduce.tasks参数的设置。默认的max是999。
+mapred.reduce.tasks ＃这个参数如果指定了，hive就不会用它的estimation函数来自动计算reduce的个数，而是用这个参数来启动reducer。默认是-1。
+
+13、
+set hive.groupby.skewindata=true;	--加随机数， 这招别轻易试啊，小表也会搞两个 mr
+select deptno,count(deptno) from emp0 group by deptno;	--会启动两个job
+set hive.optimize.skewjoin=true;
+hive.skewjoin.key=100000 键值对超过这个值则优化
+select e.name,e.salary,d.dname from emp0 e join dept d on e.deptno=d.deptno;	--两个job
+mapred.job.reuse.jvm.num.tasks	jvm 重用, 貌似是 mr 的配置
+
+set hive.auto.convert.join=true;	--自动选择map端join还是reduce，如果为false则为reduce端join
+hive.mapjoin.smalltable.filesize;默认25M
+select e.name,e.salary,d.dname from emp0 e join dept d on e.deptno=d.deptno;
+select /*+mapjoin(e)*/ e.name,e.salary,d.dname from emp0 e join dept d on e.deptno=d.deptno;	--hive.auto.convert.join=false时，这样设map端join不生效
+
+15、hive.exec.mode.local.auto
+hive.input.format=org.apache.hadoop.hive.ql.io.CombineHiveInputFormat    默认
+hive.merge.smallfiles.avgsize=16000000	当输出文件平均大小小于该值, 启动新的 job 合并文件
+
+17、
+hive> set hive.exec.parallel=true;  --亲测有效
+set hive.input.format=org.apache.hadoop.hive.ql.io.CombineHiveInputFormat;会合并小文件
+
+13、
+文件数目过多，会给 HDFS 带来压力，并且会影响处理效率，可以通过合并 Map 和 Reduce 的结果文件来消除这样的影响： 
+hive.merge.mapfiles = true 是否和并 Map 输出文件，默认为 True (我分析应该是没有 reduce 的mr)
+hive.merge.mapredfiles = false 是否合并 Reduce 输出文件，默认为 False 
+是否合并Reduce 端输出文件：hive.merge.mapredfiles=false(默认值为假)
+合并文件的大小：hive.merge.size.per.task=256*1000*1000(默认值为 256000000)
+
+15、
+hive 支持cube函数
+select sex, addr, sum(sal) from emp group by sex,addr with cube;
+
+1、hive.map.aggr可以控制怎么进行汇总。默认为为true，配置单元会做的第一级聚合直接在MAP上的任务。这通常提供更好的效率，但可能需要更多的内存来运行成功。
+	set hive.map.aggr=true;
+	select age,count(1) from emp group by age;
+	亲测: 接近一倍之差
+
+count(distinct userid),在数据量大的情况下，效率较低，如果是多 count(distinct userid,month)
+效率更低，因为 count(distinct)是按 group by 字段分组，按 distinct 字段排序，一般这种分布 方式是很倾斜的，比如男 uv,女 uv，淘宝一天 30 亿的 pv，如果按性别分组，分配 2 个 reduce, 每个 reduce 处理 15 亿数据。
+
+分区分桶对比
+drop table if exists emp0;
+drop table if exists emp0_p;
+set hive.exec.dynamic.partition=true;
+create table emp0(id int, name string, age int, sex string, sal double, birthday string, addr string, hobby string, dept int) row format delimited fields terminated by ',';
+create table emp0_p(id int, name string, age int, sex string, sal double, birthday string, addr string, hobby string) partitioned by(dept int) row format delimited fields terminated by ',';
+load data local inpath '/home/tyx/emp.txt' overwrite into table emp0;
+set hive.exec.dynamic.partition.mode=nonstrict;
+insert into table emp0_p partition(dept) select * from emp0;
+set hive.enforce.bucketing = true;
+drop table if exists emp0_b;
+create table emp0_b(id int, name string, age int, sex string, sal double, birthday string, addr string, hobby string, dept int)clustered by(dept) into 10 buckets row format delimited fields terminated by ',';
+insert into table emp0_b select * from emp0;// 这样搞出来的还是一个文件啊，分桶还有什么意义呢
+SELECT * FROM emp0_b TABLESAMPLE(BUCKET 1 OUT OF 10);
+分区表对应的是hdfs上的目录，也是路径
+桶表对应的是hdfs上的文件
+
+对于每一个表(table)或者分区， Hive可以进一步组织成桶，也就是说桶是更为细粒度的数据范围划分。Hive也是针对某一列进行桶的组织。Hive采用对列值哈希，
+然后除以桶的个数求余的方式决定该条记录存放在哪个桶当中。
+
+把表(或者分区)组织成桶(Bucket)有两个理由：
+(1)获得更高的查询处理效率。桶为表加上了额外的结构，Hive 在处理有些查询时能利用这个结构。具体而言，连接两个在(包含连接列的)相同列上划分了桶的表，
+可以使用 Map 端连接 (Map-side join)高效的实现。比如JOIN操作。对于JOIN操作两个表有一个相同的列，如果对这两个表都进行了桶操作。那么将保存相同列值的桶
+进行JOIN操作就可以，可以大大较少JOIN的数据量。
+
+6)如果被连接的表在连接列上被分桶，并且一个表中的桶的数量是另一个表中的桶的数量的倍数，则桶可以彼此连接。如果表A有4个桶，而表B有4个桶，则下列联接
+SELECT /*+ MAPJOIN(b) */ a.key, a.value
+FROM A a JOIN B b ON a.key = b.key
+仅仅在mapper上即可完成连接完成。不是为每个A的mapper去完全获取B，而只是获取所需的桶。对于上面的查询，A的映射器处理存储桶1将仅取出B的桶1.
+它不是默认的行为，可以使用以下参数使能：
+set hive.optimize.bucketmapjoin = true
+
+7)(如果连接的表在连接列上进行排序和分桶，并且具有相同数量的存储桶，则可以执行sort-merge连接。相应的桶在mapper上相互连接。如果A和B都有4个桶，
+SELECT /*+ MAPJOIN(b) */ a.key, a.value
+FROM A a JOIN B b ON a.key = b.key
+
+上面的功能尽在mapper即可完成。A的桶的映射器将遍历B的相应桶。这不是默认行为，需要设置以下参数：
+set hive.input.format=org.apache.hadoop.hive.ql.io.BucketizedHiveInputFormat;
+set hive.optimize.bucketmapjoin = true;
+set hive.optimize.bucketmapjoin.sortedmerge = true;
+如有疑问请参考官方链接
+https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Joins
+hive支持insert delete update,应该只能是orc文件，且分桶
+insert into table test values (1,'row1'),(2,'row2'),(3,'row3');
+create table test(id int ,name string )clustered by (id) into 1 buckets stored as orc TBLPROPERTIES('transactional'='true');
+create table test(id int ,name string )clustered by (id) into 2 buckets stored as orc TBLPROPERTIES('transactional'='true');
+
+6. 全排序
+/home/tyx/app/mygit/hive121/hbase-handler/src/test/queries/positive/hbase_bulk.m  这个脚本文件中有详细步骤
+为什么默认要用 SequenceFile 格式的文件, 我猜如果是 text 格式, 则只比较的是文本格式, int 等不好搞了
+
+set mapreduce.totalorderpartitioner.path=/tmp/range_key_list/a.txt;
+set hive.mapred.partitioner=org.apache.hadoop.mapred.lib.TotalOrderPartitionerTYX;
+set mapred.reduce.tasks=4;
+select * from db.emp0_b sort by name;
+
+4>动态分区
+drop table if exists students;
+drop table if exists students_2p_auto;
+SET hive.exec.dynamic.partition=true;
+create table students(id int,name string,age int,class int)row format delimited fields terminated by '\t';
+create table students_2p_auto(id int,name string,age int) partitioned by(class int) row format delimited fields terminated by '\t';
+load data local inpath '/root/data/a1.txt' overwrite into table students;
+set hive.exec.dynamic.partition.mode=nonstrict;
+insert overwrite table students_2p_auto partition(class) select id,name,age,class from students ;
+----
+SET hive.exec.dynamic.partition=true;
+create table students(id int,name string,age int) partitioned by(class int) row format delimited fields terminated by '\t';
+create table students_2p_auto(id int,name string,age int) partitioned by(school string,class int) row format delimited fields terminated by '\t';
+load data local inpath '/root/data/a.txt' overwrite into table students partition(class=1);
+set hive.exec.dynamic.partition.mode=nonstrict;
+insert overwrite table students_2p_auto partition(school,class) select id,name,age,'xm',class from students ;
+静态分区(没测试应该是这样写)：
+insert overwrite table students_2p_auto partition(school='xm',class=3) select id,name,age from students ;
+----
+hive 动态分区时，distribute BY 非分区字段，每个每个分区下会有多个文件(set mapred.reduce.tasks=4;)
+insert overwrite table students partition(class) select * from studentsd distribute BY age;
+将查询结果往一个静态分区导入时，单reduce有压力改为动态分区加 distribute by rand(), 好像要 set mapred.reduce.tasks

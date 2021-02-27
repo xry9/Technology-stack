@@ -1,0 +1,3 @@
+type=command
+command=hive -f '/home/tyx/command/comban.sql'
+dependencies=put1,put2

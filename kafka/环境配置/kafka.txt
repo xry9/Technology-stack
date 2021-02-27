@@ -1,0 +1,49 @@
+1、创建俩目录data，data_zk，可不创建，会自动创建
+2、vim server.properties
+	log.dirs=/usr/local/app/kafka_2.11-1.0.0/data
+3、vim zookeeper.properties
+	dataDir=/usr/local/app/kafka_2.11-1.0.0/data_zk
+4、
+$KAFKA_HOME/bin/zookeeper-server-start.sh $KAFKA_HOME/config/zookeeper.properties &
+	nohup $KAFKA_HOME/bin/zookeeper-server-start.sh $KAFKA_HOME/config/zookeeper.properties >kafka_z.log 2>&1 &
+$KAFKA_HOME/bin/kafka-server-start.sh $KAFKA_HOME/config/server.properties &
+	nohup $KAFKA_HOME/bin/kafka-server-start.sh $KAFKA_HOME/config/server.properties >kafka_s.log 2>&1 &
+$KAFKA_HOME/bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic kt01
+$KAFKA_HOME/bin/kafka-topics.sh --list --zookeeper localhost:2181
+$KAFKA_HOME/bin/kafka-topics.sh --describe --zookeeper localhost:2181 --topic kt01
+$KAFKA_HOME/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic kt01
+$KAFKA_HOME/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --from-beginning --topic kt01
+$KAFKA_HOME/bin/kafka-topics.sh --delete --zookeeper localhost:2181 --topic kt01
+  -- 注意新版 kafka 不要用 --zookeeper 了, 要用 --bootstrap-server localhost:9092
+8、要想windows能访问也要配host.name=ip（server.properties）
+9、zookeeper.connect=pseudo:2181，这个最好改一下，如果不改，以后再用就会报错
+----
+执行$KAFKA_HOME/bin/kafka-server-start.sh命令会有提示
+USAGE: /usr/local/app/kafka_2.11-1.0.0/bin/kafka-server-start.sh [-daemon] server.properties [--override property=value]*
+故可以$KAFKA_HOME/bin/kafka-server-start.sh -daemon $KAFKA_HOME/config/server.properties
+lsof -i:2181	lsof -i:9092
+从0.8版本之后producer不需要通过zookeeper获取集群元信息，通过指定brokerList方式
+========================
+分部式：
+1、vim server.properties
+	zookeeper.connect=cloud01:2181,cloud02:2181,cloud03:2181
+	host.name=192.168.58.151(或cloud01, 但是连远程可能有问题)--这个一定要加，昨晚死活创建不了主题，不加也可，可能机器改了主机名
+2、scp -r kafka_2.11-1.0.0 root@cloud02:/usr/local/app/	scp -r kafka_2.11-1.0.0 root@cloud02:/usr/local/app/
+3、vim server.properties
+	broker.id=0	broker.id=1	broker.id=2
+4、启动zk
+5、$KAFKA_HOME/bin/kafka-server-start.sh $KAFKA_HOME/config/server.properties &
+	$KAFKA_HOME/bin/kafka-topics.sh --create --zookeeper cloud01:2181 --replication-factor 3 --partitions 3 --topic kt01
+	$KAFKA_HOME/bin/kafka-topics.sh --describe --zookeeper cloud01:2181 --topic kt01
+	$KAFKA_HOME/bin/kafka-console-producer.sh --broker-list cloud01:9092 --topic kt01
+	$KAFKA_HOME/bin/kafka-console-consumer.sh --zookeeper cloud02:2181 --from-beginning --topic kt01
+
+==============重要参数=======================
+zookeeper.connect=cloud01:2181,cloud02:2181,cloud03:2181/kafka
+log.roll.ms=60000
+log.segment.bytes=200
+$KAFKA_HOME/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic wco --formatter kafka.tools.DefaultMessageFormatter --property print.key=true  --property print.value=true  --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer  --property value.deserializer=org.apache.kafka.common.serialization.LongDeserializer
+
+通过__consumer_offsets 查看offset:
+好像要 vim consumer.properties exclude.internal.topics=false
+kafka-console-consumer.sh --topic __consumer_offsets --zookeeper localhost:2181 --formatter "kafka.coordinator.group.GroupMetadataManager\$OffsetsMessageFormatter" --consumer.config /usr/local/app/kafka_2.11-1.0.0/config/consumer.properties --from-beginning

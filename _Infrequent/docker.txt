@@ -1,0 +1,118 @@
+1、使用 yum 安装
+Docker 要求 CentOS 系统的内核版本高于 3.10 ，查看本页面的前提条件来验证你的CentOS 版本是否支持 Docker 。通过 uname -r 命令查看你当前的内核版本
+yum remove docker docker-client docker-client-latest docker-common  docker-latest docker-latest-logrotate docker-logrotate  docker-selinux docker-engine-selinux  docker-engine
+yum install -y yum-utils device-mapper-persistent-data lvm2
+yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+yum makecache fast
+yum -y install docker-ce
+systemctl start docker
+docker run hello-world
+
+2、使用脚本安装 Docker
+yum update --生级软件包及内核(linux?)
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+systemctl start docker
+docker run hello-world
+
+3、镜像加速
+鉴于国内网络问题，后续拉取 Docker 镜像十分缓慢，我们可以需要配置加速器来解决，我使用的是网易的镜像地址：http://hub-mirror.c.163.com。
+新版的 Docker 使用 /etc/docker/daemon.json（Linux） 或者 %programdata%\docker\config\daemon.json（Windows） 来配置 Daemon。
+请在该配置文件中加入（没有该文件的话，请先建一个）：
+{"registry-mirrors": ["http://hub-mirror.c.163.com"]}
+
+4、删除 Docker CE
+yum remove docker-ce
+rm -rf /var/lib/docker
+
+===========================================================
+1、docker run ubuntu:15.10 /bin/echo "Hello world"
+2、运行交互式的容器 ： docker run -i -t ubuntu:15.10 /bin/bash
+	-t:在新容器内指定一个伪终端或终端
+	-i:允许你对容器内的标准输入 (STDIN) 进行交互
+	我们可以通过运行exit命令或者使用CTRL+D来退出容器
+3、启动容器（后台模式） ： docker run -d ubuntu:15.10 /bin/sh -c "while true; do echo hello world; sleep 1; done"
+	在输出中，我们没有看到期望的"hello world"，而是一串长字符
+	2b1b7a428627c51ab8810d541d759f072b4fc75487eed05812646b8534a2fe63
+	这个长字符串叫做容器ID，对每个容器来说都是唯一的，我们可以通过容器ID来查看对应的容器发生了什么。
+	首先，我们需要确认容器有在运行，可以通过 docker ps 来查看
+
+	docker logs [CONTAINER ID/NAMES]
+4、停止容器 ： docker stop [CONTAINER ID/NAMES]
+===========================================================
+1、运行一个web应用
+docker pull training/webapp  # 载入镜像
+docker run -d -P training/webapp python app.py
+	-d:让容器在后台运行
+	-P:将容器内部使用的网络端口映射到我们使用的主机上
+docker ps
+localhost:32768
+
+我们也可以通过 -p 参数来设置不一样的端口： docker run -d -p 5000:5000 training/webapp python app.py
+docker port [CONTAINER ID/NAMES]
+我们还可以使用 docker top 来查看容器内部运行的进程 : docker top [CONTAINER ID/NAMES]
+使用 docker inspect 来查看 Docker 的底层信息。它会返回一个 JSON 文件记录着 Docker 容器的配置和状态信息 : docker inspect [CONTAINER ID/NAMES]
+停止 WEB 应用容器	docker stop 
+重启WEB应用容器	docker start [CONTAINER ID/NAMES]
+移除WEB应用容器(删除容器时，容器必须是停止状态) docker rm
+===========================================================
+查找镜像 : docker search httpd
+更新镜像 : https://www.runoob.com/docker/docker-image-usage.html
+===========================================================
+1、Docker 安装 MySQL
+方法一、docker pull mysql
+docker search mysql
+docker pull mysql:5.6
+docker images |grep mysql
+方法二、通过 Dockerfile构建
+https://www.runoob.com/docker/docker-install-mysql.html
+2、使用mysql镜像
+docker run -p 3306:3306 --name mymysql -v $PWD/conf:/etc/mysql/conf.d -v $PWD/logs:/logs -v $PWD/data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=123456 -d mysql:5.6
+
+	-p 3306:3306：将容器的 3306 端口映射到主机的 3306 端口。
+	-v -v $PWD/conf:/etc/mysql/conf.d：将主机当前目录下的 conf/my.cnf 挂载到容器的 /etc/mysql/my.cnf。
+	-v $PWD/logs:/logs：将主机当前目录下的 logs 目录挂载到容器的 /logs。
+	-v $PWD/data:/var/lib/mysql ：将主机当前目录下的data目录挂载到容器的 /var/lib/mysql 。
+	-e MYSQL_ROOT_PASSWORD=123456：初始化 root 用户的密码。
+docker exec -it mymysql bash
+mysql -u root -p123456
+
+3、Docker 安装 Tomcat
+docker pull tomcat
+docker run --name tomcat -p 8080:8080 -v $PWD/test:/usr/local/tomcat/webapps/test -d tomcat
+http://192.168.58.129:8080/
+
+4、Docker 安装 Python
+docker pull python:3.5
+在~/python/myapp目录下创建一个 helloworld.py 文件，代码如下：
+#!/usr/bin/python
+print("Hello, World!");
+在/root/python 下执行
+docker run  -v $PWD/myapp:/usr/src/myapp  -w /usr/src/myapp python:3.5 python helloworld.py
+	v $PWD/myapp:/usr/src/myapp :将主机中当前目录下的myapp挂载到容器的/usr/src/myapp
+	-w /usr/src/myapp :指定容器的/usr/src/myapp目录为工作目录
+	python helloworld.py :使用容器的python命令来执行工作目录中的helloworld.py文件
+
+5、Docker 安装 Redis
+docker pull redis:3.2
+docker run -p 6379:6379 -v $PWD/data:/data  -d redis:3.2 redis-server --appendonly yes
+	-p 6379:6379 : 将容器的6379端口映射到主机的6379端口
+	-v $PWD/data:/data : 将主机中当前目录下的data挂载到容器的/data
+	redis-server --appendonly yes : 在容器执行redis-server启动命令，并打开redis持久化配置
+docker exec -it 43f7a65ec7f8 redis-cli
+
+6、docker rmi [-f] 73829d7b6139
+
+7、https://hub.docker.com/
+  DockerID: xryjdocker
+8、Docker 安装 RabbitMq
+https://hub.docker.com/_/rabbitmq?tab=tags
+docker run -d -p 5672:5672 -p 15672:15672 --name myrabbitmq 00aa269a20d7
+http://192.168.58.161:15672/
+
+9、docker search elasticsearch
+  docker pull elasticsearch:6.8.6
+  docker run -e ES_JAVA_OPTS="-Xms2g -Xmx2g" -d -p 9200:9200 -p 9300:9300 --name es01 c8b4938e5db2
+10、docker pull zookeeper:3.4.10
+  docker run --name zk01 -p 2181:2181 --restart always -d d9fe1374256f
+  

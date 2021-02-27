@@ -1,0 +1,77 @@
+wget http://services.gradle.org/distributions/gradle-4.1-all.zip
+cp gradle-4.5.1-all.zip azkaban-3.42.0/gradle/wrapper
+vim gradle-wrapper.properties
+	distributionUrl=gradle-4.5.1-all.zip
+	#distributionUrl=https\://services.gradle.org/distributions/gradle-4.1-all.zip
+yum install git -y
+yum install -y gcc gcc-c++
+./gradlew build installDist -x test
+-- 源码用 idea 直接打开就好, 如果 build 不成功基本是网络问题
+cp azkaban-solo-server/build/distributions/azkaban-solo-server-0.1.0-SNAPSHOT.tar.gz ../
+tar -xvf azkaban-solo-server-0.1.0-SNAPSHOT.tar.gz
+bin/azkaban-solo-start.sh
+--有个问题，用 mac 编译完之后, 从 git down 下来, 再编译就有 azkaban3900/azkaban-web-server/.gradle/npm/npm-v5.6.0/share/man/man7/npm-registry.7'. Couldn't follow symbolic link
+========================================================
+vim conf/azkaban.properties
+#database.type=h2
+#h2.path=./h2
+#h2.create.tables=true
+database.type=mysql
+mysql.port=3306
+mysql.host=192.168.58.1
+mysql.database=azkaban
+mysql.user=root
+mysql.password=root
+mysql.numconnections=100
+	CREATE DATABASE `azkaban` /*!40100 DEFAULT CHARACTER SET utf8 */
+----
+#更改时区
+service ntpd start && chkconfig ntpd on
+  tzselect  （TZ='Asia/Shanghai'; export TZ）命令临时更改可以生效但配置文件/etc/sysconfig/clock中并没有更改
+  永久更改cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+  这个要不要改default.timezone.id=Asia/Shanghai，不确定，好像不改也可以，但是有时候不行
+========================================
+type=command
+command=/root/test/a.sh oooo
+command.1=/root/test/a.sh bbbb
+command.2=/root/test/a.sh cccc
+dependencies=a
+----
+可以在system.properties文件中写入参数
+if [ "$1" ]; then param="$1"; else param=$(date +%Y%m%d%H);done
+
+
+============================================
+https://blog.csdn.net/oracle8090/article/details/78923582
+https://azkaban.github.io/azkaban/docs/latest/#ajax-api
+
+cd azkaban-solo-server-0.1.0-SNAPSHOT
+ keytool -keystore keystore -alias jetty -genkey -keyalg RSA
+vim azkaban.properties
+jetty.use.ssl=true
+jetty.ssl.port=8443
+jetty.keystore=keystore
+jetty.password=azkaban
+jetty.keypassword=azkaban
+jetty.truststore=keystore
+jetty.trustpassword=azkaban
+
+https://pseudo:8443
+
+curl -k -X POST --data "action=login&username=azkaban&password=azkaban" https://localhost:8443
+{
+  "session.id" : "ad817073-a43c-4bf2-a0ea-b5265192813b",
+  "status" : "success"
+}
+curl -k -X POST --data "session.id=ad817073-a43c-4bf2-a0ea-b5265192813b&name=aaaa&description=11" https://localhost:8443/manager?action=create
+curl -k --get --data "session.id=ad817073-a43c-4bf2-a0ea-b5265192813b&delete=true&project=aaaa" https://localhost:8443/manager
+curl -k -i -H "Content-Type: multipart/mixed" -X POST --form 'session.id=ad817073-a43c-4bf2-a0ea-b5265192813b' --form 'ajax=upload' --form 'file=@/usr/local/app/azkaban_data/command1.zip;type=application/zip' --form 'project=aaaa' https://localhost:8443/manager
+curl -k --get --data "session.id=ad817073-a43c-4bf2-a0ea-b5265192813b&ajax=fetchflowgraph&project=aaaa&flow=aaaa" https://localhost:8443/manager
+curl -k --get --data 'session.id=ad817073-a43c-4bf2-a0ea-b5265192813b' --data 'ajax=executeFlow' --data 'project=aaaa' --data 'flow=ff' https://localhost:8443/executor
+
+
+curl -k -X POST --data "session.id=7a872dd1-bfdb-4733-8781-56dbe129f315&name=aaaa&description=11" https://localhost:8443/manager?action=create
+curl -k -i -H "Content-Type: multipart/mixed" -X POST --form 'session.id=7a872dd1-bfdb-4733-8781-56dbe129f315' --form 'ajax=upload' --form 'file=@/usr/local/app/azkaban_data/command1.zip;type=application/zip' --form 'project=aaaa' https://localhost:8443/manager
+curl -k --get --data "session.id=7a872dd1-bfdb-4733-8781-56dbe129f315&ajax=fetchflowgraph&project=aaaa&flow=ff" https://localhost:8443/manager
+curl -k --get --data 'session.id=7a872dd1-bfdb-4733-8781-56dbe129f315' --data 'ajax=executeFlow' --data 'project=aaaa' --data 'flow=ff' https://localhost:8443/executor
+

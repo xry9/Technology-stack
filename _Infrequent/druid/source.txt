@@ -1,0 +1,7 @@
+git clone -b 0.9.0 git@github.com:apache/druid.git
+1、0.9.0 以下正常编译就行, mvn clean package -DskipTests, 0.11.0 以上 twitter 的 jar 包 hadoop-lzo 等下载不了
+https://github.com/apache/druid/blob/master/docs/development/build.md
+
+
+git clone -b 0.12.0 git@github.com:apache/druid.git
+报错可能是 jdk 版本低, openjdk 导致

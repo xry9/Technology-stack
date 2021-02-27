@@ -1,0 +1,73 @@
+1、
+	Update Mode - Only the rows that were updated in the Result Table since the last trigger will be written to the external storage (available since Spark 2.1.1). Note that this is different from the Complete Mode in that this mode only outputs the rows that have changed since the last trigger. If the query doesn’t contain aggregations, it will be equivalent to Append mode.
+2、
+	This model is significantly different from many other stream processing engines. Many streaming systems require the user to maintain running aggregations themselves, thus having to reason about fault-tolerance, and data consistency (at-least-once, or at-most-once, or exactly-once). In this model, Spark is responsible for updating the Result Table when there is new data, thus relieving the users from reasoning about it. As an example, let’s see how this model handles event-time based processing and late arriving data.
+
+
+spark.readStream.format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("subscribe", "kt01").load()
+.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
+.writeStream
+
+import org.apache.spark.sql.types.StructType
+val userSchema = new StructType().add("name", "string").add("age", "integer")
+val userDF = spark.readStream.schema(userSchema).json("file:///home/tyx/data/").writeStream.outputMode("append").format("console").start()
+	
+spark-shell --master spark://pseudo:7077 --jars /home/tyx/jars/kafka_2.11-1.0.0.jar,/home/tyx/jars/kafka-clients-1.0.0.jar,/home/tyx/jars/spark-streaming-kafka-0-10_2.11-2.4.0.jar,/home/tyx/jars/metrics-core-2.2.0.jar,/home/tyx/jars/spark-sql-kafka-0-10_2.11-2.4.0.jar --conf spark.sql.shuffle.partitions=8
+		--不确定是不是需要这么多jar包
+val df = spark.readStream.format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("subscribe", "kt01").load().selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
+df.writeStream.outputMode("append").format("console").start()
+
+val df = spark.readStream.format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("subscribe", "kt03").load().selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").createOrReplaceTempView("updates")
+spark.sql("select * from updates").writeStream.outputMode("append").format("console").start()
+spark.sql("select split('oneAtwoBthreeC', '[ABC]')[0] from updates").writeStream.outputMode("append").format("console").start()
+
+spark.sql("select split(value, '[ ]')[0] as name ,split(value, '[ ]')[1] as age from updates").writeStream.outputMode("append").format("console").start()
+spark.sql("select split(value, '[ ]')[0] as name ,split(value, '[ ]')[1] as age from updates").createOrReplaceTempView("userx")
+spark.sql("select name ,age from userx").writeStream.outputMode("append").format("console").start()
+
+
+
+val userDF = spark.readStream.schema(userSchema).json("file:///home/tyx/data/")
+userDF.createOrReplaceTempView("person")
+spark.sql("select * from person").writeStream.outputMode("append").format("console").start()
+
+
+val lines = spark.readStream.format("socket").option("host", "localhost").option("port", 9999).load()
+val words = lines.as[String].flatMap(_.split(" "))
+val wordCounts = words.groupBy("value").count()
+val query = wordCounts.writeStream.outputMode("complete").format("console").start()
+
+val socketDF = spark.readStream.format("socket").option("host", "localhost").option("port", 9999).load()
+socketDF.isStreaming
+socketDF.printSchema
+val userSchema = new StructType().add("name", "string").add("age", "integer")
+val csvDF = spark.readStream.option("sep", ";").schema(userSchema).csv("/data/spark")    // Equivalent to format("csv").load("/path/to/directory")
+
+
+case class DeviceData(device: String, deviceType: String, signal: Double, time: String)
+val df: DataFrame = ... // streaming DataFrame with IOT device data with schema { device: string, deviceType: string, signal: double, time: string }
+val ds: Dataset[DeviceData] = df.as[DeviceData]    // streaming Dataset with IOT device data
+df.select("device").where("signal > 10")      // using untyped APIs   
+ds.filter(_.signal > 10).map(_.device)         // using typed APIs
+df.groupBy("deviceType").count()                          // using untyped API
+import org.apache.spark.sql.expressions.scalalang.typed
+ds.groupByKey(_.deviceType).agg(typed.avg(_.signal))    // using typed API
+
+df.createOrReplaceTempView("updates")
+spark.sql("select count(*) from updates")
+
+
+import org.apache.spark.sql.types.StructType
+val structFields = Array[StructField](
+DataTypes.createStructField("card",DataTypes.StringType, true), 
+DataTypes.createStructField("username",DataTypes.StringType, true)
+)
+val schema = DataTypes.createStructType(structFields)
+case class DeviceData(device: String, deviceType: String, time: String)
+======================================================
+spark.readStream.format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("subscribe", "kt01").load().selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").createOrReplaceTempView("table1")
+spark.sql("select 'kt01' as topic ,split(value, '[ ]')[0] as id ,split(value, '[ ]')[1] as name,split(value, '[ ]')[2] as age from table1 where CAST(split(value, '[ ]')[0] AS INT)%100=0").writeStream.outputMode("append").format("kafka").option("checkpointLocation", "file:///home/tyx/checkpoint/").option("kafka.bootstrap.servers", "localhost:9092").option("topic", "result").start()
+----
+spark.conf.set("spark.sql.streaming.checkpointLocation", "file:///home/tyx/checkpoint")
+spark.readStream.format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("subscribe", "kt01").load().selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").createOrReplaceTempView("table1")
+spark.sql("select split(value, '[ ]')[0] as key ,concat('kt01',' ',split(value, '[ ]')[0],' ',split(value, '[ ]')[1],' ',split(value, '[ ]')[2]) as value from table1 where CAST(split(value, '[ ]')[0] AS INT)%100=0").writeStream.outputMode("append").format("kafka").option("kafka.bootstrap.servers", "localhost:9092").option("topic", "result").start()

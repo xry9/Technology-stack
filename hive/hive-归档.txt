@@ -1,0 +1,249 @@
+1、
+alter table book set SERDEPROPERTIES('field.delim'=',');
+create table book (id bigint, name string) partitioned by (category string) row format delimited fields terminated by ',';
+手动添加分区 ALTER TABLE book add PARTITION (category = 'gongju') ;
+分区表加载数据
+	load data local inpath 'file:///root/book.txt' into table book_p partition (category='gongju');
+	load data inpath '/data/hive/book2.txt' overwrite into table book partition (category='wx');
+如果需要将自己创建的分区也能被识别，需要执行：
+	ALTER TABLE book add  PARTITION (category = 'gj') location '/user/hive/warehouse/db1.db/book/category=gj';
+	ALTER TABLE book_p drop  PARTITION (category = 'wx') ;
+外部分区表
+	create external table book (id bigint, name string) partitioned by (category string) row format delimited fields terminated by '\t' location '/data/hive_ext';
+alter table students drop if exists partition(class=2);
+alter table students add if not exists partition(class=3);
+2、hive.fetch.task.conversion=more    //默认配置为more，当select数据量小于threshold时，不进行MR，直接fetch
+
+2、
+hiveserver2
+./hive --service hiveserver2(nohup bin/hiveserver2 1>/var/log/hiveserver.log 2>/var/log/hiveserver.err )
+beeline -u jdbc:hive2://192.168.58.172:10000
+./beeline
+!connect jdbc:hive2://0.0.0.0:10000
+
+修改hadoop 的core-site.xml文件, 不改的话登录时用 tyx 用户也可以
+<property>
+    <name>hadoop.proxyuser.root.hosts</name>
+    <value>*</value>
+</property>
+<property>
+    <name>hadoop.proxyuser.root.groups</name>
+    <value>*</value>
+</property>
+<property>
+<name>hive.security.authorization.createtable.owner.grants</name>
+<value>ALL</value>
+</property>
+
+3、可以在conf下添加 .hiverc 文件做为初始化配置，在启动hive时会执行
+	hive -i .hiverc
+4、自定义函数：就是一个普通的java项目，继承一个接口
+	1、add jar /root/data_hive/hive.jar;
+	2、create temporary function hello as 'cn.tedu.hive.udf.demo.HelloUDF';
+	3、select hello(name) from book;
+	4、将 .hiverc 放在conf下
+	5、list jar;
+5、
+show functions;
+desc function upper;
+DESCRIBE FUNCTION EXTENDED upper;
+9、
+show databases like "db*";
+show tables like "s*";
+desc database extended db1;
+drop database db1 cascade;
+desc extended f_wide.wide_order partition(dt='20190504');
+
+查看表分区定义
+DESCRIBE EXTENDED page_view PARTITION (ds='2008-08-08');
+hive -i 是初始化后进入hive命令行，-f 只是执行一个脚本
+
+6、
+bin/hive --hiveconf hive.cli.print.current.db=true --hiveconf hive.cli.print.header=true
+$HOME/.hivehistory
+set -v;
+bin/hive -f hive.sql
+bin/hive -f hdfs://cloud01:9000/data/hive.sql 
+bin/hive -S -e "insert into db1.tab values(3,'xu');"
+[root@pseudo ~]# hive -d A=zs
+hive> set A;
+A=zs
+7、
+  CREATE TABLE regex1(str1 string,str2 string,str3 string,str4 string)row format serde 'org.apache.hadoop.hive.serde2.RegexSerDe' with serdeproperties
+  ("input.regex" = "(\\w) (\\w) (\\w) (\\w)")STORED as textfile;
+8、
+自定义 INPUTFORMAT
+create external table visit (time string, keyword string, device string, ip string) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' stored as INPUTFORMAT 'com.rimi.hive.customer.HiveInputFormat'OUTPUTFORMAT 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat' location '/data/hive/visit';
+load data local inpath '/root/hive.txt' into table visit;
+
+7、
+insert overwrite local directory '/tmp/hive' ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' select * from tab1;
+export table tab1 to '/tmp/hive1';  --包括元数据
+import table newtab from '/tmp/hive1';
+
+8、分区内排序
+set mapreduce.job.reduces=20;
+insert overwrite local directory '/root/hive'row format delimited fields terminated by ',' select did,salary from emp distribute by did sort by salary;
+
+12、
+hadoop jar app/hadoop-2.7.2/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.2.jar wordcount -Dmapreduce.map.output.compress=true -Dmapreduce.map.output.compress.codec=org.apache.hadoop.io.compress.SnappyCodec /data/* /result/wordcount
+hadoop jar app/hadoop-2.7.2/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.2.jar wordcount -Dmapreduce.map.output.compress=true -Dmapreduce.map.output.compress.codec=org.apache.hadoop.io.compress.SnappyCodec -Dmapreduce.output.fileoutputformat.compress=true -Dmapreduce.output.fileoutputformat.compress.codec=org.apache.hadoop.io.compress.SnappyCodec /data/* /result/wc1
+-Dmapreduce.output.fileoutputformat.compress=true -Dmapreduce.output.fileoutputformat.compress.codec=org.apache.hadoop.io.compress.SnappyCodec
+
+org.apache.hadoop.io.compress.DefaultCodec(其实就是gzip)
+org.apache.hadoop.io.compress.GzipCodec
+org.apache.hadoop.io.compress.Lz4Codec
+org.apache.hadoop.io.compress.BZip2Codec
+zlib就是不会用啊
+com.hadoop.compression.lzo.LzoCodec
+
+mapreduce.job.reduces
+mapreduce.job.jvm.numtasks
+
+hive> set mapreduce.map.output.compress=true;
+hive> set mapreduce.map.output.compress.codec=org.apache.hadoop.io.compress.SnappyCodec;
+hive> select count(*) from emp0;
+同样生效了
+create table emp_orc_snappy(empno int,name string,salary double,deptno int)stored as orc tblproperties ("orc.compress"="SNAPPY");
+
+set parquet.compression=SNAPPY;
+create table emp_parquet_snappy stored as parquet as select * from emp0;
+create table emp_rcfile stored as rcfile as select * from emp0;
+hive --service rcfilecat '/hive2/user/hive/warehouse/db1.db/emp_rcfile/000000_0'
+
+create table emp_sequence stored as sequencefile as select * from emp0;
+hadoop fs -text /hive2/user/hive/warehouse/db1.db/emp_sequence/000000_0
+
+0>
+有必要更改这两个属性hive.metastore.warehouse.dir，hive.exec.scratchdir，直接把hive-default.xml.template改成hive-site.xml报错，只好在hivemetastore-site.xml中添加了
+show create table tablename;  mysql中也可以这样用
+1>多级分区
+create table tab4(id int)partitioned by (p1 string,p2 string)row format delimited fields terminated by ',';
+load data inpath '/data/hive/a.txt' into table tab4 partition(p1='p2',p2='p2');
+ALTER TABLE tab4 add PARTITION (p1='p3',p2='p3') location '/hive1/user/hive/warehouse/db1.db/tab4/p1=p3/p2=p3';
+3>create table employees(name string,salary double,subordinates array<string>,deductions map<string,double>,address struct<street:string,city:string,state:string,zip:int>)row format delimited fields terminated by '\t' collection items terminated by ',' map keys terminated by ':' lines terminated by '\n' stored as textfile;
+zs      5000    z1,z2,z3        k1:3.2,k2:v2     ft,bj,china,9
+ls      8000    l1,l2,l3        k4:3.8,k5:5.4     tyj,sy,china,8
+ww      6000    w1,w2,w3        k8:v8,k7:v7     dzs,bj,china,7
+select subordinates[1],deductions["k1"],address.city from employees;
+----
+msck repair table tabName 或 alter table tabName add partition(day='20170919');
+create table emp2 as select eid as empno,name as ename from emp where eid>2;
+set A=zs;	或hive --hiveconf A=zwj
+select * from emp where name='${hiveconf:A}';
+select '${env:HOME}' from emp ;
+insert into emp1 select * from emp2;	--into不覆盖
+
+describe database bi; --hive
+hive (hive)> set val=lavimer;
+hive (hive)> select * from employees where name='${hiveconf:val}'; 
+
+16、
+create table empdept as  select e.*, d.dname from emp0 e join dept d on e.deptno=d.deptno;
+alter table emp0 add COLUMNS (hobby string);
+ALTER TABLE emp0 RENAME TO emp;
+ALTER TABLE emp CHANGE  salary salary1 String;
+alter table emp change column gender gender string after hobby;	--（first是放到第一位）有时执行不成功，应该是字段类型不能转换时
+alter table students replace COLUMNS (id int,name string,hobby string);--删除列只能replace形式
+18、
+reflect("java.lang.Math", "max", 2, 3)
+select java_method("java.lang.Math","sqrt",cast(empno as double)) from emp;	https://cwiki.apache.org/confluence/display/Hive/LanguageManual+UDF#LanguageManualUDF-Misc.Functions
+select regexp_extract('tongyongxuxiaoxu','tong(.*?)(xu)',1)from emp;
+alter table emp0 set tblproperties('EXTERNAL'='true');	--删表可以保留数据
+select * from tab_un1 where s rlike "s[2-3]";
+select regexp_replace('foobar', 'oo|ar', ") from dual;
+select  get_json_object('{"store":{"fruit":\[{"weight":8,"type":"apple"},{"weight":9,"type":"pear"}], "bicycle":{"price":19.95,"color":"red"}},  "email":"amy@only_for_json_udf_test.net",  "owner":"amy" } ','$.owner') from dual;
+20、
+CREATE TABLE invites (foo INT, bar STRING) PARTITIONED BY (ds STRING);
+LOAD DATA LOCAL INPATH '/usr/local/app/apache-hive-1.2.1-bin/examples/files/kv2.txt' OVERWRITE INTO TABLE invites PARTITION (ds='2008-08-15');
+SELECT TRANSFORM(a.foo, a.bar)  USING '/bin/cat' FROM invites a WHERE a.ds > '2008-08-09';
+----
+add FILE weekday_mapper.py;
+INSERT OVERWRITE TABLE u_data_new SELECT  TRANSFORM (userid, movieid, rating, unixtime) USING 'python weekday_mapper.py'  AS (userid, movieid, rating, weekday) FROM u_data;
+21、
+  create function sef_sum as 'com.ibeifeng.bigdata.sort.bbs_logs.UDAFSum' using jar 'hdfs://bigdata-spark01.ibeifeng.com:8020/user/jars/bbs-logs-0.0.1-SNAPSHOT.jar'
+
+hive.querylog.location
+
+hivemetastore:
+server端：
+<!--property>
+<name>hive.metastore.local</name>
+<value>false</value>
+</property-->
+<property>
+<name>hive.metastore.uris</name>
+<value>thrift://pseudo:9083</value>
+client端：
+</property>
+<property>
+<name>hive.metastore.uris</name>
+<value>thrift://pseudo:9083</value>
+</property>
+server端：hive --service metastore &
+client可以直接hive，也可以 hive --service hiveserver2，这样相当于hivemetastore的client端启动hiveserver
+----
+show tables from default;
+HIVE_SERVER2_THRIFT_PORT=10002 hive --service hiveserver2 &
+
+24、
+select tf.* from (select 0)t lateral view parse_url_tuple('http://facebook.com/path/p1.php?query=1', 'PROTOCOL', 'HOST') tf as p,h;
+	----(select 0)t 可认为是 dual
+select a.day, b.* from (select '{"appevent":"hahaha","eventid":"234","eventname":"2028"}' as appevent,'2018-04-29' as day) a lateral view json_tuple(a.appevent, 'eventid', 'eventname') b as f1, f2;
+select tt.id,tf.* from (select id,collect_list(name) cl from tab group by id)tt lateral view posexplode(cl) tf;
+select ff, tf.* from tab lateral view posexplode(split(f,",")) tf;
+----
+原表dt是'2018-12-05' 想洗出来不带-，(dt不改为dtx时)这样却不行
+SET hive.exec.dynamic.partition=true;
+set hive.exec.dynamic.partition.mode=nonstrict;
+insert overwrite table qindex.mob_etl_client_flight partition(dt)
+select cuid as uid,params,regexp_replace(dt,'-','') dt
+from f_statis_middle.mob_etl_client_flight
+where dt='2018-11-29'
+and (params like '%flight_rec_domestic_one_to_nearby_firstpage%' or params like '%flight_rec_domestic_one_to_recent_firstpage%' or params 
+  like '%flight_rec_domestic_one_to_round_firstpage%')
+and platform in ('ios','adr')
+and process='search'
+distribute by dt;
+任勇也发现这个问题，查看执行计划
+
+sudo -u flightbigdata spark-sql --conf spark.yarn.queue=flightbigdata --master yarn-client --name wide_flight_order.zhaowei --executor-memory 14G --num-executors 150 -e"  ${_sql}
+
+洗 f_wide.wide_order 时用 sparksql 比 hive 快5、6倍，用内存那种shuffle
+
+hiveserver 连 hivemetastore
+spark集成hivemetastor也是将hive-site.xml拷贝到${SPARK_HOME}/conf下，或创建软连接(没有尝试)
+----
+spark thrift:
+hive-site.xml拷贝到${SPARK_HOME}/conf下
+sbin/start-thriftserver.sh --master spark://pseudo:7077  --hiveconf hive.server2.thrift.port=10000
+bin/beeline
+!connect jdbc:hive2://pseudo:10000
+jdbc方式同hive jdbc代码完全一致
+如果以hive metastore方式连接元数据，hive-site.xml中加入hive.metastore.uris即可，不必加mysql的配置了，并启动 hive --service metastore &
+----
+array_contains(collect_list(id),2)
+----
+uid not in ('',null) 居然查不出数据，uid not in ('')才可以
+--------
+column_name=$(sudo -u flightdev /home/q/big_hive/apache-hive-1.2.1-bin/bin/hive -e "desc ${_s}" | awk 'BEGIN{columns=""} {if($1==""||$1=="dt"){exit;} if(columns==""){columns=$1} else{columns = columns","$1;}}END{print columns}')
+父目录不可写，但文件可写，其实也是不可写的吧，配hive日志时发现
+
+11、亲测字段类型不一致的 join, 比如一个 int 一个 string ，是没问题的，默认给强转了应该
+
+处理 null 引起的数据倾斜 on (if(o.ip is null,rand(),o.ip)=d.client_ip)
+
+hive分区表增加字段后(加入字段后的数据已经导入)，表在add column 之后还要修复分区？
+随机采样: select * from my_table where rand() <= 0.0001 distribute by rand() sort by rand() limit 10000;
+
+日期函数：ts,day(ts),date_sub(ts,2),date_sub(ts,-2),datediff(ts,'2018-05-23'),current_date,current_timestamp
+trunc(add_months(to_date(CURRENT_TIMESTAMP),-1),'MM')
+select trunc(add_months(to_date('2018-10-10 12:12:12'),-1),'MM')
+select date_add(next_day(CURRENT_TIMESTAMP,'MO'),-7)
+
+hive -e "set hive.support.quoted.identifiers=None;select \`(shop_id|sm_name)?+.+\` from ods_sm.order_childs limit 2"
+
+ALTER TABLE spu DROP IF EXISTS PARTITION(month_id=201801,day_id=20180101);
+
+12、select id from emp where id in (select id from dept where id<10); 这种语法真支持啊
+

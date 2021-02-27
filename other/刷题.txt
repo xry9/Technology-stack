@@ -1,0 +1,50 @@
+https://www.cnblogs.com/yuanninesuns/p/9893144.html
+25.数组中只出现一次的数字
+题目描述：一个整型数组里除了两个数字之外，其他的数字都出现了两次。请写程序找出这两个只出现一次的数字
+
+26.把数组排成最小的数(我和答案的细微不同, 体现思路差别很大)
+{3，32，321，34}
+------------------------------------------------
+6. 合并两个排序的链表(两种方式)
+4. 重建二叉树（中等题）
+11.二叉搜索树的后序遍历序列
+
+==============================================
+41. 缺失的第一个正数  给你一个未排序的整数数组，请你找出其中没有出现的最小的正整数
+72.	编辑距离
+
+
+1,2,4,7,3,5,6,8
+4,7,2,1,5,3,8,6
+
+
+
+=================================================
+HJ36	字符串加密
+https://www.nowcoder.com/practice/e4af1fe682b54459b2a211df91a91cf3?tpId=37&tqId=21259&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ43	迷宫问题
+https://www.nowcoder.com/practice/cf24906056f4488c9ddb132f317e03bc?tpId=37&tqId=21266&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ63	DNA序列
+https://www.nowcoder.com/practice/e8480ed7501640709354db1cc4ffd42a?tpId=37&tqId=21286&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ65	查找两个字符串a,b中的最长公共子串
+https://www.nowcoder.com/practice/181a1a71c7574266ad07f9739f791506?tpId=37&tqId=21288&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ67	24点游戏算法
+https://www.nowcoder.com/practice/fbc417f314f745b1978fc751a54ac8cb?tpId=37&tqId=21290&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ69	矩阵乘法
+https://www.nowcoder.com/practice/ebe941260f8c4210aa8c17e99cbc663b?tpId=37&tqId=21292&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ70	矩阵乘法计算量估算
+https://www.nowcoder.com/practice/15e41630514445719a942e004edc0a5b?tpId=37&tqId=21293&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+
+HJ39	判断两个IP是否属于同一子网
+https://www.nowcoder.com/practice/34a597ee15eb4fa2b956f4c595f03218?tpId=37&tqId=21262&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+
+HJ18	识别有效的IP地址和掩码并进行分类统计
+https://www.nowcoder.com/practice/34a597ee15eb4fa2b956f4c595f03218?tpId=37&tqId=21262&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+

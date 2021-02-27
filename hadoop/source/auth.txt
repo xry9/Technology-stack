@@ -1,0 +1,7 @@
+1、hdfs 权限检查:
+	org.apache.hadoop.hdfs.server.namenode.FSPermissionChecker#check
+2、归纳一下 hadoop 的任务权限管理：
+	client submit 一个 job , 还是 YarnChild 中 run 一个 taks, 都是通过 ugi.doAs 一个 action, 对 ugi 认证通过后才真正执行操作
+说一下 JAAS, 其实 ugi 的操作也是用这个框架实现的, 主要作用就是完成用户认证并做得到解耦, 还能做一些操作(方法)的权限控制
+Kerberos 认证也是在这套框架下实现的，我在吐槽一下 Kerberos 认证，如果有网络拦截, 其实这套安全机制是失效的我觉得，当然网络拦截应该是能遏制的吧如果想做
+--JAAS: Java Authentication and Authorization Service（JAAS，Java验证和授权API）

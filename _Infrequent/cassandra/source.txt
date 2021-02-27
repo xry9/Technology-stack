@@ -1,0 +1,8 @@
+git clone -b cassandra-3.0 git@github.com:apache/cassandra.git
+ant 
+--------
+从 apache mirror 下载的编译不成功
+
+
+https://www.hue.yangqianguan.com/
+https://hue.yangqianguan.com/hue/editor/?type=hive

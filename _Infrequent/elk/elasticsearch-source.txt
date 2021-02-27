@@ -1,0 +1,12 @@
+https://github.com/elastic/elasticsearch/
+
+git clone -b 1.2 https://github.com/elastic/elasticsearch.git
+mvn clean package -DskipTests
+--------
+gradle -version
+Gradle 5.4
+JVM:          1.8.0_77
+----
+git clone -b 6.0 https://github.com/elastic/elasticsearch.git
+./gradlew assemble
+./gradlew idea

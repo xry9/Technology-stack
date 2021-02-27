@@ -1,0 +1,2 @@
+http://activemq.apache.org/version-5-getting-started.html#GettingStarted-UnixSourceInstallation
+mvn clean install -DskipTests

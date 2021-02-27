@@ -1,0 +1,193 @@
+1、task 添加过程, 在服务启动时就添加了原来
+org.apache.hadoop.mapreduce.v2.app.MRAppMaster#serviceStart (JobEvent initJobEvent = new JobEvent(job.getID(), JobEventType.JOB_INIT);)
+org.apache.hadoop.mapreduce.v2.app.job.impl.JobImpl.InitTransition#transition
+org.apache.hadoop.mapreduce.v2.app.job.impl.JobImpl#addTask
+----
+2、远程启动 container: org.apache.hadoop.mapreduce.v2.app.launcher.ContainerLauncherImpl.Container#launch
+  拼 command org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl.ContainerAssignedTransition#transition
+3、org.apache.hadoop.mapreduce.v2.app.rm.RMContainerRequestor#makeRemoteRequest
+  先 getApplicationProgress 再向 RM 发 allocate, RM 根据 process 情况返回 containers, 再决定是否启动 task
+4、org.apache.hadoop.mapreduce.v2.app.rm.RMContainerAllocator#heartbeat 这里做了很多事, 只要有一个 map task 完成, AM 就会去 RM 申请资源, 
+	启动所有 reduce, 有个事情得说一下
+ 利用(1)中的 addTask , org.apache.hadoop.mapreduce.v2.app.job.impl.JobImpl#scheduleTasks 一路穿梭 RMContainerAllocator.this.eventQueue.put
+ 而 org.apache.hadoop.mapreduce.v2.app.rm.RMContainerAllocator#serviceStart 中 take 了, 导致 org.apache.hadoop.mapreduce.v2.app.rm.RMContainerAllocator#pendingReduces.add
+ 这就接上了 heartbeat 
+5、向 RM 请求 container 是在 org.apache.hadoop.mapreduce.v2.app.rm.RMContainerRequestor#makeRemoteRequest 
+6、JobImpl.InitTransition#transition 创建 MapTask 的 TaskSplitMetaInfo, 本质从 hdfs://cluster01:9000/tmp/hadoop-yarn/staging/tyx/.staging/job_1588240145234_0001/job.split 
+  解析
+public class org.apache.hadoop.mapreduce.v2.app.MRAppMaster extends CompositeService {
+	private Dispatcher dispatcher;
+	private AppContext context;
+	private ClientService clientService;
+	private Job job;
+	public static void main(String[] args) {
+		ContainerId containerId = ConverterUtils.toContainerId(containerIdStr);
+		ApplicationAttemptId applicationAttemptId = containerId.getApplicationAttemptId();
+		MRAppMaster appMaster = new MRAppMaster(applicationAttemptId, containerId, nodeHostString, Integer.parseInt(nodePortString), Integer.parseInt(nodeHttpPortString), appSubmitTime);
+		ShutdownHookManager.get().addShutdownHook(new MRAppMasterShutdownHook(appMaster), SHUTDOWN_HOOK_PRIORITY);// 这块被放过去了, 回头看
+		MRWebAppUtil.initialize(conf);
+		initAndStartAppMaster(appMaster, conf, jobUserName);
+	}  
+	protected static void initAndStartAppMaster(final MRAppMaster appMaster, final JobConf conf, String jobUserName) throws IOException, InterruptedException {
+		conf.getCredentials().addAll(credentials);
+		appMaster.init(conf);
+		appMaster.start();
+	}
+	protected void serviceInit(final Configuration conf) throws Exception {
+		context = new RunningAppContext(conf);
+		dispatcher = createDispatcher();
+		addIfService(dispatcher);
+		clientService = createClientService(context);
+	}
+	protected void serviceStart() throws Exception {
+		completedTasksFromPreviousRun = new HashMap<TaskId, TaskInfo>();
+		job = createJob(getConfig(), forcedState, shutDownMessage);
+		JobEvent initJobEvent = new JobEvent(job.getID(), JobEventType.JOB_INIT);// ***
+		jobEventDispatcher.handle(initJobEvent);// JobEventDispatcher
+		clientService.start();
+		startJobs(); // JobEvent startJobEvent = new JobStartEvent(job.getID(), recoveredJobStartTime); --> JobEventType.JOB_START // ***
+	}
+	protected ClientService createClientService(AppContext context) {
+		return new MRClientService(context);
+	}
+	protected Dispatcher createDispatcher() {
+		return new AsyncDispatcher();
+	}
+	public class RunningAppContext implements AppContext {
+		private final Map<JobId, Job> jobs = new ConcurrentHashMap<JobId, Job>();
+		public Job getJob(JobId jobID) {
+			return jobs.get(jobID);
+		}
+	}
+	protected Job createJob(Configuration conf, JobStateInternal forcedState, String diagnostic) {
+		Job newJob = new JobImpl(jobId, appAttemptID, conf, dispatcher.getEventHandler(), taskAttemptListener, jobTokenSecretManager, jobCredentials, clock, completedTasksFromPreviousRun, metrics, committer, newApiCommitter, currentUser.getUserName(), appSubmitTime, amInfos, context, forcedState, diagnostic);
+		((RunningAppContext) context).jobs.put(newJob.getID(), newJob);
+		dispatcher.register(JobFinishEvent.Type.class, createJobFinishEventHandler());
+		return newJob;
+	}
+	
+	private class JobEventDispatcher implements EventHandler<JobEvent> {
+		public void handle(JobEvent event) {
+			EventHandler<JobEvent> jobhhhh = (EventHandler<JobEvent>)context.getJob(event.getJobId());
+			jobhhhh.handle(event);
+		}
+	}  
+}
+public class org.apache.hadoop.mapreduce.v2.app.client.MRClientService extends AbstractService implements ClientService {
+	private org.apache.hadoop.ipc.Server server;
+	private org.apache.hadoop.yarn.webapp.WebApp webApp;
+	public MRClientService(AppContext appContext) {
+		this.appContext = appContext;
+		this.protocolHandler = new MRClientProtocolHandler();
+	}
+	protected void serviceStart() throws Exception {
+		Configuration conf = getConfig();
+		YarnRPC rpc = YarnRPC.create(conf);// HadoopYarnProtoRPC
+		InetSocketAddress address = new InetSocketAddress(0);
+		server = rpc.getServer(MRClientProtocol.class, protocolHandler, address, conf, appContext.getClientToAMTokenSecretManager(), conf.getInt(MRJobConfig.MR_AM_JOB_CLIENT_THREAD_COUNT, MRJobConfig.DEFAULT_MR_AM_JOB_CLIENT_THREAD_COUNT), MRJobConfig.MR_AM_JOB_CLIENT_PORT_RANGE);
+		server.start();// 纯 RPC 了
+		this.bindAddress = NetUtils.createSocketAddrForHost(appContext.getNMHostname(), server.getListenerAddress().getPort());
+		webApp = WebApps.$for("mapreduce", AppContext.class, appContext, "ws").withHttpPolicy(conf, Policy.HTTP_ONLY).start(new AMWebApp());
+		super.serviceStart();
+	}
+	public GetJobReportResponse getJobReport(GetJobReportRequest request) throws IOException {
+		JobId jobId = request.getJobId();
+		Job job = verifyAndGetJob(jobId, JobACL.VIEW_JOB, false);
+		GetJobReportResponse response = recordFactory.newRecordInstance(GetJobReportResponse.class);
+		response.setJobReport(job.getReport());
+		return response;
+	}
+}
+public class org.apache.hadoop.mapreduce.v2.app.job.impl.JobImpl implements org.apache.hadoop.mapreduce.v2.app.job.Job, EventHandler<JobEvent> {
+	public static class InitTransition implements MultipleArcTransition<JobImpl, JobEvent, JobStateInternal> {
+		public JobStateInternal transition(JobImpl job, JobEvent event) {        
+			TaskSplitMetaInfo[] taskSplitMetaInfo = createSplits(job, job.jobId);
+			job.numMapTasks = taskSplitMetaInfo.length;
+			job.numReduceTasks = job.conf.getInt(MRJobConfig.NUM_REDUCES, 0);
+			job.taskAttemptCompletionEvents = new ArrayList<TaskAttemptCompletionEvent>(job.numMapTasks + job.numReduceTasks + 10);
+			job.mapAttemptCompletionEvents = new ArrayList<TaskCompletionEvent>(job.numMapTasks + 10);
+			createMapTasks(job, inputLength, taskSplitMetaInfo);
+			createReduceTasks(job);
+			return JobStateInternal.INITED;
+		}
+	}
+	private void createMapTasks(JobImpl job, long inputLength, TaskSplitMetaInfo[] splits) {
+		for (int i=0; i < job.numMapTasks; ++i) {
+			TaskImpl task = new MapTaskImpl(job.jobId, i, job.eventHandler, job.remoteJobConfFile, job.conf, splits[i], job.taskAttemptListener, job.jobToken, job.jobCredentials, job.clock, job.applicationAttemptId.getAttemptId(), job.metrics, job.appContext);
+			job.addTask(task);
+		}
+	}
+	private void createReduceTasks(JobImpl job) {
+		for (int i = 0; i < job.numReduceTasks; i++) {
+			TaskImpl task = new ReduceTaskImpl(job.jobId, i, job.eventHandler, job.remoteJobConfFile, job.conf, job.numMapTasks, job.taskAttemptListener, job.jobToken, job.jobCredentials, job.clock, job.applicationAttemptId.getAttemptId(), job.metrics, job.appContext);
+			job.addTask(task);
+		}
+	}
+}
+public class org.apache.hadoop.mapreduce.v2.app.rm.RMContainerAllocator extends RMContainerRequestor implements ContainerAllocator {
+	private final Map<String, LinkedList<TaskAttemptId>> mapsHostMapping = new HashMap<String, LinkedList<TaskAttemptId>>();
+	protected synchronized void heartbeat() throws Exception {
+		List<Container> allocatedContainers = getResources();
+		if (allocatedContainers != null && allocatedContainers.size() > 0) {
+			scheduledRequests.assign(allocatedContainers);// 这里太重要了, 持续太多硬核操作都依赖于此
+		}
+	}
+	private List<Container> getResources() throws Exception {
+		AllocateResponse response = makeRemoteRequest();
+		List<Container> newContainers = response.getAllocatedContainers();
+		return newContainers;
+	}
+	private void assign(List<Container> allocatedContainers) {      
+		assignContainers(allocatedContainers);
+	}
+	private void assignContainers(List<Container> allocatedContainers) {
+		Iterator<Container> it = allocatedContainers.iterator();
+		while (it.hasNext()) {
+			Container allocated = it.next();
+			ContainerRequest assigned = assignWithoutLocality(allocated);
+			if (assigned != null) {
+				containerAssigned(allocated, assigned);// 分配
+				it.remove();
+			}
+		}
+		assignMapsWithLocality(allocatedContainers);
+	}
+	private void assignMapsWithLocality(List<Container> allocatedContainers) {
+		Iterator<Container> it = allocatedContainers.iterator();
+		while(it.hasNext() && maps.size() > 0 && canAssignMaps()){
+			Container allocated = it.next();        
+			Priority priority = allocated.getPriority();
+			String host = allocated.getNodeId().getHost();
+			LinkedList<TaskAttemptId> list = mapsHostMapping.get(host);
+			while (list != null && list.size() > 0) {
+				TaskAttemptId tId = list.removeFirst();
+				if (maps.containsKey(tId)) {
+					ContainerRequest assigned = maps.remove(tId);
+					containerAssigned(allocated, assigned);
+					it.remove();
+				}
+			}
+		}
+	}
+	private void containerAssigned(Container allocated, ContainerRequest assigned) {
+		eventHandler.handle(new TaskAttemptContainerAssignedEvent(assigned.attemptID, allocated, applicationACLs));// ***
+		assignedRequests.add(allocated, assigned.attemptID);
+	}
+}
+public abstract class org.apache.hadoop.mapreduce.v2.app.rm.RMCommunicator extends AbstractService implements RMHeartbeatHandler {
+	public class AllocatorRunnable implements Runnable {
+		public void run() {
+			while (!stopped.get() && !Thread.currentThread().isInterrupted()) {
+				Thread.sleep(rmPollInterval);// 1000
+				heartbeat();
+			}
+		}
+	}
+}
+public abstract class org.apache.hadoop.mapreduce.v2.app.rm.RMContainerRequestor extends RMCommunicator {
+	protected AllocateResponse makeRemoteRequest() throws YarnException, IOException {
+		AllocateRequest allocateRequest = AllocateRequest.newInstance(lastResponseID, super.getApplicationProgress(), new ArrayList<ResourceRequest>(ask), new ArrayList<ContainerId>(release), blacklistRequest);
+		AllocateResponse allocateResponse = scheduler.allocate(allocateRequest);// 远程调用, scheduler 是个代理对象
+		return allocateResponse;
+	}
+}

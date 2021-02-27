@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<allocations>
+<queue name="queueA">
+<minResources>1024 mb,2 vcores</minResources>
+<maxResources>14336 mb,4 vcores</maxResources>
+<maxRunningApps>50</maxRunningApps>
+<weight>1.0</weight>
+<queue name="queueB">
+<minResources>1024 mb,1 vcores</minResources>
+<maxResources>4096 mb,4 vcores</maxResources>
+</queue>
+<queue name="queueC">
+<minResources>1024 mb,1 vcores</minResources>
+<maxResources>8192 mb,8 vcores</maxResources>
+</queue>
+</queue>
+<user name="root">
+<maxRunningApps>30</maxRunningApps>
+</user>
+<userMaxAppsDefault>50</userMaxAppsDefault>
+</allocations>

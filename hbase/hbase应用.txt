@@ -1,0 +1,71 @@
+1、region merge
+方式一：71.6 $ hbase> merge_region 'ENCODED_REGIONNAME', 'ENCODED_REGIONNAME'
+	merge_region '33cfb558ffe884b73b472d8bef83c916_ns:MyTab,key937439,1516295899830.33cfb558ffe884b73b472d8bef83c916.','1de721aa0ea29f21f63675e92e41b498_ns:MyTab,key98,1516295899830.1de721aa0ea29f21f63675e92e41b498.'
+方式二：146.2 $ bin/hbase org.apache.hadoop.hbase.util.Merge <tablename> <region1> <region2>，要关闭hbase集群，启动zk(hbase zookeeper)
+
+2、region split
+    $ hbase> split 'tableName', 'splitKey'
+    $ hbase> split 'regionName', 'splitKey'
+3、region预分区:create 'ns:MyTab','cf',SPLITS => ['key3','key5']，预分区后写入会快一些，但不是太明显，但是IO消耗差别应该还是很大，因为写完之后还会有一段时间的compact IO
+4、major_compact '9b1bf877acc4334df195755ab384b53b','cf'	region中至少有两个Hfile时才生效（比如有很多delete的RowKey）
+
+5、测试memoryStore storeFile，单region多region，单storeFile多storeFile
+6、hbase.client.write.buffer 此参数没试出影响
+7、/hbase/archive/data，drop table的数据会在此
+8、kill 掉一个HRegionServer节点，相应region数据暂时是不能访问的，但是过段时间（一两分钟吧），此HRegionServer下的region会转交给其它HRegionServer，可以继续访问数据了
+9、经我测试minor compaction时也会合并数据呀
+
+==================================
+org.apache.hadoop.hbase.regionserver.IncreasingToUpperBoundRegionSplitPolicy.shouldSplit()
+==================================
+create 'testImport1','cf','cg'
+准备数据文件sample.csv，并上传到HDFS，内容为：
+1,tom,ss,jj
+2,sam,rr,hh
+3,jerry,hh,mm
+4,marry,mm,dd
+5,john,kk,rr
+----
+hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport1 /sample.csv
+hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.bulk.output=/result/hfile_tmp -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport3 /sample.csv
+hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /result/hfile_tmp testImport3
+list_namespace
+list_namespace_tables 'hbase'
+scan 'hbase:meta' 可以看到用户定义表的region位置，get /hbase/meta-region-server，可以看到meta表的region
+----
+做HMasterHA，只改这里即可，其它节点hbase-daemon.sh start master，在前台看active状态（16010）
+<name>hbase.master.port</name>
+<value>60000</value>
+=================================================
+hbase org.apache.hadoop.hbase.snapshot.ExportSnapshot -snapshot ss -copy-to hdfs://192.168.58.172:9000/hbase
+mr任务会报内存溢出，看日志发现
+2018-04-07 19:03:49,490 INFO [main] org.apache.hadoop.hbase.snapshot.ExportSnapshot: Using bufferSize=128 M
+2018-04-07 19:03:49,969 FATAL [main] org.apache.hadoop.mapred.YarnChild: Error running child : java.lang.OutOfMemoryError: Java heap space
+应该是默认值小于128 M，于是更改
+<name>mapred.child.java.opts</name>
+<value>-Xmx1024m</value>
+顺便把快照拷贝说完，在另一个集群直接restore_snapshot 'ss'，如果没有表空间要创建一下create_namespace 'ns'
+snapshot 'tableName','snapshotName'	list_snapshots	clone_snapshot 'snapshotName','newTableName'
+经测试对集群负载没什么压力
+=============================================
+将hive的hive-hbase-handler-1.2.1.jar复制到hbase/lib
+create 'user1',{NAME => 'info',VERSIONS => 1}
+put 'user1','1','info:name','zhangsan'
+put 'user1','1','info:age','25'
+put 'user1','2','info:name','lisi'
+put 'user1','2','info:age','22'
+put 'user1','3','info:name','wangswu'
+put 'user1','3','info:age','21'
+----
+SET hbase.zookeeper.quorum=pseudo;
+SET zookeeper.znode.parent=/hbase;
+ADD jar /usr/local/app/apache-hive-1.2.1-bin/lib/hive-hbase-handler-1.2.1.jar;
+CREATE EXTERNAL TABLE user1 (
+rowkey string,
+info map<STRING,STRING>
+) STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,info:")
+TBLPROPERTIES ("hbase.table.name" = "user1");
+CREATE EXTERNAL TABLE user2 (rowkey string,name string,age int) STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler' WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,info:name,info:age")TBLPROPERTIES ("hbase.table.name" = "user1");
+hive插入数据到hbase：
+INSERT INTO TABLE user1 SELECT '4' AS rowkey,map('name','lijin','age','22') AS info from tab limit 1;

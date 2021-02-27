@@ -1,0 +1,31 @@
+可以看出，如上两种存储方式，都存在明显的优缺点：
+
+    直接存放于HDFS中，适合离线分析，却不利于记录级别的随机读写。
+    直接将数据存放于HBase/Cassandra中，适合记录级别的随机读写，对离线分析却不友好。
+
+但在很多实际业务场景中，两种场景时常是并存的。我们的通常做法有如下几种：
+
+    数据存放于HBase中，对于分析任务，基于Spark/Hive On HBase进行，性能较差。
+    对于分析性能要求较高的，可以将数据在HDFS/Hive中多冗余存放一份，或者，将HBase中的数据定期的导出成Parquet/Carbon格式的数据。 明显这种方案对业务应用提出了较高的要求，而且容易导致在线数据与离线数据之间的一致性问题。
+
+Kudu的设计，就是试图在OLAP与OLTP之间，寻求一个最佳的结合点，从而在一个系统的一份数据中，既能支持OLTP型实时读写能力又能支持OLAP型分析。另外一个初衷，在Cloudera发布的《Kudu: New Apache Hadoop Storage for Fast Analytics on Fast Data》一文中有提及，Kudu作为一个新的分布式存储系统期望有效提升CPU的使用率，而低CPU使用率恰是HBase/Cassandra等系统的最大问题。下面的章节中，主要从论文所揭示的内容来解读Kudu的设计原理。
+
+
+===========================================================
+
+1、https://kudu.apache.org/docs/：
+Reads can be serviced by read-only follower tablets, even in the event of a leader tablet failure.
+You can partition by any number of primary key columns, by any number of hashes, and an optional list of split rows
+A table has a schema and a totally ordered primary key. A table is split into segments called tablets
+Logical Replication
+Time-series application with widely varying access patterns
+2、https://kudu.apache.org/docs/release_notes.html
+examples（链接）
+3、https://kudu.apache.org/docs/kudu_impala_integration.html
+Specifying Tablet Partitioning
+Optimizing Performance for Evaluating SQL Predicates
+PARTITION BY HASH with no column specified is a shortcut to create the desired number of buckets by hashing all primary key columns.
+4、https://kudu.apache.org/docs/schema_design.html
+Kudu’s primary key is in a clustered index. All rows within a tablet are sorted by its primary key
+
+

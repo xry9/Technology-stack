@@ -1,0 +1,4 @@
+比如，executor的JVM进程，可能内存不是很够用了。那么此时可能就会执行GC。minor GC or full GC。总之一旦发生了GC之后，就会导致executor内，所有的工作线程全部停止，
+比如BlockManager，基于netty的网络通信。
+
+下一个stage的executor，可能是还没有停止掉的，task想要去上一个stage的task所在的exeuctor，去拉取属于自己的数据，结果由于对方正在gc，就导致拉取了半天没有拉取到。

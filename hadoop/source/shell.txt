@@ -1,0 +1,49 @@
+hadoop jar 
+  org.apache.hadoop.util.RunJar
+看下 /home/tyx/app/hadoop-2.7.2/bin/hadoop 脚本的最后两行就行了, 好简单
+
+public class org.apache.hadoop.util.RunJar {
+	public void run(String[] args) throws Throwable {
+		ClassLoader loader = createClassLoader(file, workDir);// URLClassLoader classpath: [file:/tmp/hadoop-unjar1536595094190247728/, file:/home/tyx/app/mygit/hadoop272/hadoop-mydemo/target/hadoop-mydemo-2.7.2.jar, file:/tmp/hadoop-unjar1536595094190247728/classes]
+		Thread.currentThread().setContextClassLoader(loader);// 这里有没有做用我真怀疑, 因为下一行是把 loader 传入的, 我感觉类似于 ThreadLocal 传参的功能
+		Class<?> mainClass = Class.forName(mainClassName, true, loader);
+		Method main = mainClass.getMethod("main", new Class[] { Array.newInstance(String.class, 0).getClass() });
+		String[] newArgs = Arrays.asList(args).subList(firstArg, args.length).toArray(new String[0]);
+		main.invoke(null, new Object[] { newArgs });
+	}
+	private ClassLoader createClassLoader(File file, final File workDir) throws MalformedURLException {
+		ClassLoader loader;
+		List<URL> classPath = new ArrayList<URL>();
+		classPath.add(new File(workDir+"/").toURI().toURL());
+		classPath.add(file.toURI().toURL());
+		classPath.add(new File(workDir, "classes/").toURI().toURL());
+		File[] libs = new File(workDir, "lib").listFiles();// lib 很重要啊
+		if (libs != null) {
+			for (int i = 0; i < libs.length; i++) {
+				classPath.add(libs[i].toURI().toURL());
+			}
+		}
+		loader = new URLClassLoader(classPath.toArray(new URL[0]));
+		return loader;
+	}
+}
+
+public class WordCountSimple {
+    private static final Log LOG = LogFactory.getLog(WordCountSimple.class);
+    public static void main(String[] args) throws Exception {
+        LOG.info("===main==="+Thread.currentThread().getContextClassLoader());//java.net.URLClassLoader@5fe5c6f
+        LOG.info("===main==="+new WordCountSimple().getClass().getClassLoader());//java.net.URLClassLoader@5fe5c6f
+        LOG.info("===main==="+MRAppMaster.class.getClassLoader());//sun.misc.Launcher$AppClassLoader@214c265e 或 java.net.URLClassLoader@5fe5c6f
+		如果不用 hadoop jar 提交, 去掉 CLASSPATH 中的 /usr/local/app/hadoop-2.7.2/share/hadoop/mapreduce/*, 然后打包时加入依赖, 即将其打入, MRAppMaster 处输出为 java.net.URLClassLoader@5fe5c6f
+		export CLASSPATH=/usr/local/app/hadoop-2.7.2/etc/hadoop:/usr/local/app/hadoop-2.7.2/share/hadoop/common/lib/*:/usr/local/app/hadoop-2.7.2/share/hadoop/common/*:/usr/local/app/hadoop-2.7.2/share/hadoop/hdfs/*:/usr/local/app/hadoop-2.7.2/share/hadoop/yarn/lib/*:/usr/local/app/hadoop-2.7.2/share/hadoop/yarn/*:/usr/local/app/hadoop-2.7.2/share/hadoop/mapreduce/lib/*:/usr/local/app/hadoop-2.7.2/contrib/capacity-scheduler/*.jar
+		/usr/local/app/jdk1.8.0_77//bin/java -Xmx1000m -Djava.net.preferIPv4Stack=true -Dhadoop.log.dir=/usr/local/app/hadoop-2.7.2/logs -Dhadoop.log.file=hadoop.log -Dhadoop.home.dir=/usr/local/app/hadoop-2.7.2 -Dhadoop.id.str=tyx -Dhadoop.root.logger=INFO,console -Djava.library.path=/usr/local/app/hadoop-2.7.2/lib/native -Dhadoop.policy.file=hadoop-policy.xml -Djava.net.preferIPv4Stack=true -Xmx512m -Dhadoop.security.logger=INFO,NullAppender org.apache.hadoop.util.RunJar /usr/local/app/mygit/hadoop272/hadoop-mydemo/target/hadoop-mydemo-2.7.2.jar org.apache.hadoop.WordCountSimple
+		-- 当然会报错程序跑不起来, 这不重要了
+	}
+}
+--------
+vim a.sh 
+#!/bin/bash
+CLASSPATH=/usr/local/app/hadoop-2.7.2/etc/hadoop:/usr/local/app/hadoop-2.7.2/share/hadoop/common/lib/*:/usr/local/app/hadoop-2.7.2/share/hadoop/common/*:/usr/local/app/hadoop-2.7.2/share/hadoop/hdfs:/usr/local/app/hadoop-2.7.2/share/hadoop/hdfs/lib/*:/usr/local/app/hadoop-2.7.2/share/hadoop/hdfs/*:/usr/local/app/hadoop-2.7.2/share/hadoop/yarn/lib/*:/usr/local/app/hadoop-2.7.2/share/hadoop/yarn/*:/usr/local/app/hadoop-2.7.2/share/hadoop/mapreduce/lib/*:/usr/local/app/hadoop-2.7.2/share/hadoop/mapreduce/*:/usr/local/app/hadoop-2.7.2/contrib/capacity-scheduler/*.jar
+/usr/local/app/jdk1.8.0_77/bin/java -cp $CLASSPATH -Xmx1000m -Dhadoop.log.dir=/usr/local/app/hadoop-2.7.2/logs -Dhadoop.log.file=hadoop.log -Dhadoop.home.dir=/usr/local/app/hadoop-2.7.2 -Dhadoop.id.str=tyx -Dhadoop.root.logger=INFO,console -Djava.library.path=/usr/local/app/hadoop-2.7.2/lib/native -Dhadoop.policy.file=hadoop-policy.xml -Djava.net.preferIPv4Stack=true -Xmx512m  -Dhadoop.security.logger=INFO,NullAppender org.apache.hadoop.util.RunJar /usr/local/app/mygit/hadoop272/hadoop-mydemo/target/hadoop-mydemo-2.7.2.jar org.apache.hadoop.WordCountSimple
+-- 不知道为什么 hadoop 脚本中没有 -cp $CLASSPATH, 但是不加真是不行..... 知道了要 export CLASSPATH 才可以
+--------

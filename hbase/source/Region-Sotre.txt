@@ -1,0 +1,1594 @@
+1、表路径是这样的:
+/hbase/data/default
+/hbase/data/hbase/meta
+/hbase/data/hbase/namespace		(怎么是还有个这表)
+
+2、通过 /hbase/WALs 目录观察，一个 regionserver 共用一个文件
+3、org.apache.hadoop.hbase.util.Bytes#binarySearch 这是不是二分查找
+4、RatioBasedCompactionPolicy#needsCompaction 中 storeFiles > hbase.hstore.compactionThreshold(3) 则可 compaction, 每次 flush 则会做此判断
+  面试中被问到怎么 compaction 时怎么选 storeFile
+5、一级缓存就是个 ConcurrentHashMap, map.put map.remove, remove 后会加到二级缓存中
+  释放是通过一个线程循环判断 long bytesToFree = currentSize - minSize(); 是否小于 0
+6、CacheConfig#instantiateBlockCache 缓存初始化相关, 即 ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getMax()*0.4
+  二级缓存如果堆内存的话 [hbase.bucketcache.size]*getHeapMemoryUsage().getMax()
+  二级缓存释放点不太好把握, 很可能是通过 bucketAllocator.getTotalSize() * DEFAULT_ACCEPT_FACTOR(0.95) 来判断的
+7、会有专门的线程执行 evict 操作, 添加缓存时也有, minSize = this.maxSize * this.minFactor(0.95);
+
+7、访问过一次缓存则 LruCachedBlock#access, SINGLE --> MULTI, 默认不是 MEMORY
+我觉得缓存适合用堆外内存来实现, 可以减少 gc 压力
+8、HFile 的文件结构:
+DataBlock + [[indexBlock(二级)]+[bloomFilterBlock],它俩顺序无所谓]+...循环 + [indexBlock(一级)] + [bloomFilterMeta] + trailer 
+9、org.apache.hadoop.hbase.regionserver.FlushLargeStoresPolicy#selectStoresToFlush, 这里还有不明白的地方
+10、flush 的入口, org.apache.hadoop.hbase.regionserver.HRegion#requestFlush
+触发点: org.apache.hadoop.hbase.regionserver.HRegion#memstoreSize 与 org.apache.hadoop.hbase.regionserver.HRegion#memstoreFlushSize 比较(DEFAULT_MEMSTORE_FLUSH_SIZE = 1024*1024*128L;)
+org.apache.hadoop.hbase.regionserver.HRegion#batchMutate(org.apache.hadoop.hbase.regionserver.HRegion.BatchOperationInProgress<?>)
+org.apache.hadoop.hbase.regionserver.HRegion#processRowsWithLocks(org.apache.hadoop.hbase.regionserver.RowProcessor<?,?>, long, long, long)
+HRegion#append(org.apache.hadoop.hbase.client.Append, long, long) 
+但是后两个点好像不怎么调用啊
+满足触发条件后, 创建一个 FlushRegionEntry, 并添加到队列中, 有专门的线程 FlushHandler 来, flushRegion, 然后还会跟据 FlushLargeStoresPolicy 选择 memStore
+flush 触发是 Region 级的, 但是会有个 for 循环, 每个 StoreFlushContext 落一次盘, 
+
+11、DefaultMemStore#size 只有这一个属性记录内存, 是否 flush 时真的没用到它, 所以根据内存判断是否要 flush 根本就没到 store 这一级
+
+12、org.apache.hadoop.hbase.regionserver.MemStoreFlusher#flushOneForGlobalPressure, 简单说就是先全局内存较大的 flush, 规则很复杂我没看懂
+  在 MemStoreFlusher.FlushHandler#FlushHandler 先判断 isAboveLowWaterMark() 即取全局内存比较(globalMemStoreLimit * 0.95f)
+
+13、private AtomicReference<byte[]> midKey = new AtomicReference<byte[]>();
+  我觉得 Atomic 是用在 cas 场景的, 否则用他干嘛
+
+14、compact 与 flush 操作 writer 是相同的, 不同的是 scanner, 而且几乎都是直接上线除了 add newFile, 对于 flush 来说 clear 一下 snapshot, 对于 compact 来说
+remove 一下原 file, 原有的缓存根本不用管
+StoreFlusherImpl#commit
+感觉 snapshot 下线 storeFile 上线, 不太好处理, 加锁都没法加呀, 现在的做法是让 storeFile/Reader/StoreFileScanner 上线, snapshot = new Map 新集合, 细想也是可以的
+经我不完全观察,  取 Scanner 本质是取 DefaultStoreFileManager#storefiles, 提交也确实更新这个值
+HStore#compact --> HStore#replaceStoreFiles 这应该没有上述问题, 因为操作的是同一个集合, 重新赋值就行了
+
+
+15、hbase 的架构与代理的 mysql 架构何其相似(region <--> mysql 实例), 可以认为是单点。但是为什么不支持事务呢
+我觉得两个写操作(转账), 在一个 region 中可以做, 否则就是分部式事务了. 引发了我一个思考, mysql 分表之后还能支持事务么, 不能吧
+在 mysql 不分表时这个操作应该是每条数据一把锁, 能拿到两把锁时, 等待客户端的 commit 命令
+有种说法 Hbase 可以支持单行的事务, 这个说法应该是对的, 其实 cassandra 也是一样的
+
+16、MemStoreScanner#getNext 中体现了 readPoint 的价值
+17、https://blog.csdn.net/Thousa_Ho/article/details/78915249
+18、有人说 rowkey 设计原则时, 别忘了不要太长就好
+19、hbase 与 es 二级索引保障数据一致性, 突然发现好简单, 串行就完了, 先写 es 再写 hbase, 有异常就都回滚
+20、数据结构为什么是 kv, 在 memStore 里这样存是必须的, 但在 storeFile 中我还是没参透
+
+
+hbase 多列簇的不好：
+1、读取时如果不指定 列簇 相当于多次文件IO，而且结果还要拼起来，性能开锁是直线增长的
+2、每个列簇一个metastore，占用内存
+
+
+public class org.apache.hadoop.hbase.regionserver.HRegion implements HeapSize, PropagatingConfigurationObserver, Region {
+	private final WAL wal;
+	long memstoreFlushSize;
+	private RegionServerAccounting rsAccounting;
+	private final MultiVersionConcurrencyControl mvcc = new MultiVersionConcurrencyControl();
+	protected final Map<byte[], Store> stores = new ConcurrentSkipListMap<byte[], Store>(Bytes.BYTES_RAWCOMPARATOR);
+	private final AtomicLong memstoreSize = new AtomicLong(0);
+	private long blockingMemStoreSize;
+	public List<Cell> get(Get get, boolean withCoprocessor, long nonceGroup, long nonce) throws IOException {
+		List<Cell> results = new ArrayList<Cell>();
+		Scan scan = new Scan(get);
+		RegionScanner scanner = getScanner(scan, null, nonceGroup, nonce);
+		scanner.next(results);
+		return results;
+	}
+	// Api put 就是走到这个方法
+	public OperationStatus[] batchMutate(Mutation[] mutations, long nonceGroup, long nonce) throws IOException {
+		return batchMutate(new MutationBatch(mutations, nonceGroup, nonce));
+	}
+	OperationStatus[] batchMutate(BatchOperationInProgress<?> batchOp) throws IOException {
+		doMiniBatchMutation(batchOp);
+		long newSize = this.getMemstoreSize();
+        if (isFlushSize(newSize)) {// 这里很重要啊, 检查本 memstoreFlushSize
+			requestFlush();
+        }
+		return batchOp.retCodeDetails;
+	}
+	private long doMiniBatchMutation(BatchOperationInProgress<?> batchOp) throws IOException {
+		Map<byte[], List<Cell>>[] familyMaps = new Map[batchOp.operations.length];
+		WALEdit walEdit = new WALEdit(cellCount, isInReplay);
+		addFamilyMapToWALEdit(familyMaps[i], walEdit);
+		txid = this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey, walEdit, true);
+		for (int i = firstIndex; i < lastIndexExclusive; i++) {
+			if (batchOp.retCodeDetails[i].getOperationStatusCode() != OperationStatusCode.NOT_RUN) {
+				continue;
+			}
+			addedSize += applyFamilyMapToMemstore(familyMaps[i], mvccNum, isInReplay);
+		}
+		if (txid != 0) {
+			syncOrDefer(txid, durability);// Sync wal.
+		}
+		success = true;
+		return addedSize;
+		this.addAndGetGlobalMemstoreSize(addedSize);// finally 中
+	}
+	private long applyFamilyMapToMemstore(Map<byte[], List<Cell>> familyMap, long mvccNum, boolean isInReplay) throws IOException {
+		long size = 0;
+		for (Map.Entry<byte[], List<Cell>> e : familyMap.entrySet()) {
+			byte[] family = e.getKey();
+			List<Cell> cells = e.getValue();
+			Store store = getStore(family);
+			int listSize = cells.size();
+			for (int i=0; i < listSize; i++) {
+				Cell cell = cells.get(i);
+				if (cell.getSequenceId() == 0 || isInReplay) {
+					CellUtil.setSequenceId(cell, mvccNum);// 别小看这里呀
+				}
+				size += store.add(cell);
+			}
+		}
+		return size;
+	}
+	private void addFamilyMapToWALEdit(Map<byte[], List<Cell>> familyMap, WALEdit walEdit) {
+		for (List<Cell> edits : familyMap.values()) {
+			int listSize = edits.size();
+			for (int i=0; i < listSize; i++) {
+				Cell cell = edits.get(i);
+				walEdit.add(cell);
+			}
+		}
+	}
+	private void syncOrDefer(long txid, Durability durability) throws IOException {
+		if (this.getRegionInfo().isMetaRegion()) {
+			this.wal.sync(txid);
+		} else {
+			switch(durability) {
+				case SYNC_WAL:
+				case FSYNC_WAL:
+				this.wal.sync(txid);
+			}
+		}
+	}
+	public Store getStore(final byte[] column) {
+		return this.stores.get(column);
+	}
+	private RegionScanner getScanner(Scan scan, List<KeyValueScanner> additionalScanners, long nonceGroup, long nonce) throws IOException {
+		return instantiateRegionScanner(scan, additionalScanners, nonceGroup, nonce);
+	}
+	protected RegionScanner instantiateRegionScanner(Scan scan, List<KeyValueScanner> additionalScanners, long nonceGroup, long nonce) throws IOException {
+		return new RegionScannerImpl(scan, additionalScanners, this);
+	}
+	// 此方法的调用是从 openHRegion 一路过来的
+	private long initializeStores(final CancelableProgressable reporter, MonitoredTask status) throws IOException {
+		ThreadPoolExecutor storeOpenerThreadPool = getStoreOpenAndCloseThreadPool("StoreOpener-" + this.getRegionInfo().getShortNameToLog());
+		CompletionService<HStore> completionService = new ExecutorCompletionService<HStore>(storeOpenerThreadPool);
+		for (final HColumnDescriptor family : htableDescriptor.getFamilies()) {
+			completionService.submit(new Callable<HStore>() {
+				public HStore call() throws IOException {
+					return instantiateHStore(family);
+				}
+			});
+		}
+		for (int i = 0; i < htableDescriptor.getFamilies().size(); i++) {
+			Future<HStore> future = completionService.take();
+			HStore store = future.get();
+			this.stores.put(store.getFamily().getName(), store);
+		}
+		return Math.max(maxSeqId, maxMemstoreTS + 1);
+	}
+	protected HStore instantiateHStore(final HColumnDescriptor family) throws IOException {
+		return new HStore(this, family, this.conf);
+	}
+	public static HRegion openHRegion(final HRegionInfo info, final HTableDescriptor htd, final WAL wal, final Configuration conf, final RegionServerServices rsServices, final CancelableProgressable reporter) throws IOException {
+		return openHRegion(FSUtils.getRootDir(conf), info, htd, wal, conf, rsServices, reporter);
+	}
+	public HRegion(final HRegionFileSystem fs, final WAL wal, final Configuration confParam, final HTableDescriptor htd, final RegionServerServices rsServices) {
+		this.wal = wal;// FSHLog
+		this.fs = fs;
+		setHTableSpecificConf();
+		this.rsAccounting = this.rsServices.getRegionServerAccounting();
+	}
+	void setHTableSpecificConf() {
+		long flushSize = this.htableDescriptor.getMemStoreFlushSize();
+		if (flushSize <= 0) {
+			flushSize = conf.getLong(HConstants.HREGION_MEMSTORE_FLUSH_SIZE, HTableDescriptor.DEFAULT_MEMSTORE_FLUSH_SIZE);
+		}
+		this.memstoreFlushSize = flushSize;
+		this.blockingMemStoreSize = this.memstoreFlushSize * conf.getLong(HConstants.HREGION_MEMSTORE_BLOCK_MULTIPLIER, HConstants.DEFAULT_HREGION_MEMSTORE_BLOCK_MULTIPLIER);
+	}
+  
+	public long addAndGetGlobalMemstoreSize(long memStoreSize) {// 此方法应该是全局惟一一处令 this.memstoreSize 变化
+		if (this.rsAccounting != null) {
+			rsAccounting.addAndGetGlobalMemstoreSize(memStoreSize);
+		}
+		long size = this.memstoreSize.addAndGet(memStoreSize);
+		return size;
+	}
+	private boolean isFlushSize(final long size) {
+		return size > this.memstoreFlushSize;
+	}
+	public long getMemstoreSize() {
+		return memstoreSize.get();
+	}
+	private void requestFlush() {
+		this.rsServices.getFlushRequester().requestFlush(this, false);
+	}
+	class RegionScannerImpl implements RegionScanner {
+		KeyValueHeap storeHeap = null;
+		protected final HRegion region;
+		RegionScannerImpl(Scan scan, List<KeyValueScanner> additionalScanners, HRegion region) throws IOException {
+			this(scan, additionalScanners, region, HConstants.NO_NONCE, HConstants.NO_NONCE);
+		}
+		RegionScannerImpl(Scan scan, List<KeyValueScanner> additionalScanners, HRegion region, long nonceGroup, long nonce) throws IOException {
+			this.region = region;
+			initializeScanners(scan, additionalScanners);
+		}
+		protected void initializeScanners(Scan scan, List<KeyValueScanner> additionalScanners) throws IOException {
+			List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>(scan.getFamilyMap().size());
+			for (Map.Entry<byte[], NavigableSet<byte[]>> entry : scan.getFamilyMap().entrySet()) {
+				Store store = stores.get(entry.getKey());
+				KeyValueScanner scanner = store.getScanner(scan, entry.getValue(), this.readPt);
+				scanners.add(scanner);
+			}
+			initializeKVHeap(scanners, joinedScanners, region);// scanners: [StoreScanner]
+		}
+		protected void initializeKVHeap(List<KeyValueScanner> scanners, List<KeyValueScanner> joinedScanners, HRegion region) throws IOException {
+			this.storeHeap = new KeyValueHeap(scanners, region.comparator);
+		}
+		public boolean next(List<Cell> outResults) throws IOException {
+			return next(outResults, defaultScannerContext);
+		}
+		public synchronized boolean next(List<Cell> outResults, ScannerContext scannerContext) throws IOException {
+			return nextRaw(outResults, scannerContext);
+		}
+		public boolean nextRaw(List<Cell> outResults, ScannerContext scannerContext) throws IOException {
+			boolean moreValues;
+			moreValues = nextInternal(outResults, scannerContext);
+			return moreValues;
+		}
+		private boolean nextInternal(List<Cell> results, ScannerContext scannerContext) throws IOException {
+			RpcCallContext rpcCall = RpcServer.getCurrentCall();
+			while (true) {
+				populateResult(results, this.storeHeap, scannerContext, currentRow, offset, length);
+				Cell nextKv = this.storeHeap.peek();
+				stopRow = nextKv == null || isStopRow(nextKv.getRowArray(), nextKv.getRowOffset(), nextKv.getRowLength());
+				if (stopRow) {
+					return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
+				} else {
+					return scannerContext.setScannerState(NextState.MORE_VALUES).hasMoreValues();
+				}
+			}
+		}
+		private boolean populateResult(List<Cell> results, KeyValueHeap heap, ScannerContext scannerContext, byte[] currentRow, int offset, short length) throws IOException {
+			Cell nextKv;
+			do {
+				scannerContext.setKeepProgress(true);
+				heap.next(results, scannerContext);
+				nextKv = heap.peek();
+				moreCellsInRow = moreCellsInRow(nextKv, currentRow, offset, length);
+			} while (moreCellsInRow);
+			return nextKv != null;
+		}
+	}
+	protected HRegion openHRegion(final CancelableProgressable reporter) throws IOException {
+		this.openSeqNum = initialize(reporter);
+		this.mvcc.advanceTo(openSeqNum);
+		return this;
+	}
+	public FlushResult flush(boolean force) throws IOException {
+		return flushcache(force, false);
+	}
+	public FlushResult flushcache(boolean forceFlushAllStores, boolean writeFlushRequestWalMarker) throws IOException {
+		Collection<Store> specificStoresToFlush = forceFlushAllStores ? stores.values() : flushPolicy.selectStoresToFlush();// 好像所有 flush 只有这里是根据策略选 store, 这又是一个策略模式啊
+		FlushResult fs = internalFlushcache(specificStoresToFlush, status, writeFlushRequestWalMarker);
+		return fs;
+	}
+	private FlushResult internalFlushcache(final Collection<Store> storesToFlush, MonitoredTask status, boolean writeFlushWalMarker) throws IOException {
+		return internalFlushcache(this.wal, HConstants.NO_SEQNUM, storesToFlush, status, writeFlushWalMarker);
+	}
+	// 这里可以认为是 flush 的起始方法, 因为关键是 storesToFlush, 而它的产生可能是 close/... , flush 触发点很多, rpc 等, 我关心的其实也就是 add cell, close 吧
+	protected FlushResult internalFlushcache(final WAL wal, final long myseqid, final Collection<Store> storesToFlush, MonitoredTask status, boolean writeFlushWalMarker) throws IOException {
+		// 只要 memstore 不为 null, result 就有效, 这里还做了一个很重要的事, 对应该 flush 的 store 调用了 StoreFlusherImpl#prepare, prepare 确定了要落盘的 MemStoreSnapshot
+		PrepareFlushResult result = internalPrepareFlushCache(wal, myseqid, storesToFlush, status, writeFlushWalMarker);
+		return internalFlushCacheAndCommit(wal, status, result, storesToFlush);
+	}
+	protected FlushResult internalFlushCacheAndCommit(final WAL wal, MonitoredTask status, final PrepareFlushResult prepareResult, final Collection<Store> storesToFlush) throws IOException {
+		TreeMap<byte[], StoreFlushContext> storeFlushCtxs = prepareResult.storeFlushCtxs;
+		TreeMap<byte[], List<Path>> committedFiles = prepareResult.committedFiles;
+		for (StoreFlushContext flush : storeFlushCtxs.values()) {// 搞一个 StoreFlushContext, 就是承包各种 flush 相关的操作吗, 这叫什么模式
+			flush.flushCache(status);// 这是真正写, 落盘的操作
+		}
+		Iterator<Store> it = storesToFlush.iterator();
+		for (StoreFlushContext flush : storeFlushCtxs.values()) {
+			boolean needsCompaction = flush.commit(status); // 这里好重要, 切换 snapshot --> storeFile 上线
+			if (needsCompaction) {
+				compactionRequested = true;
+			}
+			byte[] storeName = it.next().getFamily().getName();
+			List<Path> storeCommittedFiles = flush.getCommittedFiles();
+			committedFiles.put(storeName, storeCommittedFiles);
+			if (storeCommittedFiles == null || storeCommittedFiles.isEmpty()) {
+				totalFlushableSizeOfFlushableStores -= prepareResult.storeFlushableSize.get(storeName);
+			}
+			flushedOutputFileSize += flush.getOutputFileSize();
+		}// flush 后只触发 compaction 么, split 呢
+		return new FlushResultImpl(compactionRequested ? FlushResult.Result.FLUSHED_COMPACTION_NEEDED : FlushResult.Result.FLUSHED_NO_COMPACTION_NEEDED, flushOpSeqId);
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.StoreFile {
+	public StoreFile(final FileSystem fs, final StoreFileInfo fileInfo, final Configuration conf, final CacheConfig cacheConf,  final BloomType cfBloomType) throws IOException {
+		this.fs = fs; this.fileInfo = fileInfo; this.cacheConf = cacheConf;
+		if (BloomFilterFactory.isGeneralBloomEnabled(conf)) { this.cfBloomType = cfBloomType; } else { this.cfBloomType = BloomType.NONE; }
+	}
+	public Reader createReader() throws IOException {
+		return createReader(false);
+	}
+	public Reader createReader(boolean canUseDropBehind) throws IOException {
+		this.reader = open(canUseDropBehind);
+		return this.reader;
+	}
+	private Reader open(boolean canUseDropBehind) throws IOException {
+		this.reader = fileInfo.open(this.fs, this.cacheConf, canUseDropBehind);
+		if (cfBloomType != BloomType.NONE) {
+			reader.loadBloomfilter(BlockType.GENERAL_BLOOM_META);
+		}
+	    reader.loadBloomfilter(BlockType.DELETE_FAMILY_BLOOM_META);
+	}
+	boolean passesBloomFilter(Scan scan, final SortedSet<byte[]> columns) {
+		byte[] row = scan.getStartRow();
+		switch (this.bloomFilterType) {
+			case ROW:
+			return passesGeneralBloomFilter(row, 0, row.length, null, 0, 0);
+		}
+	}
+	public boolean passesGeneralBloomFilter(byte[] row, int rowOffset, int rowLen, byte[] col, int colOffset, int colLen) {
+		BloomFilter bloomFilter = this.generalBloomFilter;
+		byte[] key;
+		switch (bloomFilterType) {
+			case ROW:
+			key = row;
+			break;
+		}
+		boolean shouldCheckBloom;
+		if (shouldCheckBloom) {
+			boolean exists;
+			boolean keyIsAfterLast = lastBloomKey != null && bloomFilter.getComparator().compareFlatKey(key, lastBloomKey) > 0;
+			exists = !keyIsAfterLast && bloomFilter.contains(key, 0, key.length, bloom);
+			return exists;
+		}
+		return true;
+    }
+	public static class Writer implements Compactor.CellSink {
+		private final BloomFilterWriter generalBloomFilterWriter;// 与 writer 并列呀
+		protected HFile.Writer writer;// 真正写数据的 writer 
+		private Writer(FileSystem fs, Path path, final Configuration conf, CacheConfig cacheConf, final KVComparator comparator, BloomType bloomType, long maxKeys, InetSocketAddress[] favoredNodes, HFileContext fileContext, final TimeRangeTracker trt) throws IOException {
+			this.timeRangeTrackerSet = trt != null;
+			this.timeRangeTracker = this.timeRangeTrackerSet? trt: new TimeRangeTracker();
+			writer = HFile.getWriterFactory(conf, cacheConf).withPath(fs, path).withComparator(comparator).withFavoredNodes(favoredNodes).withFileContext(fileContext).create();
+			this.kvComparator = comparator;
+			// 创建完 bloomWriter 并加入 writer.addInlineBlockWriter(bloomWriter);
+			generalBloomFilterWriter = BloomFilterFactory.createGeneralBloomAtWrite(conf, cacheConf, bloomType, (int) Math.min(maxKeys, Integer.MAX_VALUE), writer);
+		}
+		public void append(final Cell cell) throws IOException {
+			appendGeneralBloomfilter(cell); // 这有多重要不用多说了吧, 同 writer 一块 append, 同样 writer finishBlock 时也会写内联块即, generalBloomFilterWriter
+			appendDeleteFamilyBloomFilter(cell);
+			writer.append(cell);
+			trackTimestamps(cell);
+		}
+		public void close() throws IOException {
+		  boolean hasGeneralBloom = this.closeGeneralBloomFilter();
+		  boolean hasDeleteFamilyBloom = this.closeDeleteFamilyBloomFilter();
+		  writer.close(); // HFileWriterV2
+		}
+		private void appendGeneralBloomfilter(final Cell cell) throws IOException {
+			if (this.generalBloomFilterWriter != null) {
+				boolean newKey = true;
+				if (this.lastCell != null) {
+					switch(bloomType) {
+						case ROW:
+						newKey = ! kvComparator.matchingRows(cell, lastCell);
+						break;
+					}
+				}
+				if (newKey) {
+					byte[] bloomKey;
+					int bloomKeyOffset, bloomKeyLen;
+					switch (bloomType) {
+						case ROW:
+						bloomKey = cell.getRowArray();
+						bloomKeyOffset = cell.getRowOffset();
+						bloomKeyLen = cell.getRowLength();
+						break;
+					}
+					generalBloomFilterWriter.add(bloomKey, bloomKeyOffset, bloomKeyLen);// 这就是往里写了
+					lastBloomKey = bloomKey;
+					lastBloomKeyOffset = bloomKeyOffset;
+					lastBloomKeyLen = bloomKeyLen;
+					this.lastCell = cell;
+				}
+			}
+		}
+		private boolean closeGeneralBloomFilter() throws IOException {// 就是让 writer 知道添加了 bloomFilter, 好在 HFile 结尾时加上 meta 信息
+			boolean hasGeneralBloom = closeBloomFilter(generalBloomFilterWriter);
+			if (hasGeneralBloom) {
+				writer.addGeneralBloomFilter(generalBloomFilterWriter);// 推断一个 HFile 里就一个 bloom Block 吧, 而且理论上不可以有多个
+				writer.appendFileInfo(BLOOM_FILTER_TYPE_KEY, Bytes.toBytes(bloomType.toString()));// 还要写一个 FileInfo, 干啥的?
+				if (lastBloomKey != null) {
+					writer.appendFileInfo(LAST_BLOOM_KEY, Arrays.copyOfRange(lastBloomKey, lastBloomKeyOffset, lastBloomKeyOffset + lastBloomKeyLen));
+				}
+			}
+			return hasGeneralBloom;
+		}
+	}
+	public static class Reader {
+		private void loadBloomfilter(BlockType blockType) {
+			if (blockType == BlockType.GENERAL_BLOOM_META) {
+				if (this.generalBloomFilter != null) return; // Bloom has been loaded 
+				DataInput bloomMeta = reader.getGeneralBloomFilterMetadata(); // 这里很重要
+				if (bloomMeta != null) {
+					generalBloomFilter = BloomFilterFactory.createFromMeta(bloomMeta, reader);
+				}
+			} else if (blockType == BlockType.DELETE_FAMILY_BLOOM_META) {
+				if (this.deleteFamilyBloomFilter != null) return; // Bloom has been loaded
+				DataInput bloomMeta = reader.getDeleteBloomFilterMetadata();
+				if (bloomMeta != null) {
+					deleteFamilyBloomFilter = BloomFilterFactory.createFromMeta(bloomMeta, reader);
+				}
+			}
+		}
+	}
+}
+public final class org.apache.hadoop.hbase.util.BloomFilterFactory {
+	public static BloomFilter createFromMeta(DataInput meta, HFile.Reader reader) throws IllegalArgumentException, IOException {
+		int version = meta.readInt();
+		switch (version) {
+		  case ByteBloomFilter.VERSION:
+			return new ByteBloomFilter(meta);
+		  case CompoundBloomFilterBase.VERSION:
+			return new CompoundBloomFilter(meta, reader);
+		}
+	}
+}
+public class HFileWriterV2 extends AbstractHFileWriter {
+	protected HFileBlock.Writer fsBlockWriter;// 应该是所有 block 写都用这一个接口
+	private HFileBlockIndex.BlockIndexWriter dataBlockIndexWriter;// blockIndex 也是在这里呀
+	private HFileBlockIndex.BlockIndexWriter metaBlockIndexWriter;
+	private List<BlockWritable> additionalLoadOnOpenData = new ArrayList<BlockWritable>();// LoadOnOpenData, open 时就 load 呗
+	public HFileWriterV2(Configuration conf, CacheConfig cacheConf, FileSystem fs, Path path, FSDataOutputStream ostream, final KVComparator comparator, final HFileContext context) throws IOException {
+		super(cacheConf, ostream == null ? createOutputStream(conf, fs, path, null) : ostream, path, comparator, context);
+		finishInit(conf);
+	}
+	protected void finishInit(final Configuration conf) {
+		fsBlockWriter = new HFileBlock.Writer(blockEncoder, hFileContext);
+		boolean cacheIndexesOnWrite = cacheConf.shouldCacheIndexesOnWrite();
+		dataBlockIndexWriter = new HFileBlockIndex.BlockIndexWriter(fsBlockWriter, cacheIndexesOnWrite ? cacheConf : null, cacheIndexesOnWrite ? name : null);
+		dataBlockIndexWriter.setMaxChunkSize(HFileBlockIndex.getMaxChunkSize(conf));
+		dataBlockIndexWriter.setMinIndexNumEntries(HFileBlockIndex.getMinIndexNumEntries(conf));
+		inlineBlockWriters.add(dataBlockIndexWriter);// dataBlockIndexWriter 也在 inlineBlock ?
+		metaBlockIndexWriter = new HFileBlockIndex.BlockIndexWriter();
+	}
+	public void append(final Cell cell) throws IOException {
+		byte[] value = cell.getValueArray();
+		int voffset = cell.getValueOffset();
+		int vlength = cell.getValueLength();
+		boolean dupKey = checkKey(cell);
+		checkValue(value, voffset, vlength);
+		if (!dupKey) { checkBlockBoundary(); }
+		if (!fsBlockWriter.isWriting()) { newBlock(); }
+		fsBlockWriter.write(cell);
+		totalKeyLength += CellUtil.estimatedSerializedSizeOfKey(cell);
+		totalValueLength += vlength;
+		if (firstCellInBlock == null) {
+			firstCellInBlock = cell;
+		}
+		lastCell = cell;
+		entryCount++;
+		this.maxMemstoreTS = Math.max(this.maxMemstoreTS, cell.getSequenceId());
+	}
+	protected void checkBlockBoundary() throws IOException {
+		if (fsBlockWriter.blockSizeWritten() < hFileContext.getBlocksize()) return;
+		finishBlock();
+		writeInlineBlocks(false);// 在这写说明 DataBlock 与 BloomFilter 是交织在一起的呀, 还有 blockIndex, 但是 bloom 和 blockIndex 可能不落盘
+		newBlock();
+	}
+	private void writeInlineBlocks(boolean closing) throws IOException {// 叫这个名说明也是个写块/落盘的操作, 只不过未必会落
+		for (InlineBlockWriter ibw : inlineBlockWriters) {// InlineBlockWriter: BlockIndexWriter 和 CompoundBloomFilterWriter
+			while (ibw.shouldWriteBlock(closing)) {
+				long offset = outputStream.getPos();
+				boolean cacheThisBlock = ibw.getCacheOnWrite();
+				ibw.writeInlineBlock(fsBlockWriter.startWriting(ibw.getInlineBlockType()));
+				fsBlockWriter.writeHeaderAndData(outputStream);
+				// 这可是至关重要的 bloomMeta 中存 bloomBlock 的 offset 就在这呀, 如果 blockIndex 有两级索引的话这也起到作用了应该
+				ibw.blockWritten(offset, fsBlockWriter.getOnDiskSizeWithHeader(), fsBlockWriter.getUncompressedSizeWithoutHeader());
+				totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+				if (cacheThisBlock) { doCacheOnWrite(offset); }
+			}
+		}
+	}
+	private void finishBlock() throws IOException { // 写 block 数据外还要写索引数据
+		if (!fsBlockWriter.isWriting() || fsBlockWriter.blockSizeWritten() == 0) return;
+		if (firstDataBlockOffset == -1) { firstDataBlockOffset = outputStream.getPos(); }
+		lastDataBlockOffset = outputStream.getPos();// 上个 block 结束的 offset 就是新 block 的起始 offset 呗
+		fsBlockWriter.writeHeaderAndData(outputStream);// 这是真正去数据落盘了
+		int onDiskSize = fsBlockWriter.getOnDiskSizeWithHeader();// 值应该是在 org.apache.hadoop.hbase.io.hfile.HFileBlock.Writer#finishBlock 中赋的
+		// 取一个中间点? lastCellOfPreviousBlock 和 firstCellInBlock 的中间点, 为啥不用 firstCellInBlock 呢
+		Cell indexEntry = CellComparator.getMidpoint(this.comparator, lastCellOfPreviousBlock, firstCellInBlock);
+		dataBlockIndexWriter.addEntry(CellUtil.getCellKeySerializedAsKeyValueKey(indexEntry), lastDataBlockOffset, onDiskSize);// 创建 block 索引, 并没有写
+		totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+		if (cacheConf.shouldCacheDataOnWrite()) { doCacheOnWrite(lastDataBlockOffset); }
+	}
+	public void close() throws IOException { // 这里应该有很多重要的事
+		blockEncoder.saveMetadata(this);
+		finishBlock();
+		writeInlineBlocks(true);// 这回传的是 true 啊
+		FixedFileTrailer trailer = new FixedFileTrailer(getMajorVersion(), getMinorVersion());
+		if (!metaNames.isEmpty()) {
+			for (int i = 0; i < metaNames.size(); ++i) {
+				long offset = outputStream.getPos();
+				DataOutputStream dos = fsBlockWriter.startWriting(BlockType.META);
+				metaData.get(i).write(dos);
+				fsBlockWriter.writeHeaderAndData(outputStream);
+				totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+				metaBlockIndexWriter.addEntry(metaNames.get(i), offset, fsBlockWriter.getOnDiskSizeWithHeader());
+			}
+		}
+		long rootIndexOffset = dataBlockIndexWriter.writeIndexBlocks(outputStream);// 与下两行写 index 有啥区别
+		trailer.setLoadOnOpenOffset(rootIndexOffset);
+		metaBlockIndexWriter.writeSingleLevelIndex(fsBlockWriter.startWriting(BlockType.ROOT_INDEX), "meta");// 与上两行写 index 有啥区别
+		fsBlockWriter.writeHeaderAndData(outputStream);
+		totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+		writeFileInfo(trailer, fsBlockWriter.startWriting(BlockType.FILE_INFO));
+		fsBlockWriter.writeHeaderAndData(outputStream);
+		totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+		for (BlockWritable w : additionalLoadOnOpenData){
+			fsBlockWriter.writeBlock(w, outputStream);// additionalLoadOnOpenData 只 add 了 bloom, 而且 bloom 也只是写 meta, 这是写 bloomFilter 的 index, 因为如果多个 bloomFilter 的话还是要根据 index 区分的
+			totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+		}
+		trailer.setNumDataIndexLevels(dataBlockIndexWriter.getNumLevels());
+		trailer.setUncompressedDataIndexSize(dataBlockIndexWriter.getTotalUncompressedSize());
+		trailer.setFirstDataBlockOffset(firstDataBlockOffset);
+		trailer.setLastDataBlockOffset(lastDataBlockOffset);
+		trailer.setComparatorClass(comparator.getClass());
+		trailer.setDataIndexCount(dataBlockIndexWriter.getNumRootEntries());
+		finishClose(trailer);
+		fsBlockWriter.release();
+	}
+	public void addGeneralBloomFilter(final BloomFilterWriter bfw) {
+		this.addBloomFilter(bfw, BlockType.GENERAL_BLOOM_META);// GENERAL_BLOOM_META 原来在这
+	}
+	private void addBloomFilter(final BloomFilterWriter bfw, final BlockType blockType) {
+		if (bfw.getKeyCount() <= 0) return;
+		additionalLoadOnOpenData.add(new BlockWritable() {// 这种叫什么模式, 模板, 闭包？
+			public BlockType getBlockType() {
+				return blockType;// 这是不是闭包, blockType 的值是怎么赋的?
+			}
+			public void writeToBlock(DataOutput out) throws IOException {
+				bfw.getMetaWriter().write(out);
+				Writable dataWriter = bfw.getDataWriter();
+				if (dataWriter != null)
+				dataWriter.write(out);
+			}
+		});
+	}
+}
+public class CompoundBloomFilterWriter extends CompoundBloomFilterBase implements BloomFilterWriter, InlineBlockWriter {
+	public void writeInlineBlock(DataOutput out) throws IOException {
+		ReadyChunk readyChunk = readyChunks.peek();
+		ByteBloomFilter readyChunkBloom = readyChunk.chunk;
+		readyChunkBloom.getDataWriter().write(out);
+	}
+}
+public class org.apache.hadoop.hbase.util.CompoundBloomFilter extends CompoundBloomFilterBase implements BloomFilter {
+	public CompoundBloomFilter(DataInput meta, HFile.Reader reader) throws IOException {
+		this.reader = reader;
+		totalByteSize = meta.readLong();// 一直没找到 meta 有啥用, 这不是用到了么
+		hashCount = meta.readInt();
+		hashType = meta.readInt();
+		totalKeyCount = meta.readLong();
+		totalMaxKeys = meta.readLong();
+		numChunks = meta.readInt();
+		byte[] comparatorClassName = Bytes.readByteArray(meta);
+		if (comparatorClassName.length != 0) {
+			comparator = FixedFileTrailer.createComparator(Bytes.toString(comparatorClassName));
+		} else {
+			comparator = KeyValue.RAW_COMPARATOR;
+		}
+		hash = Hash.getInstance(hashType);
+		index = new HFileBlockIndex.BlockIndexReader(comparator, 1);
+		index.readRootIndex(meta, numChunks);// 这里的设计好奇妙, HFile 有个 BlockIndex, 没想到 bloomFilter 里也有一个, 这相当于 BloomBlock 的索引, 也好理解如果多个 bloomBlock 需要有个索引
+	}
+	public boolean contains(byte[] key, int keyOffset, int keyLength, ByteBuffer bloom) {
+		boolean result;
+		int block = index.rootBlockContainingKey(key, keyOffset, keyLength);
+		HFileBlock bloomBlock;
+		
+		bloomBlock = reader.readBlock(index.getRootBlockOffset(block), index.getRootBlockDataSize(block), true, true, false, true, BlockType.BLOOM_CHUNK, null);
+		ByteBuffer bloomBuf = bloomBlock.getBufferReadOnly();// 这个 bloomBuf 是存数据的
+		result = ByteBloomFilter.contains(key, keyOffset, keyLength, bloomBuf, bloomBlock.headerSize(), bloomBlock.getUncompressedSizeWithoutHeader(), hash, hashCount);
+		return result;
+	}
+}
+public class org.apache.hadoop.hbase.io.hfile.HFileBlockIndex {
+    public int rootBlockContainingKey(final byte[] key, int offset, int length) {
+      int pos = Bytes.binarySearch(blockKeys, key, offset, length, comparator);
+      if (pos >= 0) { assert pos < blockKeys.length; return pos; }
+      int i = -pos - 1;
+      assert 0 <= i && i <= blockKeys.length;
+      return i - 1;
+    }
+	public static class BlockIndexReader implements HeapSize {
+		public void readRootIndex(DataInput in, final int numEntries) throws IOException {// numEntries 数量是怎么确定的还是挺有必要知道的
+			blockOffsets = new long[numEntries];
+			blockKeys = new byte[numEntries][];
+			blockDataSizes = new int[numEntries];
+			if (numEntries > 0) {
+				for (int i = 0; i < numEntries; ++i) {
+					long offset = in.readLong();
+					int dataSize = in.readInt();
+					byte[] key = Bytes.readByteArray(in);
+					add(key, offset, dataSize);
+				}
+			}
+		}
+	}
+}
+public class org.apache.hadoop.hbase.regionserver.HStore implements Store {
+	private final HColumnDescriptor family;
+	private final CacheConfig cacheConf;
+	protected final MemStore memstore;
+	protected HStore(final HRegion region, final HColumnDescriptor family, final Configuration confParam) throws IOException {
+		HRegionInfo info = region.getRegionInfo();
+		this.fs = region.getRegionFileSystem();
+		fs.createStoreDir(family.getNameAsString());
+		this.region = region;
+		this.family = family;
+		scanInfo = new ScanInfo(conf, family, ttl, timeToPurgeDeletes, this.comparator);
+	    String className = conf.get(MEMSTORE_CLASS_NAME, DefaultMemStore.class.getName());
+		this.memstore = ReflectionUtils.instantiateWithCustomCtor(className, new Class[] {Configuration.class, KeyValue.KVComparator.class }, new Object[] { conf, this.comparator });
+		this.storeEngine = StoreEngine.create(this, this.conf, this.comparator);
+		this.storeEngine.getStoreFileManager().loadFiles(loadStoreFiles());// 这个 loadStoreFiles 就是去 hdfs 读数据了
+	}
+	public long add(final Cell cell) {
+		lock.readLock().lock();
+		return this.memstore.add(cell);
+		lock.readLock().unlock();
+	}
+	private List<StoreFile> loadStoreFiles() throws IOException {
+		Collection<StoreFileInfo> files = fs.getStoreFiles(getColumnFamilyName());
+		return openStoreFiles(files);
+	}  
+	public List<KeyValueScanner> getScanners(boolean cacheBlocks, boolean isGet, boolean usePread, boolean isCompaction, ScanQueryMatcher matcher, byte[] startRow, byte[] stopRow, long readPt) throws IOException {
+		Collection<StoreFile> storeFilesToScan;
+		List<KeyValueScanner> memStoreScanners;
+		storeFilesToScan = this.storeEngine.getStoreFileManager().getFilesForScanOrGet(isGet, startRow, stopRow);
+		memStoreScanners = this.memstore.getScanners(readPt);
+		List<StoreFileScanner> sfScanners = StoreFileScanner.getScannersForStoreFiles(storeFilesToScan, cacheBlocks, usePread, isCompaction, false, matcher, readPt, isPrimaryReplicaStore());
+		List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>(sfScanners.size()+1);
+		scanners.addAll(sfScanners);
+		scanners.addAll(memStoreScanners);
+		return scanners;
+	}
+	public KeyValueScanner getScanner(Scan scan, final NavigableSet<byte []> targetCols, long readPt) throws IOException {
+		KeyValueScanner scanner = scan.isReversed() ? new ReversedStoreScanner(this, getScanInfo(), scan, targetCols, readPt) : new StoreScanner(this, getScanInfo(), scan, targetCols, readPt);
+		return scanner;
+	}	
+	private List<StoreFile> openStoreFiles(Collection<StoreFileInfo> files) throws IOException {
+		ThreadPoolExecutor storeFileOpenerThreadPool = this.region.getStoreFileOpenAndCloseThreadPool("StoreFileOpenerThread-" + this.getColumnFamilyName());
+		CompletionService<StoreFile> completionService = new ExecutorCompletionService<StoreFile>(storeFileOpenerThreadPool);
+		int totalValidStoreFile = 0;
+		for (final StoreFileInfo storeFileInfo : files) {
+			completionService.submit(new Callable<StoreFile>() {
+				public StoreFile call() throws IOException {
+				StoreFile storeFile = createStoreFileAndReader(storeFileInfo); // 上面调用可以不管，这里应该是搞清 Hbase 数据结构的起点
+				return storeFile;
+				}
+			});
+			totalValidStoreFile++;
+		}
+		ArrayList<StoreFile> results = new ArrayList<StoreFile>(files.size());
+		for (int i = 0; i < totalValidStoreFile; i++) {
+			Future<StoreFile> future = completionService.take();
+			StoreFile storeFile = future.get();
+			results.add(storeFile);
+		}
+		return results;
+	}
+	private StoreFile createStoreFileAndReader(final StoreFileInfo info) throws IOException {
+		StoreFile storeFile = new StoreFile(this.getFileSystem(), info, this.conf, this.cacheConf, this.family.getBloomFilterType());
+		StoreFile.Reader r = storeFile.createReader();
+		return storeFile;
+	}
+	private StoreFile commitFile(final Path path, final long logCacheFlushId, MonitoredTask status) throws IOException {
+		Path dstPath = fs.commitStoreFile(getColumnFamilyName(), path);
+		status.setStatus("Flushing " + this + ": reopening flushed file");
+		StoreFile sf = createStoreFileAndReader(dstPath);
+		StoreFile.Reader r = sf.getReader();
+		this.storeSize += r.length();
+		this.totalUncompressedBytes += r.getTotalUncompressedBytes();
+		return sf;
+	}
+	private final class StoreFlusherImpl implements StoreFlushContext {// 就是承包各种 flush 相关的操作的吧
+		public boolean commit(MonitoredTask status) throws IOException {
+			List<StoreFile> storeFiles = new ArrayList<StoreFile>(this.tempFiles.size());
+			for (Path storeFilePath : tempFiles) {
+				StoreFile sf = HStore.this.commitFile(storeFilePath, cacheFlushSeqNum, status);
+				outputFileSize += sf.getReader().length();
+				storeFiles.add(sf);
+				for (StoreFile sf : storeFiles) {
+					committedFiles.add(sf.getPath());
+				}
+				return HStore.this.updateStorefiles(storeFiles, snapshot.getId());
+			}
+		}
+		public void prepare() {
+			this.snapshot = memstore.snapshot();
+			this.cacheFlushCount = snapshot.getCellsCount();
+			this.cacheFlushSize = snapshot.getSize();
+			committedFiles = new ArrayList<Path>(1);
+		}
+		public void flushCache(MonitoredTask status) throws IOException {
+			RegionServerServices rsService = region.getRegionServerServices();
+			ThroughputController throughputController =
+			rsService == null ? null : rsService.getFlushThroughputController();
+			tempFiles = HStore.this.flushCache(cacheFlushSeqNum, snapshot, status, throughputController);
+		}
+	}
+	protected List<Path> flushCache(final long logCacheFlushId, MemStoreSnapshot snapshot, MonitoredTask status, ThroughputController throughputController) throws IOException {
+		StoreFlusher flusher = storeEngine.getStoreFlusher();
+		for (int i = 0; i < flushRetriesNumber; i++) {
+			List<Path> pathNames = flusher.flushSnapshot(snapshot, logCacheFlushId, status, throughputController);
+			return pathNames;      
+		}
+	}
+	public StoreFile.Writer createWriterInTmp(long maxKeyCount, Compression.Algorithm compression, boolean isCompaction, boolean includeMVCCReadpoint, boolean includesTag, boolean shouldDropBehind, final TimeRangeTracker trt) throws IOException {
+		final CacheConfig writerCacheConf;
+		InetSocketAddress[] favoredNodes = null;
+		if (region.getRegionServerServices() != null) {
+			favoredNodes = region.getRegionServerServices().getFavoredNodesForRegion(
+			region.getRegionInfo().getEncodedName());
+		}
+		HFileContext hFileContext = createFileContext(compression, includeMVCCReadpoint, includesTag, cryptoContext);
+		StoreFile.WriterBuilder builder = new StoreFile.WriterBuilder(conf, writerCacheConf, this.getFileSystem()).withFilePath(fs.createTempName()).withComparator(comparator).withBloomType(family.getBloomFilterType()).withMaxKeyCount(maxKeyCount).withFavoredNodes(favoredNodes).withFileContext(hFileContext).withShouldDropCacheBehind(shouldDropBehind);
+		return builder.build();
+	}
+}
+public class StoreFileInfo {
+	public StoreFile.Reader open(final FileSystem fs, final CacheConfig cacheConf, final boolean canUseDropBehind) throws IOException {
+		FSDataInputStreamWrapper in;
+		FileStatus status;
+		in = new FSDataInputStreamWrapper(fs, this.getPath(), doDropBehind);// 这里是去打开流了
+		status = fs.getFileStatus(initialPath);
+		StoreFile.Reader reader = new StoreFile.Reader(fs, status.getPath(), in, length, cacheConf, conf);
+		return reader;
+	}
+	public static class Reader {
+		protected BloomFilter generalBloomFilter = null;
+		protected BloomFilter deleteFamilyBloomFilter = null;
+		protected BloomType bloomFilterType;
+		private final HFile.Reader reader;
+		public Reader(FileSystem fs, Path path, FSDataInputStreamWrapper in, long size, CacheConfig cacheConf, Configuration conf) throws IOException {
+			reader = HFile.createReader(fs, path, in, size, cacheConf, conf);
+			bloomFilterType = BloomType.NONE;
+		}
+	}
+}
+public class org.apache.hadoop.hbase.io.FSDataInputStreamWrapper {
+	public FSDataInputStreamWrapper(FileSystem fs, Path path, boolean dropBehind) throws IOException {
+		this(fs, null, path, dropBehind);
+	}
+	private FSDataInputStreamWrapper(FileSystem fs, FileLink link, Path path, boolean dropBehind) throws IOException {
+		this.path = path;
+		this.link = link;
+		this.doCloseStreams = true;
+		this.hfs = (fs instanceof HFileSystem) ? (HFileSystem)fs : new HFileSystem(fs);
+		this.stream = (link != null) ? link.open(hfs) : hfs.open(path);
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.StoreScanner extends NonReversedNonLazyKeyValueScanner implements KeyValueScanner, InternalScanner, ChangedReadersObserver {
+	protected final Store store;
+	protected KeyValueHeap heap;
+	protected ExecutorService executor;
+	public StoreScanner(Store store, ScanInfo scanInfo, Scan scan, final NavigableSet<byte[]> columns, long readPt) throws IOException {
+		this(store, scan, scanInfo, columns, readPt, scan.getCacheBlocks());
+		List<KeyValueScanner> scanners = getScannersNoCompaction();
+		seekScanners(scanners, matcher.getStartKey(), explicitColumnQuery && lazySeekEnabledGlobally, parallelSeekEnabled);
+		addCurrentScanners(scanners);
+		resetKVHeap(scanners, store.getComparator());
+	}
+	protected StoreScanner(Store store, Scan scan, final ScanInfo scanInfo, final NavigableSet<byte[]> columns, long readPt, boolean cacheBlocks) {
+		this.readPt = readPt;// 这个东西太重要了, 好像是个全局版本号
+		this.store = store;
+		if (this.store != null && this.store.getStorefilesCount() > 1) {
+			RegionServerServices rsService = ((HStore)store).getHRegion().getRegionServerServices();
+			if (rsService != null && scanInfo.isParallelSeekEnabled()) {
+				this.executor = rsService.getExecutorService();
+			}
+		}
+	}
+	protected List<KeyValueScanner> getScannersNoCompaction() throws IOException {
+		final boolean isCompaction = false;
+		boolean usePread = get || scanUsePread;
+		return selectScannersFrom(store.getScanners(cacheBlocks, get, usePread, isCompaction, matcher, scan.getStartRow(), scan.getStopRow(), this.readPt));
+	}
+	protected List<KeyValueScanner> selectScannersFrom(final List<? extends KeyValueScanner> allScanners) {
+		List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>(allScanners.size());
+		for (KeyValueScanner kvs : allScanners) {
+			if (kvs.shouldUseScanner(scan, store, expiredTimestampCutoff)) {// 这个判断很重要啊
+				scanners.add(kvs);
+			}
+		}
+		return scanners;
+	}
+	public boolean shouldUseScanner(Scan scan, Store store, long oldestUnexpiredTS) {
+		byte[] cf = store.getFamily().getName();
+		TimeRange timeRange = scan.getColumnFamilyTimeRange().get(cf);
+		return reader.passesTimerangeFilter(timeRange, oldestUnexpiredTS) && reader.passesKeyRangeFilter(scan) && reader.passesBloomFilter(scan, scan.getFamilyMap().get(cf));
+	}
+	protected void resetKVHeap(List<? extends KeyValueScanner> scanners, KVComparator comparator) throws IOException {
+		heap = new KeyValueHeap(scanners, comparator);
+	}
+	public Cell peek() {
+		if (this.heap == null) {
+			return this.lastTop;
+		}
+		return this.heap.peek();
+	}
+	public KeyValue next() { throw new RuntimeException("Never call StoreScanner.next()"); }
+	public boolean next(List<Cell> outResult) throws IOException {
+		return next(outResult, NoLimitScannerContext.getInstance());
+	}
+	public boolean next(List<Cell> outResult, ScannerContext scannerContext) throws IOException {
+		Cell cell = this.heap.peek();
+		LOOP: do {
+			// 这个循环很复杂, 揣测就是遍历了(storeFile+MemStore) 次
+			this.heap.next();
+		} while((cell = this.heap.peek()) != null);
+	}
+	
+	protected void seekScanners(List<? extends KeyValueScanner> scanners, Cell seekKey, boolean isLazy, boolean isParallelSeek) throws IOException {
+		long totalScannersSoughtBytes = 0;
+		for (KeyValueScanner scanner : scanners) {
+			scanner.seek(seekKey);// StoreFileScanner/MemStoreScanner
+			Cell c = scanner.peek();
+			if (c != null) {
+				totalScannersSoughtBytes += CellUtil.estimatedSerializedSizeOf(c);
+			}
+		}
+	}
+}
+
+
+public class org.apache.hadoop.hbase.regionserver.KeyValueHeap extends NonReversedNonLazyKeyValueScanner implements KeyValueScanner, InternalScanner {
+	protected PriorityQueue<KeyValueScanner> heap = null;
+	protected KeyValueScanner current = null;
+	public KeyValueHeap(List<? extends KeyValueScanner> scanners, KVComparator comparator) throws IOException {
+		this(scanners, new KVScannerComparator(comparator));
+	}
+	KeyValueHeap(List<? extends KeyValueScanner> scanners, KVScannerComparator comparator) throws IOException {
+		if (!scanners.isEmpty()) {
+			this.heap = new PriorityQueue<KeyValueScanner>(scanners.size(), this.comparator);
+			for (KeyValueScanner scanner : scanners) {
+				if (scanner.peek() != null) {
+					this.heap.add(scanner);
+				} else {
+					scanner.close();
+				}
+			}
+			this.current = pollRealKV();
+		}
+	}
+	public Cell peek() {
+		Cell cell = this.current.peek();
+		return cell;
+	}
+	// 这里是第二底层的 next, 包括 MemStoreScanner, StoreFileScanner
+	public Cell next()  throws IOException {
+		if(this.current == null) {
+			return null;
+		}
+		Cell kvReturn = this.current.next();
+		Cell kvNext = this.current.peek();
+		if (kvNext == null) {
+			this.current.close();
+			this.current = null;
+			this.current = pollRealKV();
+		} else {
+			KeyValueScanner topScanner = this.heap.peek();
+			if (topScanner != null && this.comparator.compare(kvNext, topScanner.peek()) >= 0) {
+				this.heap.add(this.current);
+				this.current = null;
+				this.current = pollRealKV();
+			}
+		}
+		return kvReturn;
+	}
+	public boolean next(List<Cell> result) throws IOException {
+		return next(result, NoLimitScannerContext.getInstance());
+	}
+	public boolean next(List<Cell> result, ScannerContext scannerContext) throws IOException {
+		if (this.current == null) {
+			return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
+		}
+		InternalScanner currentAsInternal = (InternalScanner)this.current;
+		boolean moreCells = currentAsInternal.next(result, scannerContext);// 转移到了 StoreScanner 
+		Cell pee = this.current.peek();
+		if (pee == null || !moreCells) {
+			this.current.close();
+		} else {
+			this.heap.add(this.current);
+		}
+		this.current = pollRealKV();
+		if (this.current == null) {
+			moreCells = scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
+		}
+		return moreCells;
+	}
+	protected KeyValueScanner pollRealKV() throws IOException {
+		KeyValueScanner kvScanner = heap.poll();
+		while (kvScanner != null && !kvScanner.realSeekDone()) {
+			if (kvScanner.peek() != null) {
+				kvScanner.enforceSeek();
+				Cell curKV = kvScanner.peek();
+				if (curKV != null) {
+					KeyValueScanner nextEarliestScanner = heap.peek();
+					if (nextEarliestScanner == null) {
+						return kvScanner;
+					}
+					Cell nextKV = nextEarliestScanner.peek();
+					if (nextKV == null || comparator.compare(curKV, nextKV) < 0) {
+						return kvScanner;
+					}
+					heap.add(kvScanner);
+				} else {
+					kvScanner.close();
+				}
+			} else {
+				kvScanner.close();
+			}
+			kvScanner = heap.poll();
+		}
+		return kvScanner;
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.StoreFileScanner implements KeyValueScanner {
+	private final HFileScanner hfs;
+	public Cell next() throws IOException {
+		Cell retKey = cur;
+		hfs.next();// ScannerV3
+		Cell cell = hfs.getKeyValue();
+		setCurrentCell(cell);
+		return retKey;
+	}
+	public boolean seek(Cell key) throws IOException {
+		if (seekCount != null) seekCount.incrementAndGet();
+		if(!seekAtOrAfter(hfs, key)) {// hfs: ScannerV3
+			this.cur = null;
+			return false;
+		}
+		...
+	}
+	public static boolean seekAtOrAfter(HFileScanner s, Cell k) throws IOException {
+		int result = s.seekTo(k);
+		if(result < 0) {
+			return s.seekTo();// ScannerV3
+		} else if(result > 0) {
+			return s.next();
+		}
+		return true;
+	}
+}
+public class org.apache.hadoop.hbase.regionserver.DefaultMemStore implements MemStore {
+	volatile CellSkipListSet cellSet;// 内存 set
+	// 初始化 Hstore 时被创建
+	public DefaultMemStore(final Configuration conf, final KeyValue.KVComparator c) {
+		this.cellSet = new CellSkipListSet(c);
+		String className = conf.get(MSLAB_CLASS_NAME, HeapMemStoreLAB.class.getName());
+		this.allocator = ReflectionUtils.instantiateWithCustomCtor(className, new Class[] { Configuration.class }, new Object[] { conf });
+	}
+	public MemStoreSnapshot snapshot() {
+		if (!this.snapshot.isEmpty()) {
+		} else {
+			this.snapshotId = EnvironmentEdgeManager.currentTime();
+			this.snapshotSize = keySize();
+			if (!this.cellSet.isEmpty()) {
+				this.snapshot = this.cellSet;
+				this.cellSet = new CellSkipListSet(this.comparator);// 这两行代码足够说明问题了, 而且细品发现好巧妙啊
+			}
+		}
+		MemStoreSnapshot memStoreSnapshot = new MemStoreSnapshot(this.snapshotId, snapshot.size(), this.snapshotSize, this.snapshotTimeRangeTracker, new CollectionBackedScanner(snapshot, this.comparator), this.tagsPresent);
+		return memStoreSnapshot;
+	}
+	public List<KeyValueScanner> getScanners(long readPt) {
+		return Collections.<KeyValueScanner> singletonList(new MemStoreScanner(readPt));
+	}
+	public long add(Cell cell) {
+		Cell toAdd = maybeCloneWithAllocator(cell);
+		boolean mslabUsed = (toAdd != cell);
+		return internalAdd(toAdd, mslabUsed);
+	}
+	private long internalAdd(final Cell toAdd, boolean mslabUsed) {
+		boolean notPresent = addToCellSet(toAdd);
+		long s = heapSizeChange(toAdd, notPresent);
+		if (!notPresent && mslabUsed) {
+		s += getCellLength(toAdd);
+		}
+		timeRangeTracker.includeTimestamp(toAdd);
+		this.size.addAndGet(s);
+		return s;
+	}
+	private boolean addToCellSet(Cell e) {
+		boolean b = this.cellSet.add(e);
+		return b;
+	}
+	protected class MemStoreScanner extends NonLazyKeyValueScanner {
+		MemStoreScanner(long readPoint) {// 每次连接都会被创建, 但是如果服务启动没有 put 过数据查询时也不会创建
+			super();
+			this.readPoint = readPoint;
+			cellSetAtCreation = cellSet;// 太重要了
+		}
+		public synchronized Cell next() {
+			// 有功夫再细看
+		}
+		public synchronized boolean seek(Cell key) {
+			cellSetIt = cellSetAtCreation.tailSet(key).iterator();
+			return seekInSubLists(key);
+		}
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.CellSkipListSet implements NavigableSet<Cell> {
+	private final ConcurrentNavigableMap<Cell, Cell> delegatee;
+	CellSkipListSet(final KeyValue.KVComparator c) {
+		this.delegatee = new ConcurrentSkipListMap<Cell, Cell>(c);// 并行的序的 map 呗
+	}
+}
+public class org.apache.hadoop.hbase.io.hfile.HFileReaderV3 extends HFileReaderV2 {
+	protected static class ScannerV3 extends ScannerV2 {
+		protected final void readKeyValueLen() {// 这里我没看懂啊
+			int p = blockBuffer.position() + blockBuffer.arrayOffset();
+			long ll = Bytes.toLong(blockBuffer.array(), p);
+			this.currKeyLen = (int)(ll >> Integer.SIZE);
+			this.currValueLen = (int)(Bytes.MASK_FOR_LOWER_INT_IN_LONG ^ ll);
+			checkKeyValueLen();
+			p += (Bytes.SIZEOF_LONG + currKeyLen + currValueLen);
+			if (reader.hfileContext.isIncludesTags()) {
+			this.currTagsLen = Bytes.toShort(blockBuffer.array(), p);
+			checkTagsLen();
+			p += (Bytes.SIZEOF_SHORT + currTagsLen);
+			}
+			readMvccVersion(p);
+		}
+	}
+}
+public class org.apache.hadoop.hbase.io.hfile.HFileReaderV2 extends AbstractHFileReader {
+	private HFileBlock.FSReader fsBlockReader;
+	public HFileReaderV2(final Path path, final FixedFileTrailer trailer, final FSDataInputStreamWrapper fsdis, final long size, final CacheConfig cacheConf, final HFileSystem hfs, final Configuration conf) throws IOException {
+		HFileBlock.FSReaderImpl fsBlockReaderV2 = new HFileBlock.FSReaderImpl(fsdis, fileSize, hfs, path, hfileContext);
+		this.fsBlockReader = fsBlockReaderV2;
+		// trailer.getLoadOnOpenDataOffset() 很大了, blockIter 好像就这几个 block了, ROOT_INDEX, ROOT_INDEX, FILE_INFO, GENERAL_BLOOM_META
+		HFileBlock.BlockIterator blockIter = fsBlockReaderV2.blockRange(trailer.getLoadOnOpenDataOffset(), fileSize - trailer.getTrailerSize());
+		dataBlockIndexReader.readMultiLevelIndexRoot(blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX), trailer.getDataIndexCount());// 这是最重要的索引
+		metaBlockIndexReader.readRootIndex(blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX), trailer.getMetaIndexCount());
+		fileInfo = new FileInfo();
+		fileInfo.read(blockIter.nextBlockWithBlockType(BlockType.FILE_INFO).getByteStream());
+		HFileBlock b;
+		while ((b = blockIter.nextBlock()) != null) {
+			loadOnOpenBlocks.add(b);// 这里也就 GENERAL_BLOOM_META 了, 后面用 bloomFilter 也就是从这拿的
+		}
+	}
+	protected abstract static class AbstractScannerV2 extends AbstractHFileReader.Scanner {
+		protected HFileBlock block;
+		protected HFileBlock readNextDataBlock() throws IOException {
+			long lastDataBlockOffset = reader.getTrailer().getLastDataBlockOffset();
+			if (block == null) return null;
+			HFileBlock curBlock = block;
+			do {
+				if (curBlock.getOffset() >= lastDataBlockOffset) {
+					return null;
+				}
+				curBlock = reader.readBlock(curBlock.getOffset() + curBlock.getOnDiskSizeWithHeader(), curBlock.getNextBlockOnDiskSize(), cacheBlocks, pread, isCompaction, true, null, getEffectiveDataBlockEncoding());
+			} while (!curBlock.getBlockType().isData());
+			return curBlock;
+		}
+	}
+	
+	protected static class ScannerV2 extends AbstractScannerV2 {
+		private HFileReaderV2 reader;
+		public ScannerV2(HFileReaderV2 r, boolean cacheBlocks, final boolean pread, final boolean isCompaction) {
+			super(r, cacheBlocks, pread, isCompaction);
+			this.reader = r;
+		}
+		public boolean next() throws IOException {
+			return _next();
+		}
+		private final boolean _next() throws IOException {
+			if (blockBuffer.remaining() <= 0) {
+				return positionForNextBlock();
+			}
+			readKeyValueLen();
+			return true;
+		}
+		private boolean positionForNextBlock() throws IOException {
+			long lastDataBlockOffset = reader.getTrailer().getLastDataBlockOffset();
+			if (block.getOffset() >= lastDataBlockOffset) {
+				return false;
+			}
+			return isNextBlock();
+		}
+		private boolean isNextBlock() throws IOException {
+			HFileBlock nextBlock = readNextDataBlock();
+			if (nextBlock == null) {
+				return false;
+			}
+			updateCurrBlock(nextBlock);
+			return true;
+		}
+		public boolean seekTo() throws IOException {
+			long firstDataBlockOffset = reader.getTrailer().getFirstDataBlockOffset();
+			if (block != null && block.getOffset() == firstDataBlockOffset) {
+				blockBuffer.rewind();
+				readKeyValueLen();
+				return true;
+			}
+			block = reader.readBlock(firstDataBlockOffset, -1, cacheBlocks, pread, isCompaction, true, BlockType.DATA, getEffectiveDataBlockEncoding()); 
+			updateCurrBlock(block);
+			return true;
+		}		
+		
+		protected void updateCurrBlock(HFileBlock newBlock) {
+			blockBuffer = block.getBufferWithoutHeader();
+			block = newBlock;
+		}
+		public ByteBuffer getKey() {
+			return ByteBuffer.wrap(blockBuffer.array(), blockBuffer.arrayOffset() + blockBuffer.position() + KEY_VALUE_LEN_SIZE, currKeyLen).slice();
+		}
+		public ByteBuffer getValue() {
+			return ByteBuffer.wrap(blockBuffer.array(), blockBuffer.arrayOffset() + blockBuffer.position() + KEY_VALUE_LEN_SIZE + currKeyLen, currValueLen).slice();
+		}
+	}
+	
+	public HFileBlock readBlock(long dataBlockOffset, long onDiskBlockSize, final boolean cacheBlock, boolean pread, final boolean isCompaction, boolean updateCacheMetrics, BlockType expectedBlockType, DataBlockEncoding expectedDataBlockEncoding) throws IOException {
+		BlockCacheKey cacheKey = new BlockCacheKey(name, dataBlockOffset, this.isPrimaryReplicaReader(), expectedBlockType);
+		while (true) {
+			if (cacheConf.shouldReadBlockFromCache(expectedBlockType)) {
+				HFileBlock cachedBlock = getCachedBlock(cacheKey, cacheBlock, useLock, isCompaction, updateCacheMetrics, expectedBlockType, expectedDataBlockEncoding);
+				if (cachedBlock != null) {
+					return cachedBlock;
+				}
+			}
+			HFileBlock hfileBlock = fsBlockReader.readBlockData(dataBlockOffset, onDiskBlockSize, pread);// Load block from filesystem.
+			validateBlockType(hfileBlock, expectedBlockType);
+			HFileBlock unpacked = hfileBlock.unpack(hfileContext, fsBlockReader);
+			BlockType.BlockCategory category = hfileBlock.getBlockType().getCategory();
+			if (cacheBlock && cacheConf.shouldCacheBlockOnRead(category)) {
+				cacheConf.getBlockCache().cacheBlock(cacheKey, cacheConf.shouldCacheCompressed(category) ? hfileBlock : unpacked, cacheConf.isInMemory(), this.cacheConf.isCacheDataInL1());
+			}
+			if (updateCacheMetrics && hfileBlock.getBlockType().isData()) {
+				HFile.DATABLOCK_READ_COUNT.increment();
+			}
+			return unpacked;
+		}
+	}
+	public DataInput getGeneralBloomFilterMetadata() throws IOException {
+		return this.getBloomFilterMetadata(BlockType.GENERAL_BLOOM_META);
+	}
+	private DataInput getBloomFilterMetadata(BlockType blockType) throws IOException {
+		for (HFileBlock b : loadOnOpenBlocks)  // loadOnOpenBlocks 就不用多说了, 虽然也是 HFileBlock, 但并不是真正 Bloom Block, 只是 Metadata
+			if (b.getBlockType() == blockType)
+				return b.getByteStream();
+		return null;
+	}
+}
+public abstract class AbstractHFileReader implements HFile.Reader, Configurable {
+	protected static abstract class Scanner implements HFileScanner {
+		protected ByteBuffer blockBuffer;
+	}
+}
+
+public class org.apache.hadoop.hbase.io.hfile.HFileBlock implements Cacheable {
+	public ByteBuffer buf;
+	HFileBlock(ByteBuffer buf, boolean usesHBaseChecksum, final long offset, final int nextBlockOnDiskSize, HFileContext fileContext) throws IOException {
+		this.offset = offset;
+		this.buf = buf;
+		this.buf.rewind();
+	}
+	public ByteBuffer getBufferWithoutHeader() {
+		ByteBuffer dup = getBufferReadOnly();
+		dup.position(headerSize()).limit(buf.limit() - totalChecksumBytes());
+		return dup.slice();
+	}
+	public ByteBuffer getBufferReadOnly() {
+		ByteBuffer dup = this.buf.duplicate();
+		return dup;
+	}
+	private abstract static class AbstractFSReader implements FSReader {
+		protected int readAtOffset(FSDataInputStream istream, byte [] dest, int destOffset, int size, boolean peekIntoNextBlock, long fileOffset, boolean pread) throws IOException {
+			istream.seek(fileOffset);
+			long realOffset = istream.getPos();
+			if (!peekIntoNextBlock) {
+				IOUtils.readFully(istream, dest, destOffset, size);// 这里是把流数据读到 block 缓存了(dest)
+				return -1;
+			}
+		}
+	}
+	static class FSReaderImpl extends AbstractFSReader {
+		protected FSDataInputStreamWrapper streamWrapper;
+		public FSReaderImpl(FSDataInputStreamWrapper stream, long fileSize, HFileSystem hfs, Path path, HFileContext fileContext) throws IOException {
+			super(fileSize, hfs, path, fileContext);
+			this.streamWrapper = stream;
+			this.streamWrapper.prepareForBlockReader(!fileContext.isUseHBaseChecksum());
+		}
+		public HFileBlock readBlockData(long offset, long onDiskSizeWithHeaderL, boolean pread) throws IOException {
+			FSDataInputStream is = streamWrapper.getStream(doVerificationThruHBaseChecksum);
+			HFileBlock blk = readBlockDataInternal(is, offset, onDiskSizeWithHeaderL, pread, doVerificationThruHBaseChecksum);
+			return blk;
+		}
+		protected HFileBlock readBlockDataInternal(FSDataInputStream is, long offset, long onDiskSizeWithHeaderL, boolean pread, boolean verifyChecksum) throws IOException {			
+			byte[] onDiskBlock = new byte[onDiskSizeWithHeader + hdrSize];
+			// readAtOffset 就是去读数据了
+			int nextBlockOnDiskSize = readAtOffset(is, onDiskBlock, preReadHeaderSize, onDiskSizeWithHeader - preReadHeaderSize, true, offset + preReadHeaderSize, pread);
+			ByteBuffer onDiskBlockByteBuffer = ByteBuffer.wrap(onDiskBlock, 0, onDiskSizeWithHeader);
+			HFileBlock hFileBlock = new HFileBlock(onDiskBlockByteBuffer, this.fileContext.isUseHBaseChecksum(), offset, nextBlockOnDiskSize, fileContext);
+			return hFileBlock;
+		}
+	}
+	public static class Writer {
+		public Writer(HFileDataBlockEncoder dataBlockEncoder, HFileContext fileContext) {
+			this.dataBlockEncoder = dataBlockEncoder != null? dataBlockEncoder: NoOpDataBlockEncoder.INSTANCE;
+			this.dataBlockEncodingCtx = this.dataBlockEncoder.newDataBlockEncodingContext(HConstants.HFILEBLOCK_DUMMY_HEADER, fileContext);
+			this.defaultBlockEncodingCtx = new HFileBlockDefaultEncodingContext(null, HConstants.HFILEBLOCK_DUMMY_HEADER, fileContext);
+			baosInMemory = new ByteArrayOutputStream();// 写时先把 cell 都写到这里了
+			prevOffsetByType = new long[BlockType.values().length];
+			for (int i = 0; i < prevOffsetByType.length; ++i) {
+			prevOffsetByType[i] = UNSET;
+			}
+			this.fileContext = fileContext;
+		}
+		DataOutputStream startWriting(BlockType newBlockType) throws IOException {
+			if (state == State.BLOCK_READY && startOffset != -1) {
+				prevOffsetByType[blockType.getId()] = startOffset;
+			}
+			startOffset = -1;
+			blockType = newBlockType;
+			baosInMemory.reset();
+			baosInMemory.write(HConstants.HFILEBLOCK_DUMMY_HEADER);
+			state = State.WRITING;
+			userDataStream = new DataOutputStream(baosInMemory);
+			if (newBlockType == BlockType.DATA) {
+				this.dataBlockEncoder.startBlockEncoding(dataBlockEncodingCtx, userDataStream);
+			}
+			this.unencodedDataSizeWritten = 0;
+			return userDataStream;
+		}
+
+		void writeHeaderAndData(FSDataOutputStream out) throws IOException {
+			long offset = out.getPos();
+			startOffset = offset;
+			finishBlockAndWriteHeaderAndData((DataOutputStream) out);
+		}
+		protected void finishBlockAndWriteHeaderAndData(DataOutputStream out) throws IOException {
+			ensureBlockReady();
+			out.write(onDiskBlockBytesWithHeader);// 落盘了吧
+			out.write(onDiskChecksum);// 落完数据落 checksum
+		}
+		void ensureBlockReady() throws IOException {
+			if (state == State.BLOCK_READY) { return; }
+			finishBlock();
+		}
+		private void finishBlock() throws IOException { // 这里并没有落盘
+			if (blockType == BlockType.DATA) {
+				BufferGrabbingByteArrayOutputStream baosInMemoryCopy = new BufferGrabbingByteArrayOutputStream();
+				baosInMemory.writeTo(baosInMemoryCopy);
+				this.dataBlockEncoder.endBlockEncoding(dataBlockEncodingCtx, userDataStream, baosInMemoryCopy.buf, blockType);
+				blockType = dataBlockEncodingCtx.getBlockType();
+			}
+			userDataStream.flush();
+			uncompressedBlockBytesWithHeader = baosInMemory.toByteArray();
+			prevOffset = prevOffsetByType[blockType.getId()];
+			state = State.BLOCK_READY;
+			if (blockType == BlockType.DATA || blockType == BlockType.ENCODED_DATA) {
+				onDiskBlockBytesWithHeader = dataBlockEncodingCtx.compressAndEncrypt(uncompressedBlockBytesWithHeader);// 压缩, 里面好像有点复杂
+			} else {
+				onDiskBlockBytesWithHeader = defaultBlockEncodingCtx.compressAndEncrypt(uncompressedBlockBytesWithHeader);
+			}
+			int numBytes = (int) ChecksumUtil.numBytes(onDiskBlockBytesWithHeader.length, fileContext.getBytesPerChecksum());
+			// 应该是真正写 header 吧
+			putHeader(onDiskBlockBytesWithHeader, 0, onDiskBlockBytesWithHeader.length + numBytes, uncompressedBlockBytesWithHeader.length, onDiskBlockBytesWithHeader.length);
+			if (onDiskBlockBytesWithHeader != uncompressedBlockBytesWithHeader) {
+				putHeader(uncompressedBlockBytesWithHeader, 0, onDiskBlockBytesWithHeader.length + numBytes, uncompressedBlockBytesWithHeader.length, onDiskBlockBytesWithHeader.length);
+			}
+			onDiskChecksum = new byte[numBytes];
+			ChecksumUtil.generateChecksums(onDiskBlockBytesWithHeader, 0, onDiskBlockBytesWithHeader.length, onDiskChecksum, 0, fileContext.getChecksumType(), fileContext.getBytesPerChecksum());
+		}
+	}
+}
+public class FSDataInputStreamWrapper {
+	private final HFileSystem hfs;
+	private volatile FSDataInputStream stream = null;
+	public FSDataInputStream getStream(boolean useHBaseChecksum) {
+		return useHBaseChecksum ? this.streamNoFsChecksum : this.stream;
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.MultiVersionConcurrencyControl {
+	public void advanceTo(long newStartPoint) {
+		while (true) {
+			long seqId = this.getWritePoint();
+			if (seqId >= newStartPoint) break;
+			if (this.tryAdvanceTo(newStartPoint, seqId)) break;
+		}
+	}
+	boolean tryAdvanceTo(long newStartPoint, long expected) {
+		synchronized (writeQueue) {
+			long currentRead = this.readPoint.get();
+			long currentWrite = this.writePoint.get();
+			if (expected != NONE && expected != currentRead) {
+				return false;
+			}
+			if (newStartPoint < currentRead) {
+				return false;
+			}
+			readPoint.set(newStartPoint);
+			writePoint.set(newStartPoint);
+		}
+		return true;
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.wal.FSHLog implements WAL {
+	volatile Writer writer;
+	private final AtomicLong highestSyncedSequence = new AtomicLong(0);
+	private final List<WALActionsListener> listeners = new CopyOnWriteArrayList<WALActionsListener>();
+
+	public FSHLog(final FileSystem fs, final Path rootDir, final String logDir, final String archiveDir, final Configuration conf, final List<WALActionsListener> listeners, final boolean failIfWALExists, final String prefix, final String suffix) throws IOException {
+		rollWriter();
+		this.appendExecutor = Executors.newSingleThreadExecutor(Threads.getNamedThreadFactory(hostingThreadName + ".append"));
+		this.disruptor = new Disruptor<RingBufferTruck>(RingBufferTruck.EVENT_FACTORY, preallocatedEventCount, this.appendExecutor, ProducerType.MULTI, new BlockingWaitStrategy());
+		this.disruptor.getRingBuffer().next();
+		this.ringBufferEventHandler = new RingBufferEventHandler(conf.getInt("hbase.regionserver.hlog.syncer.count", 5), maxHandlersCount);
+		this.disruptor.handleEventsWith(new RingBufferEventHandler [] {this.ringBufferEventHandler});
+		this.syncFuturesByHandler = new ConcurrentHashMap<Thread, SyncFuture>(maxHandlersCount);
+		this.disruptor.start();
+	}
+	public byte [][] rollWriter() throws FailedLogCloseException, IOException {
+		return rollWriter(false);
+	}
+	public byte [][] rollWriter(boolean force) throws FailedLogCloseException, IOException {
+		byte [][] regionsToFlush = null;
+		Path oldPath = getOldPath();//null 
+		Path newPath = getNewPath();// hdfs://cluster01:9000/hbase/WALs/cluster01,16201,1584409073238/cluster01%2C16201%2C1584409073238.1584409078050
+		Writer nextWriter = this.createWriterInstance(newPath);//ProtobufLogWriter, 不用进去看了
+		newPath = replaceWriter(oldPath, newPath, nextWriter, nextHdfsOut);// 这个方法里是给 this.writer 赋值
+		return regionsToFlush;
+	}	
+	Path replaceWriter(final Path oldPath, final Path newPath, Writer nextWriter, final FSDataOutputStream nextHdfsOut) throws IOException {    
+		this.writer = nextWriter;
+		return newPath;
+	}
+	void append(final FSWALEntry entry) throws Exception {
+      atHeadOfRingBufferEventHandlerAppend();
+      long start = EnvironmentEdgeManager.currentTime();
+      byte [] encodedRegionName = entry.getKey().getEncodedRegionName();
+	long regionSequenceId = WALKey.NO_SEQUENCE_ID;
+		writer.append(entry);        
+	}
+	public void sync(long txid) throws IOException {
+		if (this.highestSyncedSequence.get() >= txid){
+			return;
+		}
+	}
+	class RingBufferEventHandler implements EventHandler<RingBufferTruck>, LifecycleAware {
+		private final SyncRunner [] syncRunners;
+		private final SyncFuture [] syncFutures;
+		public long append(final HTableDescriptor htd, final HRegionInfo hri, final WALKey key, final WALEdit edits, final boolean inMemstore) throws IOException {
+			FSWALEntry entry = null;
+			long sequence = this.disruptor.getRingBuffer().next();
+			RingBufferTruck truck = this.disruptor.getRingBuffer().get(sequence);
+			entry = new FSWALEntry(sequence, key, edits, htd, hri, inMemstore);
+			truck.loadPayload(entry, scope.detach());
+			this.disruptor.getRingBuffer().publish(sequence);
+			return sequence;
+		}
+		public void onEvent(final RingBufferTruck truck, final long sequence, boolean endOfBatch) throws Exception {
+			if (truck.hasSyncFuturePayload()) {
+				this.syncFutures[this.syncFuturesCount++] = truck.unloadSyncFuturePayload();
+				if (this.syncFuturesCount == this.syncFutures.length) endOfBatch = true;
+			} else if (truck.hasFSWALEntryPayload()) {
+				FSWALEntry entry = truck.unloadFSWALEntryPayload();
+				append(entry);
+			}
+			if (this.exception == null) {
+				this.syncRunnerIndex = (this.syncRunnerIndex + 1) % this.syncRunners.length;
+				this.syncRunners[this.syncRunnerIndex].offer(sequence, this.syncFutures, this.syncFuturesCount);
+			}
+			attainSafePoint(sequence);// 这是干啥的？
+		}
+		private long updateHighestSyncedSequence(long sequence) {
+			long currentHighestSyncedSequence;
+			do {
+				currentHighestSyncedSequence = highestSyncedSequence.get();
+				if (currentHighestSyncedSequence >= sequence) {
+					sequence = currentHighestSyncedSequence;
+					break;
+				}
+			} while (!highestSyncedSequence.compareAndSet(currentHighestSyncedSequence, sequence));
+			return sequence;
+		}
+		private void postSync(final long timeInNanos, final int handlerSyncs) {
+			if (!listeners.isEmpty()) {
+				for (WALActionsListener listener : listeners) {
+					listener.postSync(timeInNanos, handlerSyncs);
+				}
+			}
+		}
+	}
+	private class SyncRunner extends HasThread {
+		private volatile long sequence;
+		private final BlockingQueue<SyncFuture> syncFutures;
+		private volatile SyncFuture takeSyncFuture = null;
+		public void run() {
+			long currentSequence;
+			while (!isInterrupted()) {
+				int syncCount = 0;
+				while (true) {
+					takeSyncFuture = null;
+					takeSyncFuture = this.syncFutures.take();
+					long syncFutureSequence = takeSyncFuture.getRingBufferSequence();// 留着这行就是为了 takeSyncFuture
+					currentSequence = this.sequence;
+					long currentHighestSyncedSequence = highestSyncedSequence.get();
+					if (currentSequence < currentHighestSyncedSequence) {						
+						continue;
+					}
+					break;
+				}
+				writer.sync(); // 就是执行一下 flush 啊
+				currentSequence = updateHighestSyncedSequence(currentSequence);
+				postSync(System.nanoTime() - start, syncCount);// 没干啥大事
+			}
+		}
+		void offer(final long sequence, final SyncFuture [] syncFutures, final int syncFutureCount) {
+			this.sequence = sequence;
+			for (int i = 0; i < syncFutureCount; ++i) {
+				this.syncFutures.add(syncFutures[i]);
+			}
+		}
+
+	}  
+}
+// 这名起的，还以为是个线程呢
+class org.apache.hadoop.hbase.regionserver.wal.SyncFuture {
+	private long ringBufferSequence;
+	synchronized long getRingBufferSequence() {
+		return this.ringBufferSequence;
+	}
+}
+
+class org.apache.hadoop.hbase.regionserver.wal.RingBufferTruck {
+	void loadPayload(final FSWALEntry entry, final Span span) {
+		this.entry = entry;
+		this.span = span;
+		this.syncFuture = null;
+	}
+	FSWALEntry unloadFSWALEntryPayload() {
+		FSWALEntry ret = this.entry;
+		this.entry = null;
+		return ret;
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.wal.ProtobufLogWriter extends WriterBase {
+	public void append(Entry entry) throws IOException {
+		entry.setCompressionContext(compressionContext);
+		entry.getKey().getBuilder(compressor).
+		setFollowingKvCount(entry.getEdit().size()).build().writeDelimitedTo(output);
+		for (Cell cell : entry.getEdit().getCells()) {
+			cellEncoder.write(cell);
+		}
+	}
+	public void sync() throws IOException {
+		FSDataOutputStream fsdos = this.output;
+		fsdos.flush();
+		fsdos.hflush();
+	}
+
+}
+
+class org.apache.hadoop.hbase.regionserver.MemStoreFlusher implements FlushRequester {
+	private final BlockingQueue<FlushQueueEntry> flushQueue = new DelayQueue<FlushQueueEntry>();
+	private final Map<Region, FlushRegionEntry> regionsInQueue = new HashMap<Region, FlushRegionEntry>();
+	// 这里是触发 flush 最主要的入口吧, 	
+	public void requestFlush(Region r, boolean forceFlushAllStores) {
+		if (!regionsInQueue.containsKey(r)) {
+			FlushRegionEntry fqe = new FlushRegionEntry(r, forceFlushAllStores);
+			this.regionsInQueue.put(r, fqe);
+			this.flushQueue.add(fqe);
+		}
+	}
+	private class FlushHandler extends HasThread {
+		private FlushHandler(String name) {
+			super(name);
+		}
+		@Override
+		public void run() {
+			while (!server.isStopped()) {
+				FlushQueueEntry fqe = null;
+				wakeupPending.set(false);
+				fqe = flushQueue.poll(threadWakeFrequency, TimeUnit.MILLISECONDS);
+				if (fqe == null || fqe instanceof WakeupFlushThread) {
+					if (isAboveLowWaterMark()) {
+						if (!flushOneForGlobalPressure()) {
+							Thread.sleep(1000);
+							wakeUpIfBlocking();
+						}
+						wakeupFlushThread();
+					}
+					continue;
+				}
+				FlushRegionEntry fre = (FlushRegionEntry) fqe;
+				if (!flushRegion(fre)) {// 关键操作在这里
+					break;
+				}
+			}
+		}
+		private boolean flushRegion(final FlushRegionEntry fqe) {
+			Region region = fqe.region;
+			return flushRegion(region, false, fqe.isForceFlushAllStores());
+		}
+		private boolean flushRegion(final Region region, final boolean emergencyFlush, boolean forceFlushAllStores) {
+			FlushResult flushResult = region.flush(forceFlushAllStores);
+			// 我严重怀疑这里设计得有问题, compact 明明是 store 级的却在 region 级的 flush 里只要有一个 store 满足要就 compact, 这是两个拧巴吧
+			boolean shouldCompact = flushResult.isCompactionNeeded();
+			boolean shouldSplit = ((HRegion)region).checkSplit() != null;
+			if (shouldSplit) {
+				this.server.compactSplitThread.requestSplit(region);
+			} else if (shouldCompact) {
+				server.compactSplitThread.requestSystemCompaction(region, Thread.currentThread().getName());
+			}
+		}  
+	}
+}
+
+public class org.apache.hadoop.hbase.regionserver.DefaultStoreFlusher extends StoreFlusher {
+	public List<Path> flushSnapshot(MemStoreSnapshot snapshot, long cacheFlushId, MonitoredTask status, ThroughputController throughputController) throws IOException {
+		ArrayList<Path> result = new ArrayList<Path>();
+		InternalScanner scanner = createScanner(snapshot.getScanner(), smallestReadPoint);
+		StoreFile.Writer writer = store.createWriterInTmp(cellsCount, store.getFamily().getCompression(), snapshot.getTimeRangeTracker());
+		performFlush(scanner, writer, smallestReadPoint, throughputController);// 这是真正写了
+		finalizeWriter(writer, cacheFlushId, status);
+		result.add(writer.getPath());// 应该是一个 writer 一个 path 为什么要 add 到集合里
+		return result;
+	}
+}
+
+abstract class org.apache.hadoop.hbase.regionserver.StoreFlusher {
+	protected void performFlush(InternalScanner scanner, Compactor.CellSink sink, long smallestReadPoint, ThroughputController throughputController) throws IOException {
+		ScannerContext scannerContext = ScannerContext.newBuilder().setBatchLimit(compactionKVMax).build();
+		List<Cell> kvs = new ArrayList<Cell>();
+		boolean hasMore;
+		String flushName = ThroughputControlUtil.getNameForThrottling(store, "flush");
+		boolean control = throughputController != null && !store.getRegionInfo().isSystemTable();
+		if (control) { throughputController.start(flushName); }
+		do {
+			hasMore = scanner.next(kvs, scannerContext);
+			if (!kvs.isEmpty()) {
+				for (Cell c : kvs) {
+					sink.append(c);
+					int len = KeyValueUtil.length(c);
+				}
+				kvs.clear();
+			}
+		} while (hasMore);
+	}
+	protected void finalizeWriter(StoreFile.Writer writer, long cacheFlushSeqNum, MonitoredTask status) throws IOException { writer.close(); }
+}
+public class org.apache.hadoop.hbase.io.hfile.HFile {
+	public static Reader createReader(FileSystem fs, Path path, FSDataInputStreamWrapper fsdis, long size, CacheConfig cacheConf, Configuration conf) throws IOException {
+		HFileSystem hfs = hfs = (HFileSystem)fs;
+		return pickReaderVersion(path, fsdis, size, cacheConf, hfs, conf);
+	}
+	// 此方法相当重要, 每个 HFile 要走一遍, 并创建了 trailer 
+	private static Reader pickReaderVersion(Path path, FSDataInputStreamWrapper fsdis, long size, CacheConfig cacheConf, HFileSystem hfs, Configuration conf) throws IOException {
+		FixedFileTrailer trailer = FixedFileTrailer.readFromStream(fsdis.getStream(isHBaseChecksum), size);
+		switch (trailer.getMajorVersion()) {
+			case 3 :
+			return new HFileReaderV3(path, trailer, fsdis, size, cacheConf, hfs, conf);
+		}
+	}
+}

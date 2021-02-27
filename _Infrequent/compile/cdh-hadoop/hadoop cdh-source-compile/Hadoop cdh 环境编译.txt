@@ -1,0 +1,334 @@
+每课一语:
+	编译过程中，会遇到五花八门、乱七八糟的错误或者问题，此时你可以换一种心情对待，就当是自己的亲人或者爱人对你耍小脾气，你需要的是耐心思考问题产生的原因，然后一一克服，切莫六神无主丢了魂
+=====================================================================================
+0、电脑要求: 
+	建议内存给到 4G  
+	# free -m
+	硬盘空间 20G 
+	# df -lh 
+=====================================================================================
+1、为什么要编译 Hadoop 源码（编译版本为hadoop-2.5.0-cdh5.3.6）？
+Hadoop 本身使用Java 语言开发，但是有一些需求和操作 并不适合Java，所以就引入了本地库的概念（Native Libraries）通过 本地库 Hadoop 可以做一些更加高效的操作
+native 目录: ${HADOOP_HOME}/lib/
+native 目录 仅仅支持 Linux 和 Unix 操作系统
+
+NOTE:	
+	官网提供的hadoop 2.x 版本中 native 文件是32位编译的 在实际使用的环境中基本都是64位的，所以为了能 hadoop 更加高效的去运行 最好是在本地编译hadoop 源码 用编译好的本地库文件 替换官方安装包里自带的本地库
+
+=====================================================================================
+sbin/start-dfs.sh 启动服务的时候会去加载本地库，环境不一致导致加载失败
+17/02/07 20:11:42 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+
+源码下载地址:
+	http://archive.cloudera.com/cdh5/cdh/5/
+
+root 用户操作的
+=====================================================================================
+编译源码 主要是根据BUILDING.txt 进行操作的
+-------------------------------------------------------------------------------------
+Requirements:
+
+* Unix System（centos6）
+* JDK 1.6+ (jdk 1.7+ 不要超过 jdk 1.8) jdk1.7.0_67
+* Maven 3.0 or later
+* Findbugs 1.3.9 (if running findbugs)
+* ProtocolBuffer 2.5.0
+* CMake 2.6 or newer (if compiling native code)
+* Zlib devel (if compiling native code)
+* openssl devel ( if compiling native hadoop-pipes )
+* Internet connection for first build (to fetch all Maven and Hadoop dependencies)
+=====================================================================================
+1、JDK 环境搭建 (1.7.0_67)
+	一定要检查：
+# java -version
+# rpm -qa|grep java
+
+# rpm -e --nodeps java-1.5.0-gcj-1.5.0.0-29.1.el6.x86_64 java-1.7.0-openjdk-1.7.0.121-2.6.8.1.el6_8.x86_64 tzdata-java-2016j-1.el6.noarch java_cup-0.10k-5.el6.x86_64 java-1.7.0-openjdk-devel-1.7.0.121-2.6.8.1.el6_8.x86_64
+
+# source ~/.bashrc(用户配置文件 /etc/profile 全局变量配置文件) 
+
+# java -version
+
+2、Maven 环境搭建(3.3.9)
+# mvn -v
+NOTE:
+	一定要注意看下 maven 版本对应的 jdk 要求
+	 Maven 3.3 requires JDK 1.7
+NOTE:
+	检查是否和现有Java 环境对应起来
+配置阿里云镜像:
+	修改 ${MAVEN_HOME}/conf/settings.xml
+添加镜像:
+<mirror>
+  <id>alimaven</id>
+  <name>aliyun maven</name>
+  <url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+  <mirrorOf>central</mirrorOf>
+</mirror>
+
+3、Findbugs 1.3.9 保险全部安装
+# findbugs -version
+
+
+上面这三种都是通过压缩包安装环境:
+思路如下:
+# tar -zxf  xxx.tar.gz
+
+# vi ~/.bashrc
+添加如下内容
+# User specific aliases and functions
+export JAVA_HOME=/opt/modules/jdk1.7.0_67
+export M2_HOME=/opt/modules/apache-maven-3.3.9
+export FINDBUGS_HOME=/opt/modules/findbugs-1.3.9
+export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin:$FINDBUGS_HOME/bin
+
+# source  ~/.bashrc
+
+# 验证环境变量是否配置成功
+=====================================================================================
+4、ProtocolBuffer 2.5.0
+   上传压缩包、解压 进入解压目录
+  # tar -zxf protobuf-2.5.0.tar.gz
+  # cd protobuf-2.5.0
+   执行编译三步曲：
+  # yum install -y gcc gcc-c++
+  # ./configure
+  （会提示configure: error: no acceptable C compiler found in $PATH,执行上面的yum install -y gcc gcc-c++ 就可以解决）
+  # make（如果提示 -bash: make: command not foundm,执行 yum -y install automake autoconf libtool make）
+  # make install
+  # protoc --version
+=====================================================================================
+5、安装依赖
+* CMake 2.6 or newer (if compiling native code)
+* Zlib devel (if compiling native code)
+* openssl devel ( if compiling native hadoop-pipes )
+NOTE:
+	前提外网通畅  # ping baidu.com
+# yum -y install cmake zlib-devel openssl-devel
+====================================准备工作结束=====================================
+Building distributions:
+
+Create binary distribution with native code :
+
+  $ mvn package -Pdist,native -DskipTests -Dtar
+
+6、上传 hadoop cdh 源码 并解压 进行目录
+# tar -zxf hadoop-2.5.0-cdh5.3.6-src.tar.gz
+# cd hadoop-2.5.0-cdh5.3.6
+# mvn package -Pdist,native -DskipTests -Dtar
+NOTE:
+	mvn 编译压缩包也需要外网去下载编译用到的依赖 jar
+# ping baidu.com
+=====================================================================================
+[INFO] Reactor Summary:
+[INFO] 
+[INFO] Apache Hadoop Main ................................. SUCCESS [  9.187 s]
+[INFO] Apache Hadoop Project POM .......................... SUCCESS [  6.651 s]
+[INFO] Apache Hadoop Annotations .......................... SUCCESS [ 18.107 s]
+[INFO] Apache Hadoop Assemblies ........................... SUCCESS [  3.382 s]
+[INFO] Apache Hadoop Project Dist POM ..................... SUCCESS [  7.671 s]
+[INFO] Apache Hadoop Maven Plugins ........................ SUCCESS [ 12.830 s]
+[INFO] Apache Hadoop MiniKDC .............................. SUCCESS [ 14.956 s]
+[INFO] Apache Hadoop Auth ................................. SUCCESS [ 18.469 s]
+[INFO] Apache Hadoop Auth Examples ........................ SUCCESS [ 14.332 s]
+[INFO] Apache Hadoop Common ............................... SUCCESS [04:32 min]
+[INFO] Apache Hadoop NFS .................................. SUCCESS [ 20.895 s]
+[INFO] Apache Hadoop KMS .................................. SUCCESS [ 27.529 s]
+[INFO] Apache Hadoop Common Project ....................... SUCCESS [  0.196 s]
+[INFO] Apache Hadoop HDFS ................................. SUCCESS [06:18 min]
+[INFO] Apache Hadoop HttpFS ............................... SUCCESS [ 43.543 s]
+[INFO] Apache Hadoop HDFS BookKeeper Journal .............. SUCCESS [ 17.386 s]
+[INFO] Apache Hadoop HDFS-NFS ............................. SUCCESS [ 13.862 s]
+[INFO] Apache Hadoop HDFS Project ......................... SUCCESS [  0.199 s]
+[INFO] hadoop-yarn ........................................ SUCCESS [  0.134 s]
+[INFO] hadoop-yarn-api .................................... SUCCESS [02:38 min]
+[INFO] hadoop-yarn-common ................................. SUCCESS [01:16 min]
+[INFO] hadoop-yarn-server ................................. SUCCESS [  0.159 s]
+[INFO] hadoop-yarn-server-common .......................... SUCCESS [ 38.499 s]
+[INFO] hadoop-yarn-server-nodemanager ..................... SUCCESS [ 58.942 s]
+[INFO] hadoop-yarn-server-web-proxy ....................... SUCCESS [ 11.193 s]
+[INFO] hadoop-yarn-server-applicationhistoryservice ....... SUCCESS [ 20.009 s]
+[INFO] hadoop-yarn-server-resourcemanager ................. SUCCESS [ 59.453 s]
+[INFO] hadoop-yarn-server-tests ........................... SUCCESS [  5.065 s]
+[INFO] hadoop-yarn-client ................................. SUCCESS [ 20.642 s]
+[INFO] hadoop-yarn-applications ........................... SUCCESS [  0.333 s]
+[INFO] hadoop-yarn-applications-distributedshell .......... SUCCESS [ 10.209 s]
+[INFO] hadoop-yarn-applications-unmanaged-am-launcher ..... SUCCESS [  6.298 s]
+[INFO] hadoop-yarn-site ................................... SUCCESS [  0.144 s]
+[INFO] hadoop-yarn-project ................................ SUCCESS [ 12.943 s]
+[INFO] hadoop-mapreduce-client ............................ SUCCESS [  0.641 s]
+[INFO] hadoop-mapreduce-client-core ....................... SUCCESS [01:22 min]
+[INFO] hadoop-mapreduce-client-common ..................... SUCCESS [ 59.275 s]
+[INFO] hadoop-mapreduce-client-shuffle .................... SUCCESS [ 15.923 s]
+[INFO] hadoop-mapreduce-client-app ........................ SUCCESS [ 38.196 s]
+[INFO] hadoop-mapreduce-client-hs ......................... SUCCESS [ 22.555 s]
+[INFO] hadoop-mapreduce-client-jobclient .................. SUCCESS [ 16.559 s]
+[INFO] hadoop-mapreduce-client-hs-plugins ................. SUCCESS [  6.572 s]
+[INFO] hadoop-mapreduce-client-nativetask ................. SUCCESS [03:15 min]
+[INFO] Apache Hadoop MapReduce Examples ................... SUCCESS [ 25.110 s]
+[INFO] hadoop-mapreduce ................................... SUCCESS [ 11.495 s]
+[INFO] Apache Hadoop MapReduce Streaming .................. SUCCESS [ 17.908 s]
+[INFO] Apache Hadoop Distributed Copy ..................... SUCCESS [ 26.969 s]
+[INFO] Apache Hadoop Archives ............................. SUCCESS [  6.486 s]
+[INFO] Apache Hadoop Rumen ................................ SUCCESS [ 28.231 s]
+[INFO] Apache Hadoop Gridmix .............................. SUCCESS [ 17.677 s]
+[INFO] Apache Hadoop Data Join ............................ SUCCESS [ 16.506 s]
+[INFO] Apache Hadoop Extras ............................... SUCCESS [ 10.984 s]
+[INFO] Apache Hadoop Pipes ................................ SUCCESS [ 15.410 s]
+[INFO] Apache Hadoop OpenStack support .................... SUCCESS [ 20.223 s]
+[INFO] Apache Hadoop Amazon Web Services support .......... SUCCESS [01:17 min]
+[INFO] Apache Hadoop Azure support ........................ SUCCESS [ 16.803 s]
+[INFO] Apache Hadoop Client ............................... SUCCESS [ 34.598 s]
+[INFO] Apache Hadoop Mini-Cluster ......................... SUCCESS [  7.434 s]
+[INFO] Apache Hadoop Scheduler Load Simulator ............. SUCCESS [ 16.836 s]
+[INFO] Apache Hadoop Tools Dist ........................... SUCCESS [ 25.079 s]
+[INFO] Apache Hadoop Tools ................................ SUCCESS [  0.136 s]
+[INFO] Apache Hadoop Distribution ......................... SUCCESS [01:23 min]
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time: 37:52 min
+[INFO] Finished at: 2017-02-08T13:42:44+08:00
+[INFO] Final Memory: 135M/524M
+[INFO] ------------------------------------------------------------------------
+
+=====================================================================================
+编译结果：
+	生成的native 库目录:${HADOOP_SRC_HOME}/hadoop-dist/target/
+	有 一个打包的压缩包（hadoop-2.5.0-cdh5.3.6.tar.gz）和解压好的压缩包（hadoop-2.5.0-cdh5.3.6 课程采用已经解压好的）
+
+	/opt/testnative/hadoop-2.5.0-cdh5.3.6-src/hadoop-dist/target/hadoop-2.5.0-cdh5.3.6/lib/native
+
+测试验证:
+	将本地编译好的native 库替换掉 安装包自带的 native 库
+	
+	${HADOOP_HOME}/lib/native
+
+# sbin/start-dfs.sh 启动服务的时候 就没有之前的warn信息提示
+说明源码编译成功，没有任何问题
+
+Starting namenodes on [spark02]
+spark02: starting namenode, logging to /opt/modules/hadoop/logs/hadoop-root-namenode-spark02.out
+spark02: starting datanode, logging to /opt/modules/hadoop/logs/hadoop-root-datanode-spark02.out
+
+## 也可以通过 专门的命令进行检测
+#${HADOOP_HOME}/bin/hadoop checknative
+
+17/02/09 10:30:19 WARN bzip2.Bzip2Factory: Failed to load/initialize native-bzip2 library system-native, will use pure-Java version
+17/02/09 10:30:19 INFO zlib.ZlibFactory: Successfully loaded & initialized native-zlib library
+Native library checking:
+hadoop:  true /opt/cdh/hadoop-2.5.0-cdh5.3.6/lib/native/libhadoop.so.1.0.0
+zlib:    true /lib64/libz.so.1
+snappy:  false 
+lz4:     true revision:99
+bzip2:   false 
+openssl: true /usr/lib64/libcrypto.so
+发现 bzip2: false 是不支持的，这个时候需要去 
+	1、yum -y install bzip2 bzip2-devel
+	2、然后重新执行 maven 编译命令:
+	# cd hadoop-2.5.0-cdh5.3.6
+	# mvn package -Pdist,native -DskipTests -Dtar
+将重新编译好的本地库再次执行前面的替换本地库操作，然后测试
+# bin/hadoop checknative
+17/02/09 11:46:05 INFO bzip2.Bzip2Factory: Successfully loaded & initialized native-bzip2 library system-native
+17/02/09 11:46:05 INFO zlib.ZlibFactory: Successfully loaded & initialized native-zlib library
+Native library checking:
+hadoop:  true /opt/cdh/hadoop-2.5.0-cdh5.3.6/lib/native/libhadoop.so.1.0.0
+zlib:    true /lib64/libz.so.1
+snappy:  false 
+lz4:     true revision:99
+bzip2:   true /lib64/libbz2.so.1
+openssl: true /usr/lib64/libcrypto.so
+
+
+=====================================================================================以上是我之前编译过程遇到的问题总结 供大家参考学习:
+=====================================================================================
+编译小技巧:
+ 编译的过程中，会遇到之前很多模块已经编译成功，失败的时候不希望从头开始编译，希望从失败的模块开始编译就可以使用-rf:  失败的模块，表示跳过前面成功的模块的避免重复执行，
+从当前失败的模块开始执行
+ eg:	之前编译到 hadoop-kms 失败的 就可以就这样执行 
+	mvn package -Pdist,native -DskipTests -Dtar -rf:  hadoop-kms 
+	NOTE:
+		-rf:  hadoop-kms  注意:到 hadoop-kms 之间是2个空格 不是一个空格
+=====================================================================================
+error1:
+	Failed to execute goal org.apache.maven.plugins:maven-enforcer-plugin:1.3.1:enforce (default) on project hadoop-main: Some Enforcer rules have failed. Look above for specific messages explaining why the rule failed. -> [Help 1]
+
+maven-enforcer-plugin
+插件maven-enforcer-plugin的用途：
+是在Maven中定义一些配置，这些配置需要这个项目的所有人员去按要求配置去开发，比如配置：Maven版本、Java版本、Scala版本 ，出现这样的问题，多半是上面提到的三个版本有问题导致的，我的原因是使用过高的JDK版本导致的
+=====================================================================================
+error2:
+	[ERROR] Failed to execute goal org.apache.maven.plugins:maven-javadoc-plugin:2.8.1:jar (module-javadocs) on project hadoop-annotations: MavenReportException: Error while creating archive:
+[ERROR] Exit code: 1 - /opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-annotations/src/main/java/org/apache/hadoop/classification/InterfaceStability.java:27: error: unexpected end tag: </ul>
+[ERROR] * </ul>
+
+jdk1.8下编译会有处理注释标签的问题。类似问题：都是由于 jdk版本过高 本人开始使用的jdk是1.8+ 后来版本更换为1.7，涛声依旧
+=====================================================================================
+error3:
+	[ERROR] Failed to execute goal org.apache.maven.plugins:maven-antrun-plugin:1.7:run (make) on project hadoop-common: An Ant BuildException has occured: Execute failed: java.io.IOException: Cannot run program "cmake" (in directory "/opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/target/native"): error=2, No such file or directory
+
+##出现这个问题是本人内存资源空间不足导致的，调整内存
+=====================================================================================
+error4:
+	一般报错误上面不到文件表现为No such file or directory，首先想到检查看看是不是权限不一致导致的
+	当然并不定都是这个问题导致的，例如下面 error5 就是一个类似的bug，但是比较有难度点
+
+error5:
+	Failed to execute goal org.apache.maven.plugins:maven-antrun-plugin:1.7:run (site) on project hadoop-common: An Ant BuildException has occured: Execute failed: java.io.IOException: Cannot run program "perl" (in directory "/opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common"): error=2, No such file or directory
+	[ERROR] around Ant part ...<exec input="/opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/../CHANGES.txt" executable="perl" failonerror="true" output="/opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/target/site/changes.html">... @ 10:245 in /opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/target/antrun/build-main.xml
+说下解决思路:
+	从错误信息来看应该是编译执行 ant 出现的错误信息（参考提示：/opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/target/antrun/build-main.xml），我想到 自己来手动执行 ant
+	# cd  /opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/target/antrun(根据你报错提示的路径来操作)
+	# ant -buildfile build-main.xml
+	## 接着出现如下提示信息
+	main:
+      [get] Getting: http://archive.apache.org/dist/tomcat/tomcat-6/v6.0.43/bin/apache-tomcat-6.0.43.tar.gz
+      [get] To: /opt/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-kms/target/antrun/downloads/apache-tomcat-6.0.43.tar.gz
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ....................................................
+      [get] ..........................
+   [delete] Deleting directory /opt/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-kms/target/tomcat.exp
+    [mkdir] Created dir: /opt/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-kms/target/tomcat.exp
+     [exec] 
+     [exec] gzip: ../../downloads/apache-tomcat-6.0.43.tar.gz: unexpected end of file
+     [exec] tar: Unexpected EOF in archive
+     [exec] tar: Unexpected EOF in archive
+     [exec] tar: Error is not recoverable: exiting now
+
+首先我根据这2句话：
+
+	[get] Getting: http://archive.apache.org/dist/tomcat/tomcat-6/v6.0.43/bin/apache-tomcat-6.0.43.tar.gz
+    [get] To: /opt/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-kms/target/antrun/downloads/apache-tomcat-6.0.43.tar.gz
+    发现对应目录/opt/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-kms/target/antrun/downloads/apache-tomcat-6.0.43.tar.gz 是有 tomcat的 所以是正常的 
+    
+    紧接着我看到 [exec] gzip: ../../downloads/apache-tomcat-6.0.43.tar.gz: unexpected end of file
+    感觉问题应该是出现在 gzip: ../../downloads/apache-tomcat-6.0.43.tar.gz
+    然后我就去之cat /opt/modules/hadoop-2.5.0-cdh5.3.6/hadoop-common-project/hadoop-common/target/antrun/build-main.xml
+    找到提示错误信息的哪一行信息如下:
+   		gzip -cd ../../downloads/apache-tomcat-6.0.43.tar.gz
+
+   	“gzip"就是”gun zip“啦，解压用的
+   	-c ：将压缩的过程产生的数据输出到屏幕上！
+	-d ：解压缩的参数
+
+	我本地测试 gzip 发现是好的，这就有让我有点小崩溃啦
+	后来我参考一篇文章：http://bbs.szlanyou.com/thread-10118-1-1.html
+
+	受到启发原来是: cmake 缺少 zlib的符号，需要安装zlib，而 zlib是一种数据压缩程序库，它的设计目标是处理单纯的数据（而不管数据的来源是什么）。gzip是一种文件压缩工具（或该压缩工具产生的压缩文件格式），它的设计目标是处理单个的文件。gzip在压缩文件中的数据时使用的就是zlib ，这样我就串起来.
+
+	解决方案:安装 zlib(感觉应该是系统安装最小化导致的，缺少相关的依赖库) 
+	# wget http://www.zlib.net/zlib-1.2.3.tar.gz
+	# tar -xvzf zlib-1.2.3.tar.gz
+	# cd zlib-1.2.3.tar.gz
+	#./configure
+	# make
+	# make install
+

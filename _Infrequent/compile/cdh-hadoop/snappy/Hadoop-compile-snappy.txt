@@ -1,0 +1,101 @@
+1、为什么要使用压缩？
+	这样做的好处是：	
+		1.可以大幅度的减少磁盘IO
+		2. 可以减少网络传输的压力
+	对应到具体mapreduce 来说，
+	在 map task 下 适当的去压缩数据 可以减少磁盘IO
+	在 reduce task 下，reduce 会从远程的map 端进行数据拷贝，减缓网络IO的压力
+=====================================================================================
+1、使用压缩包进行本地安装 snappy (编译安装动态链接库到本地)
+# tar -zxf snappy-1.1.2.tar.gz -C /opt/modules
+# cd /opt/modules/snappy-1.1.2/
+安装前提:
+	gcc gcc-c++ autoconf,automake libtool,Java 7 ,JAVA_HOME SET,Maven3
+# yum -y install gcc gcc-c++(configure: error: no acceptable C compiler found in $PATH)
+#./configure
+# make
+# make install
+
+3、 本地编译生成的native（${HADOOP_HOME_SRC}/hadoop-dist/target/hadoop-2.5.0-cdh5.3.6/lib） 替换掉 安装包里面自带的 native 库
+进行检测的时候 
+# bin/hadoop checknative
+error1:
+	java.lang.UnsatisfiedLinkError: Cannot load libsnappy.so.1 (libsnappy.so.1: cannot open shared object file: No such file or directory)!
+	at org.apache.hadoop.io.compress.snappy.SnappyCompressor.initIDs(Native Method)
+	at org.apache.hadoop.io.compress.snappy.SnappyCompressor.<clinit>(SnappyCompressor.java:61)
+	at org.apache.hadoop.io.compress.SnappyCodec.isNativeCodeLoaded(SnappyCodec.java:79)
+	at org.apache.hadoop.util.NativeLibraryChecker.main(NativeLibraryChecker.java:77)
+Native library checking:
+
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+可以直接执行或者 配置到.bashrc 中
+=====================================================================================
+# bin/hadoop checknative
+17/02/09 20:36:28 INFO bzip2.Bzip2Factory: Successfully loaded & initialized native-bzip2 library system-native
+17/02/09 20:36:28 INFO zlib.ZlibFactory: Successfully loaded & initialized native-zlib library
+Native library checking:
+hadoop:  true /opt/cdh/hadoop-2.5.0-cdh5.3.6/lib/native/libhadoop.so.1.0.0
+zlib:    true /lib64/libz.so.1
+snappy:  true /usr/local/lib/libsnappy.so.1
+lz4:     true revision:99
+bzip2:   true /lib64/libbz2.so.1
+openssl: true /usr/lib64/libcrypto.so
+=================================环境编译结束========================================
+mapreduce集成测试准备工作:
+# vi core-site.xml
+		
+<property>
+<name>io.compression.codecs</name>
+<value>
+org.apache.hadoop.io.compress.GzipCodec,
+org.apache.hadoop.io.compress.DefaultCodec,
+org.apache.hadoop.io.compress.BZip2Codec, 
+org.apache.hadoop.io.compress.SnappyCodec
+</value>
+</property>
+
+# vi mapred-site.xml
+## map 端开启压缩
+<property>
+<name>mapred.compress.map.output</name>
+<value>true</value>
+</property>
+
+## 具体使用的压缩形式
+<property>
+<name>mapred.map.output.compression.codec</name>
+<value>org.apache.hadoop.io.compress.SnappyCodec</value>
+</property>
+
+
+历史服务节点:
+#vi mapred-site.xml
+<property>
+<name>mapreduce.jobhistory.address</name>
+<value>spark04:10020</value>
+</property>
+<property>
+<name>mapreduce.jobhistory.webapp.address</name>
+<value>spark04:19888</value>
+</property>
+
+# vi yarn-site.xml
+<property>
+<name>yarn.log-aggregation-enable</name>
+<value>true</value>
+</property>
+
+====================================================================================
+mapreduce 集成测试正式测试:
+# bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.5.0-cdh5.3.6.jar grep /user/root/input output11 'dfs[a-z.]+'
+
+error2:
+	FAILED Error: java.lang.RuntimeException: native snappy library not available: SnappyCompressor has not been loaded
+# vi mapred-site.xml
+添加如下配置:
+<property>  
+    <name>mapred.child.env</name>  
+    <value>LD_LIBRARY_PATH=/usr/local/lib</value>  
+</property>
+
+# bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.5.0-cdh5.3.6.jar grep /user/root/input output11 'dfs[a-z.]+'

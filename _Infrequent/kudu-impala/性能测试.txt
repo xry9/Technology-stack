@@ -1,0 +1,27 @@
+create table emp(empno int ,ename string,age int,gender string,salary double,bonus double,address string,birthday string,deptid int)row format delimited fields terminated by ',';
+create table dept(deptno int ,dname string,address string)row format delimited fields terminated by ',';
+load data local inpath '/root/emp.txt' overwrite into table emp;
+load data local inpath '/root/dept.txt' overwrite into table dept;
+
+spark.sql("select sum(salary),deptid from emp group by deptid ").show
+spark.sql("select d.deptno,sum(e.salary) from emp e join dept d on e.deptid=d.deptno group by d.deptno ").show
+emp表1.2g，dept表138M，关联查询反而更快
+impala join 会慢，impala 的join与sparksql的join相比没有多少优势了
+
+
+=============================
+create table emp_i(empno int PRIMARY KEY,ename string,age int,gender string,salary double,address string,birthday string,deptid int)
+PARTITION BY HASH PARTITIONS 2 STORED AS KUDU TBLPROPERTIES('kudu.master_addresses' = '192.168.58.171:7051');
+insert into emp_i select empno,ename,age,gender, salary,address,birthday,deptid from emp;
+update emp_i set age=28 where empno=15;
+delete from emp_i where empno=16;
+
+--在hive中建表，默认整合好了hbase。在impala中执行插入
+create 'emp_h_i','info',SPLITS => ['2','4','6','8','0']
+CREATE EXTERNAL TABLE emp_h_i(empno int ,ename string,age int,gender string,salary double,address string,birthday string,deptid int)ROW FORMAT SERDE 'org.apache.hadoop.hive.hbase.HBaseSerDe' STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler' WITH SERDEPROPERTIES ("hbase.columns.mapping"=":key,info:ename, info:age, info:gender, info:salary, info:address, info:birthday, info:deptid")TBLPROPERTIES("hbase.table.name" = "emp_h_i");
+insert into emp_h_i select empno,address,age,birthday,deptid,ename,gender,salary from emp;
+update emp_h_i set age=28 where empno=15;
+ERROR: AnalysisException: Impala does not support modifying a non-Kudu table: default.emp_h_i
+
+hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.bulk.output=/result/hfile_tmp -Dimporttsv.columns=HBASE_ROW_KEY,info:ename,info:age,info:gender,info:salary,info:address,info:birthday,info:deptid emp_h_i /hive1/user/hive/warehouse/emp/emp.txt
+hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /result/hfile_tmp emp_h_i
