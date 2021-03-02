@@ -1,0 +1,7 @@
+git clone -b 3.90.0 git@github.com:azkaban/azkaban.git
+
+
+update operator set dependenceNames='ods_fdm.fdm_web_operation_activity_config,ods_real_time.fdm_loan_channel_stat_daily' where targetNames='dm.dm_loan_market_life_time_value_cost';
+update operator set dependenceNames='dm.dm_cashloan_bad_order_info,dm.dm_cashloan_order_product,dw.dw_repayment_detail,ods_fdm.fdm_cash_loan_instalment_paid_on_behalf,ods_fdm.fdm_cash_loan_order,ods_sdm.sdm_cash_loan_overdue_event_inc' where targetNames='dm_ba.dm_cash_loan_bad_order_info,dm_ba.dm_cash_loan_overdue_event,dm_ba.dm_cash_loan_overdue_event_order,dm_ba.dw_cash_loan_repayment_detail';
+
+azkaban.execapp.ServerStatisticsServlet#fillRemainingMemoryPercent

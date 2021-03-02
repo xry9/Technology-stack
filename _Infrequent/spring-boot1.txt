@@ -1,0 +1,3 @@
+spring-boot-2.2.x.zip
+mvn clean package -DskipTests
+Mvn 是 3.6.0, 用阿里云的镜像

@@ -1,0 +1,283 @@
+
+public class azkaban.execapp.AzkabanExecutorServer implements IMBeanRegistrable {
+    public static void main(final String[] args) throws Exception {
+        launch(injector.getInstance(AzkabanExecutorServer.class));// 实例化了 ExecutorServlet。injector 框架有一个很恶心的点, 后面我会说
+    }
+    public static void launch(final AzkabanExecutorServer azkabanExecutorServer) throws Exception {
+        azkabanExecutorServer.start();
+        setupTimeZone(azkabanExecutorServer.getAzkabanProps());
+    }
+    private void start() throws Exception {
+        initActive();
+        // this.server 是 org.mortbay.jetty.Server, 其实也是个 http server
+        // server 的端口在上面实例化 AzkabanExecutorServer 时会读配置 executor.port, 如果没有指定会随机创建, 这应该是 Java Servlet 机制决定
+        this.server.start();
+        // 先查 executors 表, 如果不存在则 insert
+        insertExecutorEntryIntoDB();
+        dumpPortToFile();// 读 this.server.getConnectors()[0].getLocalPort() 值写到 [azkaban-exec-server]/executor.port 本地文件中
+    }
+    private void insertExecutorEntryIntoDB() throws ExecutorManagerException {
+      final String host = requireNonNull(getHost());// 其实就是取本机 host
+      final int port = getPort(); // this.server.getConnectors()[0].getLocalPort()
+      // 调用栈为: azkaban.executor.JdbcExecutorLoader#fetchExecutor --> azkaban.executor.ExecutorDao#fetchExecutor (此方法中执行的 sql 为: 
+      //    SELECT id, host, port, active FROM executors where host=? AND port=?)
+      final Executor executor = this.executionLoader.fetchExecutor(host, port);
+      // 注意上面的 sql 因有两个参数 host=? AND port=?, 但是 executor 还是 null。这是因为 executor shutdown 时会删除一行数据，即当前 executor 对应的 host port 
+      if (executor == null) {
+        logger.info("This executor wasn't found in the DB. Adding self.");// 有官方日志，我就不多说了
+        //调用栈为: azkaban.executor.JdbcExecutorLoader#addExecutor --> azkaban.executor.ExecutorDao#addExecutor --> azkaban.executor.ExecutorDao#addExecutorHelper
+        //(些方法中执行 sql为: INSERT INTO executors (host, port) values (?,?), 注意这里并没有指定 active 字段值)
+        this.executionLoader.addExecutor(host, port);
+      } else {
+        // If executor already exists, ignore it
+        // 官方日志, 我多说一句, 满足此条件说明 executor 不为 null, 我分析只有两种情况 
+        // 1) executor 进程非正常结束, 因为正常结束是要删该 executor 对应的一行数据的。2) 此 executor 被第二次执行了 start 命令(此种情况有点鸡肋了)
+           logger.info("This executor is already in the DB. Found: " + executor);
+
+      }
+  }
+}
+
+public class azkaban.execapp.ExecJettyServerModule extends com.google.inject.AbstractModule {
+  private Server createJettyServer(final Props props) {
+    final int maxThreads = props.getInt("executor.maxThreads", DEFAULT_THREAD_NUMBER);
+    final Server server = new Server(props.getInt(ConfigurationKeys.EXECUTOR_PORT, 0));
+    final QueuedThreadPool httpThreadPool = new QueuedThreadPool(maxThreads);
+    server.setThreadPool(httpThreadPool);
+    final boolean isStatsOn = props.getBoolean("executor.connector.stats", true);
+    logger.info("Setting up connector with stats on: " + isStatsOn);
+    for (final Connector connector : server.getConnectors()) {
+      connector.setStatsOn(isStatsOn);
+      logger.info(String.format(
+          "Jetty connector name: %s, default header buffer size: %d",
+          connector.getName(), connector.getHeaderBufferSize()));
+      connector.setHeaderBufferSize(props.getInt("jetty.headerBufferSize",
+          DEFAULT_HEADER_BUFFER_SIZE));
+      logger.info(String.format(
+          "Jetty connector name: %s, (if) new header buffer size: %d",
+          connector.getName(), connector.getHeaderBufferSize()));
+    }
+    return server;
+  }
+
+  private Context createRootContext(@Named(EXEC_JETTY_SERVER) final Server server) {
+    final Context root = new Context(server, "/", Context.SESSIONS);
+    root.setMaxFormContentSize(MAX_FORM_CONTENT_SIZE);
+
+    root.addServlet(new ServletHolder(new ExecutorServlet()), "/executor");
+    root.addServlet(new ServletHolder(new JMXHttpServlet()), "/jmx");
+    root.addServlet(new ServletHolder(new StatsServlet()), "/stats");
+    root.addServlet(new ServletHolder(new ServerStatisticsServlet()), "/serverStatistics");
+    return root;
+  }
+}
+
+public class azkaban.execapp.ExecutorServlet extends HttpServlet implements ConnectorParams {
+    public void doPost(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
+        handleRequest(req, resp);
+    }
+    public void handleRequest(final HttpServletRequest req, final HttpServletResponse resp) throws IOException {
+        final int execid = Integer.parseInt(getParam(req, ConnectorParams.EXECID_PARAM));
+        if (action.equals(ConnectorParams.DEACTIVATE)) {
+          setActive(false, respMap);
+        }
+        if (action.equals(ConnectorParams.EXECUTE_ACTION)) {
+            handleAjaxExecute(req, respMap, execid);
+        }
+    }
+    private void handleAjaxExecute(final HttpServletRequest req, final Map<String, Object> respMap, final int execId) {
+        this.flowRunnerManager.submitFlow(execId);
+    }
+    private void setActive(final boolean value, final Map<String, Object> respMap) {
+        setActiveInternal(value);
+        respMap.put(ConnectorParams.STATUS_PARAM, ConnectorParams.RESPONSE_SUCCESS);
+    }
+    private void setActiveInternal(final boolean value) throws ExecutorManagerException, InterruptedException {
+        this.flowRunnerManager.setExecutorActive(value, this.application.getHost(), this.application.getPort());
+    }
+}
+
+public class azkaban.execapp.FlowRunnerManager implements EventListener, ThreadPoolExecutingListener {
+    private final TrackingThreadPool executorService;// TrackingThreadPool extends ThreadPoolExecutor
+    public void submitFlow(final int execId) throws ExecutorManagerException {
+        final FlowRunner runner = createFlowRunner(execId);// SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE exec_id=?, 最重要的当然是 flow_data 字段, 而且还进行了递归操作, 因为 ExecutableFlow 也是 ExecutableNode
+        if (isAlreadyRunning(execId)) {
+            return;
+        }
+        submitFlowRunner(runner);
+    }
+    private void submitFlowRunner(final FlowRunner runner) throws ExecutorManagerException {
+        final Future<?> future = this.executorService.submit(runner);
+        this.submittedFlows.put(future, runner.getExecutionId());// 提交的 flow 的状态应该就是从 submittedFlows 中查找的
+    }
+    public void setExecutorActive(final boolean isActive, final String host, final int port) throws ExecutorManagerException, InterruptedException {
+        final Executor executor = this.executorLoader.fetchExecutor(host, port);// SELECT id, host, port, active FROM executors where host=? AND port=?
+        if (executor.isActive() != isActive) {
+            executor.setActive(isActive);
+            this.executorLoader.updateExecutor(executor);// UPDATE executors SET host=?, port=?, active=? where id=?
+        } else {
+            this.active = isActive;
+        }
+    }
+}
+
+public class azkaban.execapp.FlowRunner extends EventHandler implements Runnable {
+    public void run() {
+       runFlow();
+    }
+    private void runFlow() throws Exception {
+        runReadyJob(this.flow);
+    }
+    private boolean runReadyJob(final ExecutableNode node) throws IOException {
+        if (nextNodeStatus == Status.CANCELLED) {
+        } else if (nextNodeStatus == Status.SKIPPED) {
+        } else if (nextNodeStatus == Status.READY) {
+            if (node instanceof ExecutableFlowBase) {
+                final ExecutableFlowBase flow = ((ExecutableFlowBase) node);
+                flow.setStatus(Status.RUNNING);
+                prepareJobProperties(flow);
+                for (final String startNodeId : ((ExecutableFlowBase) node).getStartNodes()) {
+                    final ExecutableNode startNode = flow.getExecutableNode(startNodeId);
+                    runReadyJob(startNode);// 递归调用了, 如果 flow 之间存在依赖时会走这里
+                }
+            } else {
+                runExecutableNode(node);
+            }
+        }
+        return true;
+    }
+    private void runExecutableNode(final ExecutableNode node) throws IOException {
+        prepareJobProperties(node);// 这里太重要, 看似是去 yaml 中加载 command, 本质还是 SELECT flow_file FROM project_flow_files WHERE 
+        final JobRunner runner = createJobRunner(node);
+        this.executorService.submit(runner);
+        this.activeJobRunners.add(runner);
+    }
+    private JobRunner createJobRunner(final ExecutableNode node) {
+        final File path = new File(this.execDir, node.getJobSource());
+        final JobRunner jobRunner = new JobRunner(node, path.getParentFile(), this.executorLoader, this.jobtypeManager, this.azkabanProps);
+        return jobRunner;
+    }
+}
+
+public class azkaban.executor.ExecutableFlowBase extends ExecutableNode {}
+public class azkaban.executor.ExecutableFlow extends ExecutableFlowBase {}
+
+public class azkaban.execapp.JobRunner extends EventHandler implements Runnable {
+    public JobRunner(final ExecutableNode node, final File workingDir, final ExecutorLoader loader, final JobTypeManager jobtypeManager, final Props azkabanProps) {
+        this.props = node.getInputProps();
+        this.node = node;
+        this.workingDir = workingDir;
+        this.executionId = node.getParentFlow().getExecutionId();
+        this.jobId = node.getId();
+    }
+    public void run() {
+        doRun();
+    }
+    private void doRun() {
+        createAttachmentFile();
+        createLogger();
+        uploadExecutableNode();// 写入数据到 db
+        if (!errorFound && !isKilled()) {
+            finalStatus = runJob();
+        }
+        this.node.setEndTime(System.currentTimeMillis());
+    }
+    private Status runJob() {
+        this.job.run();
+    }
+}
+public class azkaban.jobExecutor.ProcessJob extends AbstractProcessJob {
+    public void run() throws Exception {
+        List<String> commands = null;
+        commands = getCommandList();// command 是由 JobRunner#props 产生, 而 this.props = node.getInputProps(); 而 ExecutableNode 由上面 createFlowRunner 中产生
+        for (String command : commands) {
+            AzkabanProcessBuilder builder = null;
+            builder = new AzkabanProcessBuilder(partitionCommandLine(command)).setEnv(envVars).setWorkingDir(getCwd()).setLogger(getLog());
+            this.process = builder.build();
+            this.process.run();
+        }
+    }
+}
+
+public class azkaban.jobExecutor.utils.process.AzkabanProcess {
+    public void run() throws IOException {
+        final ProcessBuilder builder = new ProcessBuilder(this.cmd);
+        builder.directory(new File(this.workingDir));
+        builder.environment().putAll(this.env);
+        builder.redirectErrorStream(true);
+        this.process = builder.start();
+        this.processId = processId(this.process);
+        final LogGobbler outputGobbler = new LogGobbler(new InputStreamReader(this.process.getInputStream(), StandardCharsets.UTF_8), this.logger, Level.INFO, 30);
+        final LogGobbler errorGobbler = new LogGobbler(new InputStreamReader(this.process.getErrorStream(), StandardCharsets.UTF_8), this.logger, Level.ERROR, 30);
+        outputGobbler.start();
+        errorGobbler.start();
+        int exitCode = this.process.waitFor();
+    }
+}
+
+public class azkaban.utils.LogGobbler extends Thread {
+    public LogGobbler(final Reader inputReader, final Logger logger, final Level level, final int bufferLines) {
+        this.inputReader = new BufferedReader(inputReader);
+        this.logger = logger;
+        this.loggingLevel = level;
+        this.buffer = new CircularBuffer<>(bufferLines);
+    }
+    public void run() {
+        while (!Thread.currentThread().isInterrupted()) {
+            final String line = this.inputReader.readLine();
+            this.buffer.append(line);
+            log(line);
+        }
+    }
+    private void log(final String message) {
+        this.logger.log(this.loggingLevel, message);
+    }
+}
+
+
+
+  {
+      azkaban.url: http://localhost:8081, 
+      azkaban.job.id: jobA, 
+      azkaban.job.attempt: 0, 
+      azkaban.flow.start.year: 2020, 
+      azkaban.link.execution.url: http://localhost:8081/executor?execid=56, 
+      type: command, 
+      azkaban.flow.projectversion: 1, 
+      azkaban.flow.start.minute: 56, 
+      azkaban.flow.execid: 56, 
+      azkaban.link.workflow.url: http://localhost:8081/manager?project=aaa&flow=basic, 
+      azkaban.job.attachment.file: /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/executions/56/_job.56.jobA.attach, 
+      azkaban.flow.start.hour: 23, 
+      jvm.args: '-Dazkaban.flowid=basic' '-Dazkaban.execid=56' '-Dazkaban.jobid=jobA', 
+      azkaban.flow.uuid: d8902b28-43da-4c91-90c8-d53719bf5180, 
+      azkaban.job.log.file: /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/executions/56/_job.56.jobA.log, 
+      failure.emails: noreply@foo.com, user.to.proxy: azkaban, 
+      azkaban.link.jobexec.url: http://localhost:8081/executor?execid=56&job=jobA, 
+      azkaban.flow.flowid: basic, azkaban.flow.start.day: 28, 
+      azkaban.job.outnodes: jobC, 
+      azkaban.link.job.url: http://localhost:8081/manager?project=aaa&flow=basic&job=jobA, 
+      azkaban.memory.check: true, azkaban.flow.projectlastchangedby: azkaban, 
+      azkaban.flow.start.timestamp: 2020-09-28T23:56:18.492-07:00, 
+      azkaban.link.attempt.url: http://localhost:8081/executor?execid=56&job=jobA&attempt=0, azkaban.job.innodes: , 
+      azkaban.flow.start.milliseconds: 492, azkaban.flow.start.timezone: America/Los_Angeles, 
+      azkaban.flow.projectid: 10, azkaban.flow.start.second: 18, 
+      azkaban.flow.submituser: azkaban, command: echo "This is an echoed text.", 
+      azkaban.flow.projectname: aaa, working.dir: /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/executions/56, 
+      azkaban.flow.start.month: 09, azkaban.job.metadata.file: _job.56.jobA.meta, azkaban.flow.projectlastchangeddate: 1601357596970, 
+  }
+
+exec 启动会插入一条数据
+命令 curl -G "localhost:$(<./executor.port)/executor?action=activate" && echo  执行一次进行一次更新 active=1 , exec shutdown 后会删除这行记录
+而且 active=1 之后挂机也不会删除
+exec shutdown 后, web 也应该重启, 否则还会连之前的 port
+
+日志: 
+被写入表 execution_logs 中
+JobRunner.run --> JobRunner.doRun --> JobRunner.finalizeLogFile --> JdbcExecutorLoader.uploadLogFile --> ExecutionLogsDao.uploadLogFile --> ExecutionLogsDao.uploadLogPart
+
+Flow Log: execution_logs
+ExecutorServlet#handleAJAXAction --> ExecutorServlet#ajaxFetchExecFlowLogs --> ExecutorManager#getExecutableFlowLog --> JdbcExecutorLoader#fetchLogs --> ExecutionLogsDao#fetchLogs
+
+ExecutorServlet#handleAJAXAction
+fetchExecFlowLogs, fetchExecJobLogs

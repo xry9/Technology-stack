@@ -1,0 +1,174 @@
+
+less log/flink-fintopia-* |grep -E "startActorSystem===25|BlobServer===201|start===236|init===166"
+onReceive===139|handleRpcMessage===183|handleRunAsync===388|handleRpcInvocation===2
+
+invoke===120===false===false, handleRpcInvocation===261
+
+flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target
+----
+HADOOP_CONF_DIR=/Users/fintopia/app/hadoop-2.7.2/etc/hadoop
+bin/yarn-session.sh -n 2 -jm 1024 -tm 1024, 不用启动 start-cluster.sh
+flink run -c com.atguigu.wc.StreamWordCount flink-demo/target/flink-demo-1.8.2.jar
+----
+
+public class org.apache.flink.runtime.taskexecutor.TaskManagerRunner implements FatalErrorHandler, AutoCloseableAsync {
+	private final TaskExecutor taskManager;
+	public static void main(String[] args) throws Exception {
+		final Configuration configuration = loadConfiguration(args);
+		runTaskManager(configuration, ResourceID.generate());
+	}
+	runTaskManager(Configuration configuration, ResourceID resourceId) throws Exception {
+		final TaskManagerRunner taskManagerRunner = new TaskManagerRunner(configuration, resourceId);
+		taskManagerRunner.start();
+	}
+	public TaskManagerRunner(Configuration configuration, ResourceID resourceId) throws Exception {
+		this.executor = java.util.concurrent.Executors.newScheduledThreadPool(Hardware.getNumberCPUCores(), new ExecutorThreadFactory("taskmanager-future"));
+		highAvailabilityServices = HighAvailabilityServicesUtils.createHighAvailabilityServices(configuration, executor, HighAvailabilityServicesUtils.AddressResolution.TRY_ADDRESS_RESOLUTION);
+		rpcService = createRpcService(configuration, highAvailabilityServices);// 启动一个 akka.tcp
+		metricQueryServiceActorSystem = MetricUtils.startMetricsActorSystem(configuration, rpcService.getAddress(), LOG);// 启动一个 akka.tcp, 端口与上挨着
+		HeartbeatServices heartbeatServices = HeartbeatServices.fromConfiguration(configuration);
+		metricRegistry = new MetricRegistryImpl(MetricRegistryConfiguration.fromConfiguration(configuration));
+		metricRegistry.startQueryService(metricQueryServiceActorSystem, resourceId);
+		blobCacheService = new BlobCacheService(configuration, highAvailabilityServices.createBlobStore(), null);
+		taskManager = startTaskManager(this.configuration, this.resourceId, rpcService, highAvailabilityServices, heartbeatServices, metricRegistry, blobCacheService, false, this);// 启动一个 akka.tcp
+	}
+	public static TaskExecutor startTaskManager(Configuration configuration, ResourceID resourceID, RpcService rpcService, HighAvailabilityServices highAvailabilityServices, HeartbeatServices heartbeatServices, MetricRegistry metricRegistry, BlobCacheService blobCacheService, boolean localCommunicationOnly, FatalErrorHandler fatalErrorHandler) throws Exception {
+		InetAddress remoteAddress = InetAddress.getByName(rpcService.getAddress());
+		TaskManagerServicesConfiguration taskManagerServicesConfiguration = TaskManagerServicesConfiguration.fromConfiguration(configuration, remoteAddress, localCommunicationOnly);
+		// 在这里启动 akka.tcp
+		TaskManagerServices taskManagerServices = TaskManagerServices.fromConfiguration(taskManagerServicesConfiguration, resourceID, EnvironmentInformation.getSizeOfFreeHeapMemoryWithDefrag(), EnvironmentInformation.getMaxJvmHeapMemory());
+		return new TaskExecutor(rpcService, taskManagerConfiguration, highAvailabilityServices, taskManagerServices, heartbeatServices, taskManagerMetricGroup, metricQueryServicePath, blobCacheService, fatalErrorHandler);
+	}
+	public void start() throws Exception {
+		taskManager.start();
+	}
+}
+
+public class org.apache.flink.runtime.taskexecutor.TaskExecutor extends RpcEndpoint implements TaskExecutorGateway {
+	public TaskExecutor(RpcService rpcService, TaskManagerConfiguration taskManagerConfiguration, HighAvailabilityServices haServices, TaskManagerServices taskExecutorServices, HeartbeatServices heartbeatServices, TaskManagerMetricGroup taskManagerMetricGroup, String metricQueryServicePath, BlobCacheService blobCacheService, FatalErrorHandler fatalErrorHandler) {
+		super(rpcService, AkkaRpcServiceUtils.createRandomName(TASK_MANAGER_NAME));
+	}
+}
+
+public abstract class org.apache.flink.runtime.rpc.RpcEndpoint implements RpcGateway, AutoCloseableAsync {
+	private final RpcService rpcService;
+	protected RpcEndpoint(final RpcService rpcService, final String endpointId) {
+		this.rpcService = checkNotNull(rpcService, "rpcService");
+		this.endpointId = checkNotNull(endpointId, "endpointId");
+		this.rpcServer = rpcService.startServer(this);
+		this.mainThreadExecutor = new MainThreadExecutor(rpcServer, this::validateRunsInMainThread);
+	}
+	public final void start() {
+		rpcServer.start();
+	}
+}
+
+public class org.apache.flink.runtime.rpc.akka.AkkaRpcService implements RpcService {
+	public <C extends RpcEndpoint & RpcGateway> RpcServer startServer(C rpcEndpoint) {
+		CompletableFuture<Void> terminationFuture = new CompletableFuture<>();
+		final Props akkaRpcActorProps;
+		ActorRef actorRef;
+		actorRef = actorSystem.actorOf(akkaRpcActorProps, rpcEndpoint.getEndpointId());
+		actors.put(actorRef, rpcEndpoint);
+		final String akkaAddress = AkkaUtils.getAkkaURL(actorSystem, actorRef);
+		final String hostname;
+		Option<String> host = actorRef.path().address().host();
+		if (host.isEmpty()) {
+			hostname = "localhost";
+		} else {
+			hostname = host.get();
+		}
+		Set<Class<?>> implementedRpcGateways = new HashSet<>(RpcUtils.extractImplementedRpcGateways(rpcEndpoint.getClass()));
+		implementedRpcGateways.add(RpcServer.class);
+		implementedRpcGateways.add(AkkaBasedEndpoint.class);
+		final InvocationHandler akkaInvocationHandler;
+		if (rpcEndpoint instanceof FencedRpcEndpoint) {
+			akkaInvocationHandler = new FencedAkkaInvocationHandler<>(akkaAddress, hostname, actorRef, configuration.getTimeout(), configuration.getMaximumFramesize(), terminationFuture, ((FencedRpcEndpoint<?>) rpcEndpoint)::getFencingToken);
+			implementedRpcGateways.add(FencedMainThreadExecutable.class);
+		} else {
+			akkaInvocationHandler = new AkkaInvocationHandler(akkaAddress, hostname, actorRef, configuration.getTimeout(), configuration.getMaximumFramesize(), terminationFuture);
+		}
+		RpcServer server = (RpcServer) Proxy.newProxyInstance(classLoader, implementedRpcGateways.toArray(new Class<?>[implementedRpcGateways.size()]), akkaInvocationHandler);
+		return server;
+	}
+}
+
+class org.apache.flink.runtime.rpc.akka.AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, RpcServer {
+	public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+		Class<?> declaringClass = method.getDeclaringClass();
+		Object result;
+		if (declaringClass.equals(AkkaBasedEndpoint.class) || declaringClass.equals(Object.class) || declaringClass.equals(RpcGateway.class) || declaringClass.equals(StartStoppable.class) || declaringClass.equals(MainThreadExecutable.class) || declaringClass.equals(RpcServer.class)) {
+			result = method.invoke(this, args);
+		} else {
+			result = invokeRpc(method, args);
+		}
+		return result;
+	}
+	private Object invokeRpc(Method method, Object[] args) throws Exception {
+		String methodName = method.getName();
+		Class<?>[] parameterTypes = method.getParameterTypes();
+		Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+		Time futureTimeout = extractRpcTimeout(parameterAnnotations, args, timeout);
+		final RpcInvocation rpcInvocation = createRpcInvocationMessage(methodName, parameterTypes, args);
+		Class<?> returnType = method.getReturnType();
+		final Object result;
+		if (Objects.equals(returnType, Void.TYPE)) {
+			tell(rpcInvocation);
+			result = null;
+		} else {
+			CompletableFuture<?> resultFuture = ask(rpcInvocation, futureTimeout);
+			CompletableFuture<?> completableFuture = resultFuture.thenApply((Object o) -> {
+				return  ((SerializedValue<?>) o).deserializeValue(getClass().getClassLoader());
+			});
+			if (Objects.equals(returnType, CompletableFuture.class)) {
+				result = completableFuture;
+			} else {
+				result = completableFuture.get(futureTimeout.getSize(), futureTimeout.getUnit());
+			}
+		}
+		return result;
+	}
+}
+
+java.lang.NumberFormatException: For input string: "handleRpcInvocation"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.flink.runtime.rpc.akka.AkkaRpcActor.handleRpcInvocation(AkkaRpcActor.java:275)
+	at org.apache.flink.runtime.rpc.akka.AkkaRpcActor.handleRpcMessage(AkkaRpcActor.java:189)
+	at org.apache.flink.runtime.rpc.akka.AkkaRpcActor.onReceive(AkkaRpcActor.java:147)
+	at akka.actor.UntypedActor$$anonfun$receive$1.applyOrElse(UntypedActor.scala:165)
+	at akka.actor.Actor$class.aroundReceive(Actor.scala:502)
+	at akka.actor.UntypedActor.aroundReceive(UntypedActor.scala:95)
+	at akka.actor.ActorCell.receiveMessage(ActorCell.scala:526)
+	at akka.actor.ActorCell.invoke(ActorCell.scala:495)
+	at akka.dispatch.Mailbox.processMailbox(Mailbox.scala:257)
+	at akka.dispatch.Mailbox.run(Mailbox.scala:224)
+	at akka.dispatch.Mailbox.exec(Mailbox.scala:234)
+	at scala.concurrent.forkjoin.ForkJoinTask.doExec(ForkJoinTask.java:260)
+	at scala.concurrent.forkjoin.ForkJoinPool$WorkQueue.runTask(ForkJoinPool.java:1339)
+	at scala.concurrent.forkjoin.ForkJoinPool.runWorker(ForkJoinPool.java:1979)
+	at scala.concurrent.forkjoin.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:107)
+
+
+
+java.lang.NumberFormatException: For input string: "bbbb"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at com.xryj.flink.SocketTextStreamWordCount$LineSplitter.flatMap(SocketTextStreamWordCount.java:37)
+	at com.xryj.flink.SocketTextStreamWordCount$LineSplitter.flatMap(SocketTextStreamWordCount.java:30)
+	at org.apache.flink.streaming.api.operators.StreamFlatMap.processElement(StreamFlatMap.java:50)
+	at org.apache.flink.streaming.runtime.tasks.OperatorChain$CopyingChainingOutput.pushToOperator(OperatorChain.java:579)
+	at org.apache.flink.streaming.runtime.tasks.OperatorChain$CopyingChainingOutput.collect(OperatorChain.java:554)
+	at org.apache.flink.streaming.runtime.tasks.OperatorChain$CopyingChainingOutput.collect(OperatorChain.java:534)
+	at org.apache.flink.streaming.api.operators.AbstractStreamOperator$CountingOutput.collect(AbstractStreamOperator.java:718)
+	at org.apache.flink.streaming.api.operators.AbstractStreamOperator$CountingOutput.collect(AbstractStreamOperator.java:696)
+	at org.apache.flink.streaming.api.operators.StreamSourceContexts$NonTimestampContext.collect(StreamSourceContexts.java:104)
+	at org.apache.flink.streaming.api.functions.source.SocketTextStreamFunction.run(SocketTextStreamFunction.java:110)
+	at org.apache.flink.streaming.api.operators.StreamSource.run(StreamSource.java:93)
+	at org.apache.flink.streaming.api.operators.StreamSource.run(StreamSource.java:57)
+	at org.apache.flink.streaming.runtime.tasks.SourceStreamTask.run(SourceStreamTask.java:97)
+	at org.apache.flink.streaming.runtime.tasks.StreamTask.invoke(StreamTask.java:302)
+	at org.apache.flink.runtime.taskmanager.Task.run(Task.java:711)
+	at java.lang.Thread.run(Thread.java:748)

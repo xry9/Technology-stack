@@ -1,0 +1,43 @@
+https://www.runoob.com/cprogramming/c-storage-classes.html
+    https://www.runoob.com/w3cnote/cpp-static-usage.html
+https://www.runoob.com/cprogramming/c-array-of-pointers.html
+https://www.runoob.com/cprogramming/c-passing-pointers-to-functions.html
+https://www.runoob.com/cprogramming/c-return-pointer-from-functions.html
+https://www.runoob.com/cprogramming/c-fun-pointer-callback.html
+https://www.runoob.com/cprogramming/c-unions.html
+https://www.runoob.com/cprogramming/c-preprocessors.html
+https://www.runoob.com/cprogramming/c-header-files.html
+https://www.runoob.com/cprogramming/c-error-handling.html
+https://www.runoob.com/cplusplus/cpp-storage-classes.html
+https://www.runoob.com/cplusplus/cpp-functions.html
+https://www.runoob.com/cplusplus/cpp-references.html
+https://www.runoob.com/cplusplus/cpp-basic-input-output.html
+https://www.runoob.com/cplusplus/cpp-constructor-destructor.html
+https://www.runoob.com/cplusplus/cpp-copy-constructor.html
+https://www.runoob.com/cplusplus/cpp-friend-functions.html
+https://www.runoob.com/cplusplus/cpp-inline-functions.html
+https://www.runoob.com/cplusplus/cpp-inheritance.html
+https://www.runoob.com/cplusplus/cpp-overloading.html
+https://www.runoob.com/cplusplus/cpp-polymorphism.html
+https://www.runoob.com/cplusplus/cpp-data-abstraction.html
+https://www.runoob.com/cplusplus/cpp-interfaces.html
+https://www.runoob.com/cplusplus/cpp-multithreading.html
+
+
+https://github.com/EZLippi/Tinyhttpd
+https://github.com/EZLippi/WebBench
+
+yum -y install autoconf automake cyrus-sasl-devel cyrus-sasl-gssapi cyrus-sasl-plain flex gcc gcc-c++ gdb git krb5-server krb5-workstation libtool make openssl-devel patch pkgconfig redhat-lsb-core rsync unzip vim-common which numactl-libs numactl-devel
+yum -y install centos-release-scl
+yum -y install yum install devtoolset-8
+scl enable devtoolset-8 bash
+
+
+cd apache-kudu-1.14.0
+build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
+mkdir -p build/release
+cd build/release
+../../build-support/enable_devtoolset.sh ../../thirdparty/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=release ../..
+make -j4 
+make DESTDIR=/app/kudu install
+

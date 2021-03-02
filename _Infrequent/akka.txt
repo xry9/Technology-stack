@@ -1,0 +1,5 @@
+git clone -b v2.4.16 git@github.com:akka/akka.git 
+sbt compile
+sbt package
+----
+sbt script version: 1.4.0

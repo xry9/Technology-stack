@@ -1,0 +1,119 @@
+rm -f executorServerLog__*.out && rm -f logs/azkaban-execserver.log && bin/start-exec.sh
+curl -G "localhost:$(<./executor.port)/executor?action=activate" && echo
+rm -f webServerLog_*.out && rm -f logs/azkaban-webserver.log && bin/start-web.sh
+
+./gradlew build installDist -x test && cp azkaban-common/build/libs/azkaban-common-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/azkaban-common-0.1.0-SNAPSHOT.jar && cp azkaban-common/build/libs/azkaban-common-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-common-0.1.0-SNAPSHOT.jar
+./gradlew build installDist -x test && cp azkaban-web-server/build/libs/azkaban-web-server-3.90.0.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-web-server-0.1.0-SNAPSHOT.jar
+./gradlew build installDist -x test && cp azkaban-exec-server/build/libs/azkaban-exec-server-3.90.0.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/azkaban-exec-server-0.1.0-SNAPSHOT.jar
+./gradlew build installDist -x test && cp az-flow-trigger-dependency-type/kafka-event-trigger/build/libs/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/plugins/dependencies/kafka/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar && cp az-flow-trigger-dependency-type/kafka-event-trigger/build/libs/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar  /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/plugins/dependencies/kafka/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar 
+./gradlew build installDist -x test && cp az-core/build/libs/az-core-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/az-core-0.1.0-SNAPSHOT.jar && cp az-core/build/libs/az-core-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/az-core-0.1.0-SNAPSHOT.jar
+./gradlew build installDist -x test && cp azkaban-db/build/libs/azkaban-db-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/azkaban-db-0.1.0-SNAPSHOT.jar && cp azkaban-db/build/libs/azkaban-db-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-db-0.1.0-SNAPSHOT.jar
+
+--
+./gradlew build installDist -x test && cp azkaban-common/build/libs/azkaban-common-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/azkaban-common-0.1.0-SNAPSHOT.jar && cp azkaban-common/build/libs/azkaban-common-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-common-0.1.0-SNAPSHOT.jar && cp azkaban-web-server/build/libs/azkaban-web-server-3.90.0.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-web-server-0.1.0-SNAPSHOT.jar && cp azkaban-exec-server/build/libs/azkaban-exec-server-3.90.0.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/azkaban-exec-server-0.1.0-SNAPSHOT.jar && cp az-flow-trigger-dependency-type/kafka-event-trigger/build/libs/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/plugins/dependencies/kafka/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar && cp az-flow-trigger-dependency-type/kafka-event-trigger/build/libs/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar  /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/plugins/dependencies/kafka/kafka-event-trigger-0.1.0-SNAPSHOT-fat.jar && cp az-core/build/libs/az-core-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/az-core-0.1.0-SNAPSHOT.jar && cp az-core/build/libs/az-core-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/az-core-0.1.0-SNAPSHOT.jar && cp azkaban-db/build/libs/azkaban-db-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT/lib/azkaban-db-0.1.0-SNAPSHOT.jar && cp azkaban-db/build/libs/azkaban-db-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-db-0.1.0-SNAPSHOT.jar
+./gradlew build installDist -x test && cp azkaban-web-server/build/libs/azkaban-web-server-3.90.0.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-web-server-0.1.0-SNAPSHOT.jar && cp azkaban-breakpoint/build/libs/azkaban-breakpoint-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-breakpoint-0.1.0-SNAPSHOT.jar&& cp azkaban-java-api/build/libs/azkaban-java-api-0.1.0-SNAPSHOT.jar /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/lib/azkaban-java-api-0.1.0-SNAPSHOT.jar 
+
+cp -r azkaban-web-server/src/web/ /Users/fintopia/app/azkaban-web-server-0.1.0-SNAPSHOT/web/
+
+/data/apps/yqg_datatask_cheetah/task/util/azkaban_kafka/azkaban_kafka.py
+python /data/apps/yqg_datatask_cheetah/task/util/azkaban_kafka/azkaban_kafka.py yqg_azkaban_tableName_topic dm.dm_app_log_component_monitor 
+
+
+target  dependencies
+t1  t2,t3
+t2  t4,t5
+t3  t6,t7
+t8  t7,t9
+t10 t3,t8
+t11 t2
+t12 t1,t11
+t4
+t5
+t6
+t7
+t9
+
+insert into operator(targetNames, dependenceNames, command) values('t1', 't2,t3', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t2', 't4,t5', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t3', 't6,t7', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t8', 't7,t9', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t10', 't3,t8', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t11', 't2', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t12', 't1,t11', 'pwd');
+
+insert into operator(targetNames, dependenceNames, command) values('t4', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t5', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t6', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t7', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t9', '', 'pwd');
+--------
+insert into operator(targetNames, dependenceNames, command) values('t14', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t17', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t21', '', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t13,t15', 't9,t14', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t16', 't8,t13', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t18', 't17', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t19', 't15,t18', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t20', 't10,t16', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t22', 't17,t21', 'pwd');
+insert into operator(targetNames, dependenceNames, command) values('t23', 't19,t22', 'pwd');
+
+AZWEB_CLASSPATH=
+AZWEB_HOME=/Users/fintopia/app/azkaban-exec-server-0.1.0-SNAPSHOT
+for f in $AZWEB_HOME/lib/*.jar; do
+  AZWEB_CLASSPATH=${AZWEB_CLASSPATH}:$f;
+done
+
+
+java -Dlog4j.configuration=file:/Users/fintopia/app/mygit/azkaban3900/azkaban-breakpoint/src/main/resources/log4j.properties -cp $AZWEB_CLASSPATH:/Users/fintopia/app/mygit/azkaban3900/azkaban-breakpoint/build/libs/azkaban-breakpoint-0.1.0-SNAPSHOT.jar com.yqg.azkaban.breakpointExec.LineageSchedual
+
+select project_id, flow_name, max(project_version), max(flow_version) from azkaban_39.project_flow_files group by project_id, flow_name
+
+select * from 
+(select project_id, flow_name, max(project_version) pv, max(flow_version) from azkaban_39.project_flow_files group by project_id, flow_name)pff1
+join
+(select project_id, max(project_version) pv from azkaban_39.project_flow_files group by project_id)pff2
+on pff1.pv=pff2.pv;
+
+
+// 上传一次 zip 文件 project_version+1, 页面修改一次 flow 则 flow_version+1
+
+select pff1.project_id, pff2.project_name, pff1.flow_name, pff1.flow_file, pff1.project_version, pff1.flow_version from 
+(select project_id, flow_name, project_version, flow_version, flow_file from azkaban_39.project_flow_files where flow_name in('bz_dm_dm_bz_granafacil_asset_preser.flow','bz_dw_dw_bz_loan_user_first_credits_info.flow'))pff1
+join(
+    select pff.*, p.project_name from
+    (select project_id, flow_name, max(project_version)project_version, max(flow_version)flow_version from azkaban_39.project_flow_files group by project_id, flow_name)pff
+    join
+    (select id, name project_name from azkaban_39.projects where active=1 and name='mmm')p
+    on pff.project_id = p.id
+)pff2
+on pff1.project_id=pff2.project_id and pff1.flow_name=pff2.flow_name and pff1.project_version=pff2.project_version and pff1.flow_version=pff2.flow_version
+
+
+SELECT p.name project_name, p.id project_id, flow.flow_id , flow.exec_id, flow.status flow_status, FROM_UNIXTIME(flow.start_time/1000) flow_start_time, FROM_UNIXTIME(flow.end_time/1000) flow_end_time,
+job.job_id, job.status job_status, FROM_UNIXTIME(job.start_time/1000) job_start_time, FROM_UNIXTIME(job.end_time/1000) job_end_time
+from azkaban_39.execution_flows flow
+left join azkaban_39.execution_jobs job on flow.exec_id=job.exec_id
+LEFT JOIN azkaban_39.projects p on flow.project_id=p.id
+where FROM_UNIXTIME(flow.start_time/1000)>curdate() and FROM_UNIXTIME(job.start_time/1000)>curdate() and job.status in ('70','50');
+
+=====================================
+优化-编辑:
+  1. 下载文件时下载最新版本
+  2. 可以加 flow、job
+  3. flow 的下载
+  4. 页面添加 flow job
+  5. 编辑时要能改依赖
+  5. 不同版本的 project(原始版本、最新版本)
+思考:
+  1. 这是一个思考，flow 之间依赖的必要性, 结论: 不实用, 至少在目前的场景中几乎用不到
+  2. 去哪儿那种任务依赖好还是 trigger 方式好, 总体来说还是 trigger 好. 
+  去哪方式结构比较清晰
+  trigger 方式好处是解藕, 分别面向条件编程即可, 
+
+
+现实中往往有这样一个特点, 前期任务放在多个 flow 中, 分别配制调度. 但是后期多个 flow 之间的任务有依赖, 怎么搞, 只能放在一个 flow 中. 而 flow 的设定中是调度的基本单位, 放在太多任务肯定不合适,
+所以这就是矛盾所在
+
+
+

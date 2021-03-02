@@ -1,0 +1,435 @@
+
+public class azkaban.webapp.servlet.ExecutorServlet extends LoginAbstractAzkabanServlet {
+    protected void handleGet(final HttpServletRequest req, final HttpServletResponse resp, final Session session) throws ServletException, IOException {
+        if (hasParam(req, "ajax")) {
+            handleAJAXAction(req, resp, session);
+        }
+    }
+    private void handleAJAXAction(final HttpServletRequest req, final HttpServletResponse resp, final Session session) throws ServletException, IOException {
+        if (ajaxName.equals("executeFlow")) {
+            ajaxExecuteFlow(req, resp, ret, session.getUser());
+        }
+    }
+    private void ajaxExecuteFlow(final HttpServletRequest req, final HttpServletResponse resp, final HashMap<String, Object> ret, final User user) throws ServletException {
+        final String projectName = getParam(req, "project");
+        final String flowId = getParam(req, "flow");
+        final Project project = getProjectAjaxByPermission(ret, projectName, user, Type.EXECUTE);
+        final Flow flow = project.getFlow(flowId);
+        final ExecutableFlow exflow = FlowUtils.createExecutableFlow(project, flow);
+        final String message = this.executorManagerAdapter.submitExecutableFlow(exflow, user.getUserId());// ExecutorManager, INSERT INTO execution_flows ,  UPDATE execution_flows flow_data
+        ret.put("execid", exflow.getExecutionId());
+    }
+}
+
+public class azkaban.executor.ExecutorManager extends EventHandler implements ExecutorManagerAdapter {
+    public static void main(final String[] args) throws Exception {
+        launch(injector.getInstance(AzkabanWebServer.class));
+    }
+    public static void launch(final AzkabanWebServer webServer) throws Exception {
+        webServer.executorManagerAdapter.start();
+        webServer.prepareAndStartServer();
+    }
+    public void start() throws ExecutorManagerException {
+        initialize();
+        this.updaterThread.start();
+        this.queueProcessor.start();// initialize 方法中实例化的 
+    }
+    void initialize() throws ExecutorManagerException {
+        this.initialized = true;
+        this.setupExecutors();// SELECT id, host, port, active FROM executors where active=true
+        this.loadRunningExecutions();// 加载运行中的 executor
+        this.loadQueuedFlows();// SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE executor_id is NULL AND status =
+    }
+    private class QueueProcessorThread extends Thread {
+        public void run() {
+            while (!this.shutdown) {
+                processQueuedFlows(this.activeExecutorRefreshWindowInMillisec, this.activeExecutorRefreshWindowInFlows);
+            }
+        }
+    }
+    private void processQueuedFlows(final long activeExecutorsRefreshWindow, final int maxContinuousFlowProcessed) throws InterruptedException,  ExecutorManagerException {
+        while (isActive() && (ExecutorManager.this.runningCandidate = ExecutorManager.this.queuedFlows.fetchHead()) != null) {
+            final ExecutionReference reference = ExecutorManager.this.runningCandidate.getFirst();
+            final ExecutableFlow exflow = ExecutorManager.this.runningCandidate.getSecond();
+            if (currentTime - lastExecutorRefreshTime > activeExecutorsRefreshWindow |currentContinuousFlowProcessed >= maxContinuousFlowProcessed) {
+                refreshExecutors();
+            }
+            selectExecutorAndDispatchFlow(reference, exflow);
+        }
+    }
+    public String submitExecutableFlow(final ExecutableFlow exflow, final String userId) throws ExecutorManagerException {
+        final ExecutionReference reference = new ExecutionReference(exflow.getExecutionId());
+        this.executorLoader.addActiveExecutableReference(reference);
+        this.queuedFlows.enqueue(exflow, reference);
+        return message;
+    }
+    private void prepareAndStartServer() throws Exception {
+        if (this.props.getBoolean(ConfigurationKeys.ENABLE_QUARTZ, false)) {
+            this.flowTriggerService.start();
+            this.scheduler.start();
+        }
+        this.server.start();//org.mortbay.jetty.Server
+    }
+
+    private void selectExecutorAndDispatchFlow(final ExecutionReference reference, final ExecutableFlow exflow) throws ExecutorManagerException {
+        final Set<Executor> remainingExecutors = new HashSet<>(ExecutorManager.this.activeExecutors.getAll());
+        final Executor selectedExecutor = selectExecutor(exflow, remainingExecutors); --> CandidateSelector#getBest
+        dispatch(reference, exflow, selectedExecutor);
+        return;
+    }
+    private void dispatch(final ExecutionReference reference, final ExecutableFlow exflow, final Executor choosenExecutor) throws ExecutorManagerException {
+        exflow.setUpdateTime(System.currentTimeMillis());
+        this.executorLoader.assignExecutor(choosenExecutor.getId(), exflow.getExecutionId());
+        this.apiGateway.callWithExecutable(exflow, choosenExecutor, ConnectorParams.EXECUTE_ACTION);
+        reference.setExecutor(choosenExecutor);
+    }
+}
+
+public class azkaban.flowtrigger.FlowTriggerService {
+    public void start() throws FlowTriggerDependencyPluginException {
+        this.triggerPluginManager.loadAllPlugins();// FlowTriggerDependencyPluginManager.loadAllPlugin --> FlowTriggerDependencyPluginManager.loadDependencyPlugin --> KafkaDependencyCheck.init --> KafkaEventMonitor
+    }
+    private void markSuccess(final DependencyInstanceContext context) {
+        final DependencyInstance depInst = findDependencyInstanceByContext(context);// 这行很重要啊
+        if (depInst != null) {
+            this.processStatusAndCancelCauseUpdate(depInst, Status.SUCCEEDED, CancellationCause.NONE);// update execution_dependencies 设置结束时间, 相当于这个 trigger 完成了, 剩下交给 flow 了
+            if (depInst.getTriggerInstance().getStatus() == Status.SUCCEEDED) {
+                this.triggerProcessor.processSucceed(depInst.getTriggerInstance());// update execution_dependencies 里面调用 azkaban.executor.ExecutorManager#submitExecutableFlow, 即提交一个 flow
+            }
+        }
+    }
+}
+
+public class trigger.kafka.KafkaEventMonitor implements Runnable {// 日志在 webServerLog_*.out 中
+    public void run() {
+        final ConsumerRecords<String, String> records = this.consumer.poll(10000);
+        for (final ConsumerRecord<String, String> record : records) {
+            final String payload = record.value();
+            final Set<String> matchedList = this.depInstances.regexInTopic(record.topic(), payload);
+            if (!matchedList.isEmpty()) {
+                this.triggerDependencies(matchedList, record);
+            }
+        }
+    }
+    private void triggerDependencies(final Set<String> matchedList, final ConsumerRecord<String, String> record) {
+        final List<KafkaDependencyInstanceContext> deleteList = new LinkedList<>();
+        for (final String it : matchedList) {
+            final List<KafkaDependencyInstanceContext> possibleAvailableDeps = this.depInstances.getDepsByTopicAndEvent(record.topic(), it);// 这里应该是返回了此条件 hang 住的所有 Instance
+            for (final KafkaDependencyInstanceContext dep : possibleAvailableDeps) {
+                dep.getCallback().onSuccess(dep);// 会走到 azkaban.flowtrigger.FlowTriggerService#markSuccess
+                deleteList.add(dep);
+            }
+        }
+    }
+}
+public class azkaban.flowtrigger.quartz.FlowTriggerQuartzJob extends AbstractQuartzJob {
+    // 此处是框架调起的, 我没太想明白
+    // 此类被创建是在 QuartzSchedulerThread 中, 向上依次是 org.quartz.impl.StdSchedulerFactory#instantiate()    org.quartz.impl.StdSchedulerFactory#getScheduler()    azkaban.scheduler.QuartzScheduler#QuartzScheduler
+
+trigger 原理1)
+上传的 flow 文件中包含 trigger 情况:
+LoginAbstractAzkabanServlet.doPost 
+ProjectManagerServlet.handleMultiformPost
+ProjectManagerServlet.handleUpload
+ProjectManagerServlet.ajaxHandleUpload
+FlowTriggerScheduler.schedule
+QuartzScheduler.scheduleJobIfAbsent 这个方法中的 this.scheduler.scheduleJob(job, trigger);  trigger(org.quartz.Trigger) 由 yaml 文件中的 cron 表达式创建, 
+scheduler(org.quartz.Scheduler). 但此方法真正的作用是什么我也不整明白(好像有作用, 获取任务 getStartTime getNextFireTime), 因为 trigger 真正的原理是在下面呀
+
+    public void execute(final JobExecutionContext context) {
+        final JobDataMap data = context.getMergedJobDataMap();
+        final int projectId = data.getInt(PROJECT_ID);
+        final Project project = this.projectManager.getProject(projectId);
+        final String flowId = data.getString(FLOW_ID);
+        final int flowVersion = data.getInt(FLOW_VERSION);
+        final String submitUser = data.getString(SUBMIT_USER);
+        final FlowTrigger flowTrigger = (FlowTrigger) data.get(FLOW_TRIGGER);
+trigger 原理 2)        this.triggerService.startTrigger(flowTrigger, flowId, flowVersion, submitUser, project);// 1、向 execution_dependencies 插入一行数据  2、将实例加入 azkaban.flowtrigger.FlowTriggerService#runningTriggers 中, kafka 接收到消息并匹配后可以从这里面找
+    }
+}
+trigger 原理 3) trigger 实例(非 Instance) 都在 QRTZ_ 相关表中, 是 quartz 负责维护的，在 azkaban.scheduler.QuartzScheduler#QuartzScheduler 中, quartz 相关配置可以看出端倪
+
+
+public class azkaban.executor.ExecutorApiGateway {
+    Map<String, Object> callWithExecutable(final ExecutableFlow exflow, final Executor executor, final String action) throws ExecutorManagerException {
+        return callWithExecutionId(executor.getHost(), executor.getPort(), action, exflow.getExecutionId(), null, (Pair<String, String>[]) null);
+    }
+    Map<String, Object> callWithExecutionId(final String host, final int port, final String action, final Integer executionId, final String user, final Pair<String, String>... params) throws ExecutorManagerException {
+        final List<Pair<String, String>> paramList = new ArrayList<>();
+        paramList.add(new Pair<>(ConnectorParams.ACTION_PARAM, action));
+        paramList.add(new Pair<>(ConnectorParams.EXECID_PARAM, String.valueOf(executionId)));
+        paramList.add(new Pair<>(ConnectorParams.USER_PARAM, user));
+        return callForJsonObjectMap(host, port, "/executor", paramList);
+    }
+    Map<String, Object> callForJsonObjectMap(final String host, final int port, final String path, final List<Pair<String, String>> paramList) throws IOException {
+        final String responseString = callForJsonString(host, port, path, paramList);
+        final Map<String, Object> jsonResponse = (Map<String, Object>) JSONUtils.parseJSONFromString(responseString);
+        return jsonResponse;
+    }
+    private String callForJsonString(final String host, final int port, final String path, List<Pair<String, String>> paramList) throws IOException {
+        final URI uri = ExecutorApiClient.buildUri(host, port, path, true);
+        return this.apiClient.httpPost(uri, paramList);
+    }
+}
+
+public class azkaban.flowtrigger.FlowTriggerService {
+    public void startTrigger(final FlowTrigger flowTrigger, final String flowId, final int flowVersion, final String submitUser, final Project project) {
+        final TriggerInstance triggerInst = createTriggerInstance(flowTrigger, flowId, flowVersion, submitUser, project);// FlowTriggerService#createTriggerInstance --> FlowTriggerService#createDepContext --> KafkaDependencyCheck#run --> KafkaEventMonitor#add --> KafkaDepInstanceCollection#add 此方法向 KafkaDepInstanceCollection#topicEventMap put, 满足条件后就是从此 map 中拿到此条件对应的[所有] KafkaDepInstanceCollection#topicEventMap 
+        this.flowTriggerExecutorService.submit(() -> {
+            start(triggerInst);
+        });
+    }
+  private void start(final TriggerInstance triggerInst) {
+    this.triggerProcessor.processNewInstance(triggerInst);// insert 一行数据到 execution_dependencies
+    this.triggerProcessor.processSucceed(triggerInst);// 好像没干啥事吧
+  }
+}
+
+public class azkaban.scheduler.QuartzScheduler {
+public QuartzScheduler(final Props azProps) throws SchedulerException {// azProps 即 quartz 相关的数据库配置了
+    final StdSchedulerFactory schedulerFactory = new StdSchedulerFactory(azProps.toAllProperties());
+    this.scheduler = schedulerFactory.getScheduler();
+  }
+  public void start() throws SchedulerException {
+    this.scheduler.start();
+  }
+  public synchronized boolean pauseJobIfPresent(final String jobName, final String groupName) throws SchedulerException {
+      this.scheduler.pauseJob(new JobKey(jobName, groupName));// 停止是 quartz 中的 job, 其实就是 azkaban 中的 trigger. 前端是由 Pause 按钮触发的
+  }
+  public synchronized boolean unscheduleJob(final String jobName, final String groupName) throws SchedulerException {
+    return this.scheduler.deleteJob(new JobKey(jobName, groupName));// 删除 quartz 中的 job, delete Project 时触发
+  }
+}
+
+cron 调用原理: 
+  1. azkaban.trigger.TriggerManager.TriggerScannerThread 线程, 有一个 scannerInterval, 默认 60000ms, 
+  2. 然后就是遍历 triggers 了, triggers 中添加元素是在程序启动时 AzkabanWebServer.launch, 还有 LoginAbstractAzkabanServlet.doPost -->...  ScheduleManager.insertSchedule
+  3. 调度配置依赖的是 Trigger 类, 对应表是 triggers, 从 data 字段中解析出 Trigger 类, 所以包含了 cron, 包括 azkaban.trigger.Trigger#actions (ExecuteFlowAction) 也是从此中解析出来的
+    ExecuteFlowAction 中包含了 projectId flowName, 所以根据这两个就可以找到真正的 flow 了
+    加载过程也是从 AzkabanWebServer.launch 开始的
+  4. 准备就绪的 trigger 会 List<TriggerAction> actions = t.getTriggerActions(); 遍历 actions 调用 action.doAction(); --> ExecuteFlowAction.doAction -->
+     ExecutorManager.submitExecutableFlow 在此方法中 this.queuedFlows.enqueue, 然后就是 QueueProcessorThread 线程的事了, 见上面代码
+  5. azkaban.trigger.Condition#isMet 的原理可以参考 azkaban.trigger.Condition#setCheckers
+
+edit:
+  LoginAbstractAzkabanServlet.doGet --> ProjectManagerServlet.ajaxSetJobOverrideProperty --> azkaban.project.ProjectManager#setJobOverrideProperty (这里面有太多内容)
+  SELECT flow_file FROM project_flow_files WHERE
+  INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file)  就是 insert 会把版本 +1
+
+上传 zip 文件:
+  LoginAbstractAzkabanServlet.doPost --> ProjectManagerServlet.ajaxHandleUpload --> AzkabanProjectLoader.persistProject 
+  INSERT INTO project_flow_files (flow_file)
+  INSERT INTO project_files (file)
+
+下载 zip 文件:
+azkaban.webapp.servlet.ProjectManagerServlet#handleGet
+从 project_versions 表中把 file_name 查到, 用这个文件名创建本地文件, 然后 select file FROM project_files, 读到 data 数据, 然后写到本地文件 projHandler.setLocalFile(file);
+
+
+flow 的 scheduler 过程:
+azkaban.webapp.servlet.LoginAbstractAzkabanServlet#doPost
+azkaban.webapp.servlet.ScheduleServlet#handlePost
+azkaban.webapp.servlet.ScheduleServlet#handleAJAXAction
+azkaban.webapp.servlet.ScheduleServlet#ajaxScheduleCronFlow
+azkaban.scheduler.ScheduleManager#cronScheduleFlow
+azkaban.scheduler.ScheduleManager#insertSchedule
+azkaban.scheduler.TriggerBasedScheduleLoader#insertSchedule
+azkaban.trigger.TriggerManager#insertTrigger
+azkaban.trigger.JdbcTriggerImpl#addTrigger, 写入表 triggers 中
+数据真正被写入是在 azkaban.trigger.JdbcTriggerImpl#updateTrigger
+
+加载 alert 插件: 
+AzkabanWebServer.main --> AlerterHolder.loadAlerters --> AlerterHolder.loadPluginAlerters
+
+插件调用栈:
+RunningExecutionsUpdaterThread.run  -->  RunningExecutionsUpdater.updateExecutions  --> ExecutionFinalizer.finalizeFlow  --> ExecutionControllerUtils.alertUserOnFlowFinished
+
+web 监控 executor 任务状态是在 azkaban.executor.RunningExecutionsUpdater#updateExecutions, 方法里有 results = this.apiGateway.updateExecutions(executor, entry.getValue());
+
+webServer 中抛异常但是进程没有杀死，没法看代码，但是分析一定是这样，
+  Thread.currentThread().setUncaughtExceptionHandler(Thread.currentThread().getThreadGroup());
+
+
+azkaban 的一个 bug:
+  电脑休眠, 后
+  在 http://localhost:8085/manager?project=dmdata&flow=dm_banma_stage_reg_statistics#flowtriggers 接口看休眠过程也产生了 Flow Trigger Instance Id,
+  但是这个实例不能被触发。重启之后变好了
+
+
+java 是把 session/cookie, 存入了 org.apache.http.client.fluent.Executor#CLIENT(org.apache.http.client.HttpClient), 这个静态变量中, 所以只要执行一次 login 操作, 
+以后再调用也不用传 sessionId, 而是会自动传送 cookie
+
+============== 表维度 ==================
+
+active_executing_flows
+active_sla     ==       
+execution_dependencies
+execution_flows       
+execution_jobs        
+execution_logs        
+executor_events     ==  
+executors             
+project_events        
+project_files         
+project_flow_files    
+project_flows         
+project_permissions   
+project_properties    
+project_versions      
+projects              
+properties            
+ramp                  ==
+ramp_dependency       ==
+ramp_exceptional_flow_items ==
+ramp_exceptional_job_items  ==
+ramp_items            ==
+triggers            ==  
+validated_dependencies  ==
+
+
+1、创建一个 project:
+SELECT prj.id, prj.name, prj.active, prj.modified_time, prj.create_time, prj.version, prj.last_modified_by, prj.description, prj.enc_type, prj.settings_blob, prm.name, prm.permissions, prm.isGroup FROM projects prj LEFT JOIN project_permissions prm ON prj.id = prm.project_id WHERE prj.name=? AND prj.active=true
+INSERT INTO projects ( name, active, modified_time, create_time, version, last_modified_by, description, enc_type, settings_blob) values (?,?,?,?,?,?,?,?,?)
+SELECT prj.id, prj.name, prj.active, prj.modified_time, prj.create_time, prj.version, prj.last_modified_by, prj.description, prj.enc_type, prj.settings_blob, prm.name, prm.permissions, prm.isGroup FROM projects prj LEFT JOIN project_permissions prm ON prj.id = prm.project_id WHERE prj.name=? AND prj.active=true
+INSERT INTO project_permissions (project_id, modified_time, name, permissions, isGroup) values (?,?,?,?,?)ON DUPLICATE KEY UPDATE modified_time = VALUES(modified_time), permissions = VALUES(permissions)===[47, 1608618325185, azkaban, 134217728, false]
+UPDATE projects SET enc_type=?, settings_blob=? WHERE id=?===[2, [B@1e8efff6, 47]
+INSERT INTO project_events (project_id, event_type, event_time, username, message) values (?,?,?,?,?)===[47, 1, 1608618325222, azkaban, null]
+
+2、上传 zip 文件到空 project: 
+
+===query===68===SELECT MAX(version) FROM project_versions WHERE project_id=?
+===update===100===INSERT INTO project_versions (project_id, version, upload_time, uploader, file_type, file_name, md5, num_chunks, resource_id, startup_dependencies, uploader_ip_addr) values (?,?,?,?,?,?,?,?,?,?,?)
+===update===100===INSERT INTO project_files (project_id, version, chunk, size, file) values (?,?,?,?,?)
+===update===100===UPDATE project_versions SET num_chunks=? WHERE project_id=? AND version=?
+===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[47, 1, basic2, 1608618501717, 2, [B@39592485]
+===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[47, 1, basic1, 1608618501723, 2, [B@344bf483]
+===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[47, 1, basic0, 1608618501729, 2, [B@6ef5c90b]
+===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[47, 1, basic, 1608618501739, 2, [B@1aa6a03e]
+===update===126===UPDATE projects SET version=?,modified_time=?,last_modified_by=? WHERE id=?===[1, 1608618501747, azkaban, 47]
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[47, 1, basic2.flow, 1, 1608618501753, [B@15994dd6]
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[47, 1, basic.flow, 1, 1608618501776, [B@4f5e7ae9]
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[47, 1, basic1.flow, 1, 1608618501786, [B@4b906e47]
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[47, 1, basic0.flow, 1, 1608618501801, [B@5d2f1af1]
+===update===126===INSERT INTO project_events (project_id, event_type, event_time, username, message) values (?,?,?,?,?)===[47, 6, 1608618501805, azkaban, Uploaded project files zip zzaa2.zip]
+===query===68===SELECT ex.exec_id exec_id, ex.project_id project_id, ex.version version, ex.flow_id flow_id, et.host host, et.port port, ex.executor_id executorId, ex.status status, ex.submit_time submit_time, ex.start_time start_time, ex.end_time end_time, ex.submit_user submit_user, et.active executorStatus FROM execution_flows ex LEFT JOIN  executors et ON ex.executor_id = et.id Where ex.status NOT IN (50, 60, 70)
+===update===100===DELETE FROM project_flows WHERE project_id=? AND version < ?
+===update===100===DELETE FROM project_properties WHERE project_id=? AND version < ?
+===update===100===DELETE FROM project_files WHERE project_id=? AND version < ?
+===update===100===UPDATE project_versions SET num_chunks=0 WHERE project_id=? AND version < ?
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?
+
+java.lang.NumberFormatException: For input string: "setFlows"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at azkaban.project.Project.setFlows(Project.java:131)
+	at azkaban.project.AzkabanProjectLoader.persistProject(AzkabanProjectLoader.java:234)
+	at azkaban.project.AzkabanProjectLoader.uploadProject(AzkabanProjectLoader.java:150)
+	at azkaban.project.ProjectManager.uploadProject(ProjectManager.java:510)
+	at azkaban.webapp.servlet.ProjectManagerServlet.ajaxHandleUpload(ProjectManagerServlet.java:1826)
+	at azkaban.webapp.servlet.ProjectManagerServlet.handleUpload(ProjectManagerServlet.java:2005)
+	at azkaban.webapp.servlet.ProjectManagerServlet.handleMultiformPost(ProjectManagerServlet.java:214)
+	at azkaban.webapp.servlet.LoginAbstractAzkabanServlet.doPost(LoginAbstractAzkabanServlet.java:294)
+
+
+
+
+
+3、删除 project(有 flow, flow 中没有 trigger):
+UPDATE projects SET active=false,modified_time=?,last_modified_by=? WHERE id=?===[1608619158070, azkaban, 47]
+INSERT INTO project_events (project_id, event_type, event_time, username, message) values (?,?,?,?,?)===[47, 2, 1608619158072, azkaban, null]
+
+4、编辑 flow:
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?
+===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[45, 1, basic.flow, 2, 1608619431098, [B@3e0ccfca]
+===update===126===INSERT INTO project_events (project_id, event_type, event_time, username, message) values (?,?,?,?,?)===[45, 11, 1608619431104, azkaban, Modified Properties: [ command, echo "This is an echoed text.haha"-->echo "This is an echoed text.heu"], ]
+===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?
+===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?
+
+5、替换 zip 文件(在原来的基础上把 flow 改了名字):
+
+===db===query===68===SELECT MAX(version) FROM project_versions WHERE project_id=?===[45]
+===db===update===100===INSERT INTO project_versions (project_id, version, upload_time, uploader, file_type, file_name, md5, num_chunks, resource_id, startup_dependencies, uploader_ip_addr) values (?,?,?,?,?,?,?,?,?,?,?)
+===db===update===100===INSERT INTO project_files (project_id, version, chunk, size, file) values (?,?,?,?,?)
+===db===update===100===UPDATE project_versions SET num_chunks=? WHERE project_id=? AND version=?
+===db===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[45, 2, basic9, 1608620036594, 2, [B@4628a238]
+===db===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[45, 2, basic8, 1608620036600, 2, [B@29886161]
+===db===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[45, 2, basic7, 1608620036606, 2, [B@44d37668]
+===db===update===126===INSERT INTO project_flows (project_id, version, flow_id, modified_time, encoding_type, json) values (?,?,?,?,?,?)===[45, 2, basic6, 1608620036611, 2, [B@3b5488f4]
+===db===update===126===UPDATE projects SET version=?,modified_time=?,last_modified_by=? WHERE id=?===[2, 1608620036617, azkaban, 45]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic9.flow]
+===db===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[45, 2, basic9.flow, 1, 1608620036623, [B@11a744a0]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic8.flow]
+===db===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[45, 2, basic8.flow, 1, 1608620036626, [B@5eab461e]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic7.flow]
+===db===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[45, 2, basic7.flow, 1, 1608620036630, [B@67782c5a]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic6.flow]
+===db===update===126===INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, modified_time, flow_file) values (?,?,?,?,?,?)===[45, 2, basic6.flow, 1, 1608620036636, [B@450a3f7a]
+===db===update===126===INSERT INTO project_events (project_id, event_type, event_time, username, message) values (?,?,?,?,?)===[45, 6, 1608620036638, azkaban, Uploaded project files zip zzaa2.zip]
+===db===query===68===SELECT ex.exec_id exec_id, ex.project_id project_id, ex.version version, ex.flow_id flow_id, et.host host, et.port port, ex.executor_id executorId, ex.status status, ex.submit_time submit_time, ex.start_time start_time, ex.end_time end_time, ex.submit_user submit_user, et.active executorStatus FROM execution_flows ex LEFT JOIN  executors et ON ex.executor_id = et.id Where ex.status NOT IN (50, 60, 70)===[]
+===db===update===100===DELETE FROM project_flows WHERE project_id=? AND version < ?
+===db===update===100===DELETE FROM project_properties WHERE project_id=? AND version < ?
+===db===update===100===DELETE FROM project_files WHERE project_id=? AND version < ?
+===db===update===100===UPDATE project_versions SET num_chunks=0 WHERE project_id=? AND version < ?
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic9.flow]
+===db===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?===[45, 2, basic9.flow, 1]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic8.flow]
+===db===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?===[45, 2, basic8.flow, 1]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic7.flow]
+===db===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?===[45, 2, basic7.flow, 1]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[45, 2, basic6.flow]
+===db===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?===[45, 2, basic6.flow, 1]
+
+6、启动一个 job 
+update===100===INSERT INTO execution_flows (project_id, flow_id, version, status, submit_time, submit_user, update_time, use_executor, flow_priority) values (?,?,?,?,?,?,?,?,?)
+update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[20, -1, -1, -1, 2, [B@5712a30e, 95113]
+update===126===INSERT INTO active_executing_flows (exec_id, update_time) values (?,?)===[95113, 0]
+
+query===68===SELECT id, host, port, active FROM executors where id=?===[122]
+update===126===UPDATE execution_flows SET executor_id=? where exec_id=?===[122, 95113]
+update===126===DELETE FROM active_executing_flows WHERE exec_id=?===[95113]
+query===68===SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE exec_id=?===[95113]
+query===68===SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE exec_id=?===[95113]
+query===68===SELECT exec_id, name, attempt, enc_type, start_byte, end_byte, log FROM execution_logs WHERE exec_id=? AND name=? AND attempt=? AND end_byte > ? AND start_byte <= ? ORDER BY start_byte===[95113, , 0, 0, 50000]
+query===68===SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE exec_id=?===[95113]
+query===68===SELECT trigger_instance_id,dep_name,starttime,endtime,dep_status,cancelleation_cause,project_id,project_version,flow_id,flow_version,flow_exec_id FROM execution_dependencies WHERE flow_exec_id = ?===[95113]
+query===68===SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE exec_id=?===[95113]
+query===68===SELECT exec_id, name, attempt, enc_type, start_byte, end_byte, log FROM execution_logs WHERE exec_id=? AND name=? AND attempt=? AND end_byte > ? AND start_byte <= ? ORDER BY start_byte===[95113, , 0, 1565, 51565]
+
+
+===db===query===68===SELECT exec_id, enc_type, flow_data, status FROM execution_flows WHERE exec_id=?===[95117]
+===db===query===68===SELECT project_id, version, upload_time, uploader, file_type, file_name, md5, num_chunks, resource_id, startup_dependencies, uploader_ip_addr  FROM project_versions WHERE project_id=? AND version=?===[48, 1]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[48, 1, basic6.flow]
+===db===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?===[48, 1, basic6.flow, 2]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[20, 1608628145623, 1608628145623, -1, 2, [B@763f77a, 95117]
+===db===query===68===SELECT MAX(flow_version) FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?===[48, 1, basic6.flow]
+===db===query===68===SELECT flow_file FROM project_flow_files WHERE project_id=? AND project_version=? AND flow_name=? AND flow_version=?===[48, 1, basic6.flow, 2]
+===db===update===126===INSERT INTO execution_jobs (exec_id, project_id, version, flow_id, job_id, start_time, end_time, status, input_params, attempt) VALUES (?,?,?,?,?,?,?,?,?,?)===[95117, 48, 1, basic6, jobA, 1608628145635, -1, 110, [B@31d99831, 0]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[30, 1608628145635, 1608628145623, -1, 2, [B@2340eb35, 95117]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[30, 1608628145640, 1608628145623, -1, 2, [B@41d9890d, 95117]
+===db===update===126===UPDATE execution_jobs SET start_time=?, end_time=?, status=?, output_params=? WHERE exec_id=? AND flow_id=? AND job_id=? AND attempt=?===[1608628145635, -1, 30, null, 95117, basic6, jobA, 0]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[30, 1608628145645, 1608628145623, -1, 2, [B@78d3dc65, 95117]
+===db===update===100===INSERT INTO execution_logs (exec_id, name, attempt, enc_type, start_byte, end_byte, log, upload_time) VALUES (?,?,?,?,?,?,?,?)
+===db===update===126===UPDATE execution_jobs SET start_time=?, end_time=?, status=?, output_params=? WHERE exec_id=? AND flow_id=? AND job_id=? AND attempt=?===[1608628145635, 1608628145658, 50, [B@249a1b98, 95117, basic6, jobA, 0]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[30, 1608628145665, 1608628145623, -1, 2, [B@7d110d88, 95117]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[50, 1608628145669, 1608628145623, 1608628145669, 2, [B@4babd930, 95117]
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[50, 1608628145674, 1608628145623, 1608628145669, 2, [B@e9317a7, 95117]
+===db===update===100===INSERT INTO execution_logs (exec_id, name, attempt, enc_type, start_byte, end_byte, log, upload_time) VALUES (?,?,?,?,?,?,?,?)
+===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[50, 1608628145686, 1608628145623, 1608628145678, 2, [B@42f998d9, 95117]
+
+
+
+
+
