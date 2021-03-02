@@ -2,7 +2,7 @@ https://www.cnblogs.com/zlslch/p/6629235.html
 
 1>vim /etc/sysconfig/network
 2>vim /etc/udev/rules.d/70-persistent-net.rules (如果你是完全克隆，这个文件里应该包含eth0和eth1，我们将eth0配置删除，只保留eth1,记录该配置对应的MAC地址，并将eth1改名为eth0。https://www.cnblogs.com/zlslch/p/6629235.html)
-3>vim /etc/sysconfig/network-scripts/ifcfg-eth0	
+3>vim /etc/sysconfig/network-scripts/ifcfg-eth0
 DEVICE="eth0"
 BOOTPROTO="static"
 HWADDR="00:0C:29:8E:61:85"

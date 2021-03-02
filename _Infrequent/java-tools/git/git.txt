@@ -44,5 +44,5 @@ github 再遇到 push 不上去报 403 ，可以试试 vim .git/config --> url =
 cd ~/.ssh (如果不存在要创建吧)
 ssh-keygen.exe
 cat id_rsa.pub
-git config –global user.name 'xuriyongjiu'
-git config –global user.email 'xuriyongjiu@sina.com'
+git config --global user.name 'xuriyongjiu'
+git config --global user.email 'xuriyongjiu@sina.com'
