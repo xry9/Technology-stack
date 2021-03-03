@@ -5,6 +5,8 @@ object kafka.server.KafkaServer {
       if (canStartup) {
         socketServer = new SocketServer(config, metrics, time, credentialProvider)
         socketServer.startup(startupProcessors = false)
+        kafkaController = new KafkaController(config, zkClient, time, metrics, brokerInfo, tokenManager, threadNamePrefix)
+        kafkaController.startup()
         val fetchManager = new FetchManager(Time.SYSTEM, new FetchSessionCache(config.maxIncrementalFetchSessionCacheSlots, KafkaServer.MIN_INCREMENTAL_FETCH_SESSION_EVICTION_MS))
         apis = new KafkaApis(socketServer.requestChannel, replicaManager, adminManager, groupCoordinator, transactionCoordinator, kafkaController, zkClient, config.brokerId, config, metadataCache, metrics, authorizer, quotaManagers, fetchManager, brokerTopicStats, clusterId, time, tokenManager)
         requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, time, config.numIoThreads)
@@ -117,3 +119,13 @@ class kafka.log.LogManager(logDirs: Seq[File], initialOfflineDirs: Seq[File], va
     }
   }
 }
+
+
+
+
+
+
+
+
+less k2.log |grep -E -A 15 "doSend===420===LEADER_AND_ISR"
+less logs/* |grep -E "doWork===239"

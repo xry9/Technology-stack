@@ -1,3 +1,12 @@
+源码安装:
+https://golang.google.cn/doc/install/source?download=go1.16.src.tar.gz#bootstrapFromSource
+https://dl.google.com/go/go1.4-bootstrap-20171003.tar.gz (在 https://golang.org/dl/ 中可以找到该连接)
+tar -xvf go1.4-bootstrap-20170531.tar.gz
+cd go/src
+CGO_ENABLED=0
+./make.bash
+----
+https://www.cnblogs.com/dyh004/p/9669406.html
 
 ==============================================
 1、https://www.runoob.com/go/go-program-structure.html
