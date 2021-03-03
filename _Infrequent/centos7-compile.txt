@@ -1,0 +1,166 @@
+-------------------------------- jdk --------------------------------
+
+https://www.jianshu.com/p/c0fa5f987ea0
+--yum install java-1.8.0-openjdk
+--yum install java-1.8.0-openjdk-devel
+--java -version	--1.8.0_191
+--yum install hg
+--hg clone http://hg.openjdk.java.net/jdk8u/jdk8u openjdk8
+--sh get_source.sh
+--以上步骤没有操作, 系统是 centos7 纯净, openjdk version "1.8.0_131", 源码从 github 上下载, https://github.com/openjdk/jdk8u
+
+yum install -y alsa-lib-devel cups-devel libX* gcc gcc-c++ freetype-devel libstdc++-static ant make
+chmod +x configure
+./configure --enable-debug
+make CONF=linux-x86_64-normal-server-fastdebug
+---- jdk9u 同样
+rpm -qa |grep jdk
+rpm --nodeps -e
+
+-------------------------------- mysql --------------------------------
+
+https://www.cnblogs.com/houml/p/12520933.html
+useradd -M -s /sbin/nologin mysql
+mkdir -pv /opt/mysql/data
+yum -y install gcc gcc-devel gcc-c++ gcc-c++-devel autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel bisonbison-devel perl-Data-Dumper boost boost-doc boost-devel readline-devel libedit libedit-devel libevent-devel php-mysql libaio
+cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
+make -j 4
+make install
+chown -R mysql:mysql /opt/mysql/
+vim /etc/my.cnf
+	datadir=/opt/mysql/data
+	socket=/tmp/mysql.sock
+	log-error=/opt/mysql/mysql.log
+	pid-file=/opt/mysql/data/mysql.pid
+
+touch /opt/mysql/mysql.log
+chown -R mysql.mysql /opt/mysql/
+/opt/mysql/bin/mysqld --initialize --user=mysql --basedir=/opt/mysql --datadir=/opt/mysql/data
+	--生成密码
+echo "PATH=$PATH:/opt/mysql/bin" >> /etc/profile
+. /etc/profile
+
+cp -a /opt/mysql/support-files/mysql.server /opt/mysql/bin/mysql.sh
+chown -R mysql.mysql /opt/mysql
+/opt/mysql/bin/mysql.sh start
+--登录 mysql
+alter user'root'@'localhost' identified by 'root';
+use mysql;
+update user set authentication_string=password('root') where user='root';
+
+忘记密码的操作:
+/opt/mysql/bin/mysql.sh stop
+vim /etc/my.cnf
+skip-grant-tables
+/opt/mysql/bin/mysql.sh start
+mysql -uroot -p	--回车
+use mysql
+
+update user set password_expired='N' where user='root';	--改为永不超时
+-------------------------------- nginx --------------------------------
+https://www.cnblogs.com/sjks/p/10897345.html
+http://nginx.org/download/nginx-1.8.0.tar.gz
+./configure --prefix=/home/sjk/nginx/
+make
+make install
+cd /home/sjk/nginx
+sbin/nginx -c /home/sjk/nginx/conf/nginx.conf
+
+-------------------------------- apache --------------------------------
+https://blog.csdn.net/zd147896325/article/details/88556948
+https://ftp.pcre.org/pub/pcre/pcre-8.38.zip
+https://archive.apache.org/dist/apr/apr-1.5.2.tar.gz
+https://archive.apache.org/dist/apr/apr-util-1.5.2.tar.gz
+http://archive.apache.org/dist/httpd/httpd-2.4.38.tar.gz
+
+
+./configure --prefix=/usr/local/apr
+make
+make install
+./configure --prefix=/usr/local/apr-util --with-apr=/usr/local/apr
+make
+make install
+./configure --prefix=/usr/local/pcre
+make
+make install
+./configure --prefix=/usr/local/apache24 --with-apr=/usr/local/apr --with-apr-util=/usr/local/apr-util --with-pcre=/usr/local/pcre
+
+/usr/local/apache24/bin/apachectl start
+	--AH00558: httpd: Could not reliably determine the server's fully qualified domain name, using localhost.localdomain. Set the 'ServerName' directive globally to suppress this message
+/usr/local/apache24/bin/apachectl stop
+/usr/local/apache24/bin/apachectl restart
+
+-------------------------------- ClickHouse --------------------------------
+
+https://codeload.github.com/ClickHouse/ClickHouse/zip/20.8
+grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"
+yum install git cmake ninja-build libicu-devel clang libicu-devel readline-devel mysql-devel openssl-devel unixODBC_devel bzip2 -y
+wget ftp://gnu.mirror.iweb.com/gcc/gcc-8.2.0/gcc-8.2.0.tar.xz
+cd gcc-8.2.0
+./contrib/download_prerequisites
+mkdir build
+cd build
+../configure --prefix=/opt/gcc8 --enable-languages=c,c++   --disable-multilib
+export THREADS=$(grep -c ^processor /proc/cpuinfo)
+make -j $THREADS
+make install
+
+cd /opt/gcc8/bin/
+ln -s gcc cc
+ln -s g++ g++-8
+ln -s gcc gcc-8
+ln -s /opt/gcc8/bin/* /usr/local/bin/
+
+vim ~/.bashrc
+export GCC8_HOME=/opt/gcc8
+export PATH=$GCC8_HOME/bin:$PATH
+export CC=gcc-8
+export CXX=g++-8
+source ~/.bashrc
+gcc --version 
+
+wget https://cmake.org/files/v3.14/cmake-3.14.5-Linux-x86_64.tar.gz
+tar zxvf cmake-3.14.5-Linux-x86_64.tar.gz -C /opt
+ln -s cmake-3.14.5-Linux-x86_64 cmake
+
+vim /etc/profile
+
+export CMAKE_HOME=/opt/cmake
+export PATH=$CMAKE_HOME/bin:$PATH
+source /etc/profile
+
+wget https://github.com/ninja-build/ninja/releases/download/v1.9.0/ninja-linux.zip
+unzip ninja-linux.zip -d /usr/local/bin/
+ninja --version
+
+-------------------------------- kudu --------------------------------
+https://blog.csdn.net/ciqingloveless/article/details/113755928
+
+yum -y install autoconf automake cyrus-sasl-devel cyrus-sasl-gssapi cyrus-sasl-plain flex gcc gcc-c++ gdb git krb5-server krb5-workstation libtool make openssl-devel patch pkgconfig redhat-lsb-core rsync unzip vim-common which numactl-libs numactl-devel
+yum -y install centos-release-scl
+yum -y install yum install devtoolset-8
+scl enable devtoolset-8 bash
+
+cd apache-kudu-1.14.0
+build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
+mkdir -p build/release
+cd build/release
+../../build-support/enable_devtoolset.sh ../../thirdparty/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=release ../..
+make -j4
+make DESTDIR=/app/kudu install
+
+-------------------------------- mongodb --------------------------------
+https://www.cnblogs.com/vicowong/p/4171304.html
+yum install vim wget lsof gcc gcc-c++ bzip2 -y
+yum install net-tools bind-utils -y
+
+wget http://fastdl.mongodb.org/linux/mongodb-linux-x86_64-2.6.6.tgz
+tar -zvxf mongodb-linux-x86_64-2.6.6.tgz
+mv mongodb-linux-x86_64-2.6.6 /opt/mongodb/
+vim /etc/profile
+
+export MONGODB_HOME=/opt/mongodb
+export PATH=$CMAKE_HOME/bin:$MONGODB_HOME/bin:$PATH
+
+-------------------------------- tidb --------------------------------
+https://codeload.github.com/pingcap/tidb/zip/v4.0.10
