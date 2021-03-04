@@ -1,3 +1,0 @@
-type=command
-command=hive -f '/home/tyx/command/ff.sql'
-dependencies=tjz,tt

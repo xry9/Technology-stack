@@ -430,6 +430,11 @@ query===68===SELECT exec_id, name, attempt, enc_type, start_byte, end_byte, log 
 ===db===update===126===UPDATE execution_flows SET status=?,update_time=?,start_time=?,end_time=?,enc_type=?,flow_data=? WHERE exec_id=?===[50, 1608628145686, 1608628145623, 1608628145678, 2, [B@42f998d9, 95117]
 
 
-
-
-
+azkaban flow 的数据在内存中，所以对 flow 锁真是再容易不过
+azkaban.execapp.ServerStatisticsServlet#fillRemainingMemoryPercent 这个方法调用会造成 az 服务重启都没用, 得系统重启
+sh 脚本执行一个 java 进程，如果抛异常，执行 sh 脚本的控制台会把异常栈打印出来, $? 是 1，这也就是 azkaban 能拿到错误日志的原因吧
+int exitCode = java.lang.Process.waitFor(); 值不为 0 就认为执行报错
+脚本执行一个 java 命令 $? 值不为 0 时, 依然会向下执行, 所以 azkaban 调度的脚本不要写多个命令
+其实想想就知道，b.sh 调用 a.sh, a.sh 中执行命令，无论 a.sh 中的 $?  为何值, b.sh 的 $?  值为 0	
+process.getInputStream(); 这里也能拿到 log 输出的内容, 所以就不难理解 yarn container 中的三个日志文件是怎么来的了
+嵌套脚本调用时，最内层的要加上 set -e

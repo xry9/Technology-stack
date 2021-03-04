@@ -162,5 +162,15 @@ vim /etc/profile
 export MONGODB_HOME=/opt/mongodb
 export PATH=$CMAKE_HOME/bin:$MONGODB_HOME/bin:$PATH
 
+-------------------------------- go --------------------------------
+https://golang.google.cn/doc/install/source?download=go1.16.src.tar.gz#bootstrapFromSource
+https://dl.google.com/go/go1.4-bootstrap-20171003.tar.gz (在 https://golang.org/dl/ 中可以找到该连接)
+tar -xvf go1.4-bootstrap-20170531.tar.gz
+cd go/src
+CGO_ENABLED=0
+./make.bash
+----
+https://www.cnblogs.com/dyh004/p/9669406.html
+
 -------------------------------- tidb --------------------------------
 https://codeload.github.com/pingcap/tidb/zip/v4.0.10

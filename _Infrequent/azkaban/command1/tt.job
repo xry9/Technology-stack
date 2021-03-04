@@ -1,2 +1,0 @@
-type=command
-command=hive -f '/home/tyx/command/tt.sql'

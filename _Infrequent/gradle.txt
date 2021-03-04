@@ -1,0 +1,1 @@
+gradle 的编译检查好厉害，HashSet 的 contains 调用居然会检查到参数类型
