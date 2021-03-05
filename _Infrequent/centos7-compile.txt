@@ -178,6 +178,7 @@ python3 -V
 rpm -qa|grep python|xargs rpm -ev --allmatches --nodeps ##强制删除已安装程序及其关联
 whereis python |xargs rm -frv ##删除所有残余文件 ##xargs，允许你对输出执行其他某些命令
 whereis python ##验证删除，返回无结果
+--彻底卸载之后，新测可以安装3.6, 据说 3.7 及以上装不了
 
 -------------------------------- go --------------------------------
 https://golang.google.cn/doc/install/source?download=go1.16.src.tar.gz#bootstrapFromSource
