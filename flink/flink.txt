@@ -11,3 +11,4 @@ flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target/Fl
 flink list
 flink cancel f7e146f55594c9fe97e9a8ee3c6e9bd3
 flink list --all
+https://www.jianshu.com/p/1b05202c4fb6

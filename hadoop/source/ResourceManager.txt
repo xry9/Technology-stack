@@ -1,3 +1,5 @@
+yarn 运行的任务状态怎么存的，很多历史数据也能看
+
 1、RM 分配 container 是在 CapacityScheduler#allocate --> SchedulerApplicationAttempt#updateResourceRequests --> AppSchedulingInfo#updateResourceRequests this.requests.put
   然后在 LeafQueue#assignContainers 中被查询是否要分配 container, 此方法是被 NM 的 heartbeat 例行调用的(这里有个 RM 分配资源的灵魂, NM 上报时会 提供
   node.getAvailableResource()), 再往下是 LeafQueue#assignContainersOnNode ... FiCaSchedulerApp#allocate newlyAllocatedContainers.add(rmContainer); 完成分配

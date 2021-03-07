@@ -431,6 +431,7 @@ query===68===SELECT exec_id, name, attempt, enc_type, start_byte, end_byte, log 
 
 
 azkaban flow 的数据在内存中，所以对 flow 锁真是再容易不过
+
 azkaban.execapp.ServerStatisticsServlet#fillRemainingMemoryPercent 这个方法调用会造成 az 服务重启都没用, 得系统重启
 sh 脚本执行一个 java 进程，如果抛异常，执行 sh 脚本的控制台会把异常栈打印出来, $? 是 1，这也就是 azkaban 能拿到错误日志的原因吧
 int exitCode = java.lang.Process.waitFor(); 值不为 0 就认为执行报错
@@ -438,3 +439,14 @@ int exitCode = java.lang.Process.waitFor(); 值不为 0 就认为执行报错
 其实想想就知道，b.sh 调用 a.sh, a.sh 中执行命令，无论 a.sh 中的 $?  为何值, b.sh 的 $?  值为 0	
 process.getInputStream(); 这里也能拿到 log 输出的内容, 所以就不难理解 yarn container 中的三个日志文件是怎么来的了
 嵌套脚本调用时，最内层的要加上 set -e
+IOContext SessionState 两处用 ThreadLocal 用得非常好
+
+由 azkaban 插件引发联想，怎样代码热部署，其实就是类加载器。除了加载类还要加载配置文件，这两部分内存怎么卸载。这是一个经典的 java 内存模型(方法区)的应用
+azkaban 的设计模式应该优化，新增/更新一个 flow，后续会涉及很多个业务过程，单纯 flow 对应的表就两个以上，还有与其相关的调度/执行的任务..... 目前做得并不好
+能不能有一种健壮的设计模式，如果只是做一些小改动(前/后端)，可以放心的上线呢
+
+azkaban思考:tree 提交的两种模式，以及遇到问题有必要仔细包装。线程卡死，数据库连接等
+* 饿汉模式: 有隐患，由于是预提交所有任务(提交任务时没有判断父任务提交/执行状态, 所以为防止等待父任务执行完而卡死)，如果任务树大了线程会很大,
+ * 数据库连接也会很多, 而且不能用连接池, 因为可能会造成连接泄漏, 除非集成是 azkaban 的连接池, 太重了不想这样
+懒汉模式: 提交子任务时没有并行, 所以不能任务并发数并不理想
+懒汉模式升级: 提交子任务时并行, 所以用到了两个线程池

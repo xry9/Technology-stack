@@ -1,9 +1,16 @@
-https://www.jianshu.com/p/c0fa5f987ea0	--±àÒë JDK
+https://www.jianshu.com/p/c5c1443337de	--mac 
+git clone -b 163.11103 git@github.com:JetBrains/intellij-community.git
+http://www.usbmi.com/3880.html	--vmware
+https://www.cnblogs.com/duhuo/p/5678286.html	--mysql
+https://www.jb51.net/article/166757.htm	--mysql
+https://blog.csdn.net/ystyaoshengting/article/details/82869335	--mysql
+https://www.liangzl.com/get-article-detail-125726.html	--mysql
 https://blog.csdn.net/weixin_40802676/article/details/106851345
-
+https://www.toutiao.com/i6931602351518220808/?tt_from=weixin_moments&utm_campaign=client_share&wxshare_count=2&timestamp=1613956189&app=news_article&utm_source=weixin_moments&utm_medium=toutiao_android&use_new_style=1&req_id=2021022209094901013107521506331D73&share_token=97175680-e5cd-4d4b-9495-1c3eb1ddf118&group_id=6931602351518220808	--kafka
 http://cxy7.com/articles/2017/11/10/1510310104765.html	--hive ÑªÔµ
 	http://lxw1234.com/archives/2015/09/476.htm
-
+https://www.cnblogs.com/zuizui1204/p/9301055.html	--hive
+https://www.cnblogs.com/Impulse/articles/9273538.html	--hive
 https://blog.csdn.net/thwsir/article/details/86480956 -- presto ±àÒëÒýÆð
 	https://baijiahao.baidu.com/s?id=1666437918312235143&wfr=spider&for=pc
 	http://www.10qianwan.com/articledetail/206558.html

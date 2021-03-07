@@ -1,3 +1,6 @@
+
+遇到一个问题，新建的表，导入数据后，select * 是40条数据，select count(1)/count(0)/count(*) 都是 0, count(id) 是 40。因为没有走 mr，加上 LIMIT 1 就好了。好像是因为 datax 导数据没有写元数据
+
 1、彻底说明白 explode 吧, 如果没有其它字段则不需要 lateral view 否则要加
 select explode(split(name,",")) from tab2 ;
 select *,f.* from tab2 lateral view explode(split(name,"")) f;

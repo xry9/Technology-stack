@@ -41,3 +41,6 @@ cd build/release
 make -j4 
 make DESTDIR=/app/kudu install
 
+https://www.cnblogs.com/lidabo/p/7269004.html
+https://www.zhihu.com/question/20564904
+https://www.runoob.com/w3cnote/cpp-static-library-and-dynamic-library.html

@@ -1,0 +1,2 @@
+gitlab 安装知识量很大
+https://packages.gitlab.com/gitlab/gitlab-ee?page=6

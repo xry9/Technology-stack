@@ -1,0 +1,40 @@
+sudo passwd root
+-- 要加阿里云的DNS服务器, 否则太慢
+	vi /etc/resolv.conf
+	nameserver 127.0.1.1
+	nameserver 223.5.5.5  
+	nameserver 223.6.6.6
+apt-get update
+apt-get install vim
+----
+apt-get install openssh-server -y	(openssh-client 会默认安装)
+ps -e |grep ssh
+/etc/init.d/ssh start
+--------------------------------------- rpm ---------------------------------------
+https://blog.csdn.net/Three_dog/article/details/103418141
+
+apt-get install autoconf autopoint automake libtool
+git clone https://git.dpkg.org/git/dpkg/dpkg.git
+cd dpkg
+apt-get install libncurses5-dev -y
+vim /usr/bin/autopoint
+	if func_version_prereq "$xreq" "$archive_version"; then
+		ver="$archive_version"
+	else  
+		ver="$archive_version" # 复制if下的这一行到else这里
+		# 把下面这一行直接注释掉！！！！！！！
+		# func_fatal_error "gettext version $xreq or newer is required"  
+	fi
+  
+./autogen
+
+apt-get install libnss3-dev  libnspr4-dev  zlib1g-dev libgcrypt20-dev libgcrypt20  libmagic-dev  libdb-dev  libpopt-dev  libarchive-dev  lua5.2  liblua5.2-dev liblzma-dev -y
+
+wget https://www.cpan.org/src/5.0/perl-5.30.1.tar.gz
+tar zxvf perl-5.30.1.tar.gz
+cd perl-5.30.1/
+./Configure
+
+wget https://github.com/rpm-software-management/rpm/archive/rpm-4.12.0.1-release.tar.gz
+tar zxvf rpm-4.12.0.1-release.tar.gz
+cd rpm-4.12.0.1-release/

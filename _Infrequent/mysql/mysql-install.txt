@@ -41,5 +41,3 @@ wget http://download.fedoraproject.org/pub/epel/6/i386/epel-release-6-8.noarch.r
 rpm -ivh epel-release-6-8.noarch.rpm
 yum repolist
 yum install wine
-
-

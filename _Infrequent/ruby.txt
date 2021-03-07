@@ -1,3 +1,5 @@
 
 模块（Module）定义了一个命名空间，相当于一个沙盒，在里边您的方法和常量不会与其他地方的方法常量冲突
 https://www.runoob.com/ruby/ruby-module.html
+https://github.com/ruby-china/homeland/blob/main/CONTRIBUTE.md
+https://www.bilibili.com/video/BV1uJ411s7su?from=search&seid=2845254329170895009

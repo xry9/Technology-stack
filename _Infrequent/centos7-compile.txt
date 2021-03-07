@@ -1,5 +1,9 @@
--------------------------------- jdk --------------------------------
 
+https://blog.csdn.net/qq_34247099/article/details/50949720
+-------------------------------- jdk --------------------------------
+--https://blog.csdn.net/zhanglong_4444/article/details/89207433
+--https://blog.csdn.net/u013956074/article/details/88204216
+--https://github.com/openjdk/jdk8u
 https://www.jianshu.com/p/c0fa5f987ea0
 --yum install java-1.8.0-openjdk
 --yum install java-1.8.0-openjdk-devel
@@ -18,7 +22,7 @@ rpm -qa |grep jdk
 rpm --nodeps -e
 
 -------------------------------- mysql --------------------------------
-
+--https://blog.csdn.net/weixin_42018518/article/details/103639172
 https://www.cnblogs.com/houml/p/12520933.html
 useradd -M -s /sbin/nologin mysql
 mkdir -pv /opt/mysql/data
@@ -151,6 +155,8 @@ make DESTDIR=/app/kudu install
 
 -------------------------------- mongodb --------------------------------
 https://www.cnblogs.com/vicowong/p/4171304.html
+https://docs.mongodb.com/manual/administration/install-enterprise/
+
 yum install vim wget lsof gcc gcc-c++ bzip2 -y
 yum install net-tools bind-utils -y
 
@@ -179,8 +185,9 @@ rpm -qa|grep python|xargs rpm -ev --allmatches --nodeps ##强制删除已安装�
 whereis python |xargs rm -frv ##删除所有残余文件 ##xargs，允许你对输出执行其他某些命令
 whereis python ##验证删除，返回无结果
 --在 centos8 中彻底卸载之后(yum 用不了了)，新测可以安装3.6, 据说 3.7 及以上装不了, 亲测 make install 时会报如 https://www.jianshu.com/p/69681655309b 的错误
-
+https://github.com/python/cpython
 -------------------------------- go --------------------------------
+--https://www.cnblogs.com/dyh004/p/9669406.html
 https://golang.google.cn/doc/install/source?download=go1.16.src.tar.gz#bootstrapFromSource
 https://dl.google.com/go/go1.4-bootstrap-20171003.tar.gz (在 https://golang.org/dl/ 中可以找到该连接)
 tar -xvf go1.4-bootstrap-20170531.tar.gz
@@ -202,7 +209,7 @@ curl https://sh.rustup.rs -sSf | sh -s
 export GOPATH=/data/tidb
 mkdir -p /data/tidb/src/github.com/pingcap
 
-cd $GOPATH/src/github.com/pingcap 
+cd $GOPATH/src/github.com/pingcap
 git clone -b v3.0.8 git@github.com:pingcap/tidb.git
 gmake
 git clone -b v3.0.8 git@github.com:tikv/pd.git
@@ -219,3 +226,14 @@ mysql -h 127.0.0.1 -u root -P 4000
 -------------------------------- influxdb --------------------------------
 https://blog.csdn.net/sinat_32336967/article/details/88074200
 git clone -b v1.7.4 git@github.com:influxdata/influxdb.git
+
+-------------------------------- rpm --------------------------------
+https://blog.51cto.com/13453496/2071894
+https://www.linuxprobe.com/download-allrpm-relevant.html
+
+-------------------------------- scala --------------------------------
+git clone -b v2.11.12 git@github.com:scala/scala.git
+sbt clean compile
+sbt 版本是 1.4.0
+-------------------------------- ambari --------------------------------
+https://www.jianshu.com/p/dfd63a5d7bcd?from=timeline

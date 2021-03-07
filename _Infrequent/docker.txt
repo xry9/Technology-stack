@@ -116,3 +116,8 @@ http://192.168.58.161:15672/
 10、docker pull zookeeper:3.4.10
   docker run --name zk01 -p 2181:2181 --restart always -d d9fe1374256f
   
+  
+https://mp.weixin.qq.com/s/zyDGaT6SGFUVU60r9L7S3Q
+https://www.cnblogs.com/liuyangfirst/p/13379064.html
+http://www.manongjc.com/detail/15-gzlkunkcghembfy.html
+https://www.bilibili.com/video/av245941196
