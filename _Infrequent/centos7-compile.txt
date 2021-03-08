@@ -1,11 +1,13 @@
 
 https://blog.csdn.net/qq_34247099/article/details/50949720
+https://www.cnblogs.com/xiaocen/p/3717993.html
+
 -------------------------------- jdk --------------------------------
 --https://blog.csdn.net/zhanglong_4444/article/details/89207433
 --https://blog.csdn.net/u013956074/article/details/88204216
 --https://github.com/openjdk/jdk8u
 https://www.jianshu.com/p/c0fa5f987ea0
---yum install java-1.8.0-openjdk
+	--yum install java-1.8.0-openjdk
 --yum install java-1.8.0-openjdk-devel
 --java -version	--1.8.0_191
 --yum install hg
