@@ -1,0 +1,80 @@
+5.7.5 使用反射编写泛型数组代码
+	这个实在是有精力时看吧
+============================================ 第八章 ============================================
+class Demo<T> {T a;}
+0、自忖一下泛型本质哈，应该是因为引用类型变量中存的是引用，而任何类型的引用本质都是一样的(一固定个大小的变量, 8字节吧)
+  如方法的泛型, 不管参数是什么，我执行引用就行了。
+  我觉得泛型这种思想和 工具/静态 方法的思想是一脉呀, 只是个壳子
+1、虚拟机没有泛型类型对象, 所有对象都属于普通类
+2、类型擦除：无论何时定义一个泛型类型, 都自动提供了一个相应的原始类型(raw type)。原始类型的名字就是删去类型参数后的泛型类型名。
+擦除(erased) 类型变M, 并替换为限定类型(无限定的变量用 Object)
+3、桥接方法	
+public class BridgeDemo {
+    public static void main(String[] args) {
+        MyGenerics<String> father = new MyGenericsChild();
+        father.fun("hello");
+    }
+}
+class MyGenerics<T> {
+    public void fun(T t) {
+        System.out.println("in MyGenerics");
+    }
+}
+class MyGenericsChild extends MyGenerics<String> {
+    public void fun(String t) {
+        System.out.println("in MyGenericsChild");
+    }
+}
+结果是 in MyGenericsChild, 似乎是个理所当然的事, 
+a. 泛型擦除后, MyGenerics fun(Object t), 但是 MyGenerics<String> father = new MyGenerics(); father.fun("hello"); 这种情形可以调用本质是
+通过编译器一系列强转骚操作完成的吧
+b. MyGenericsChild fun(String t) 此方法是长这样的, 可以断定不是重写吧, father.fun("hello"); 应该走父类的方法没错吧, 所以问题来了
+不多说了, 桥方法解决啥问题的心里应该有数了吧
+c. javap MyGenericsChild.class 后有两个方法 public void fun(java.lang.String);  public void fun(java.lang.Object); 不要觉得正常, 如果没有桥
+方法不会有 fun(java.lang.Object) 的好吧, 据说桥方法是这样的, public void fun(Object x){ fun((String)x);}
+d. 再试一下 public T fun2(){return null;} 这种, 也有桥接方法, 但是这个有点特殊啊, 子类中存在同样方法签名返回值不同, 所说 jvm 能处理
+
+5、泛型化数组：
+	Demo<Serializable>[] ds = new Demo[2];
+    ds[1] = new Demo<String>();// 这样是不行的, 只可以是 new Demo<Serializable>(), 想想为什么? 我觉得支持也是没毛病的, 反正都要擦除, 
+	写什么类型都无所谓, 语法上不允许是为了防止看着乱吧。引申应该还有个原因, 如果子类重写了父类的方法... 
+	
+8.6.6 不能构造泛型数组
+	就像不能实例化一个泛型实例一样, 也不能实例化数组。不过原因有所不同，毕竟数组会填充 null 值，构造时看上去是安全的。不过，数组本身也有
+	类型(好像叫做元类型?)，用来监控存储在虚拟机中的数组。我觉得书中说的真好，就是因为[数组本身也有类型]这个缘故导致的，如果本身不需要类型，
+	其实是可以支持的
+   但是要注意方法的可变参数是支持泛型的, 而且还有以下的 2 3 都支持, 我觉得不茅盾, 因为 5 是可以 new 出来的(new 就违反了[数组本身也有类型] 这一原则), 
+   而其它都是传入的。
+class Demo<T> {
+    T a; // 1 支持
+    T[] arr;// 2 支持
+	T c = arr[0];// 3 支持
+    public Demo(T a, T[] arr){ this.a = a; this.arr = arr; }
+	public void ff(T[] arr){} // 4 支持
+    public T[] ff(int arr){return null}// 5 不支持, 跟 1,2 是两回事, 12 "实例化"是可以被传入值的例如构造方法, 而 5 可做不到
+}
+
+6、再举个例子, 没别的作用，就是熟悉一下 (T[]) 这种骚气的语法
+class Demo<T> {
+	T[] elements;
+	public void f2(){ this.elements = (T[]) new Object[2]; }
+}
+7、这种操作是不被允许的, 为什么可以想到吧，类加载时是要做语法校验的，还没实例化呢，具体啥型还没传进来呢(哎，解释的这么透彻，读那本书真是太有用了)
+public class Demo<T> {
+    static T h;
+    static T f3(){return null}
+}
+
+8、
+	ArrayList<Integer> arrayList3 = new ArrayList<Integer>();
+	arrayList3.add(1);// 这样调用add方法只能存储整形，因为泛型类型的实例为Integer
+	arrayList3.getClass().getMethod("add", Object.class).invoke(arrayList3, "abc");
+	for (int i = 0; i < arrayList3.size(); i++) {
+		Class<? extends Integer> cc = arrayList3.get(i).getClass();
+		System.out.println((arrayList3.get(i)));
+	}
+9、? 与 T 的区别, 就当没有区别吧
+
+此章的其它内容不想看了
+==============================================================================
+卷二扫完了，没啥可再看的

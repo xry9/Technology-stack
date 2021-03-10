@@ -1,0 +1,36 @@
+java --list-modules
+
+1.2 
+  OSGi 
+1.2.2 类路径地狱
+1.3 Java9模块
+2.1 模块化 JDK
+2.2 模块描述符
+2.3 可读性
+2.4 可访问性
+
+2.5 隐式可读性
+2.6 限制导出
+2.7 模块解析和模块路径
+2.8 在不使用模块的情况下使用模块化 JDK
+
+3.1.3 编译
+  引入了额外的编译器标志：--module-source -path -module-path 。这些标志都是 -sourcepath 和 -classpath 标志的模块感应对应项
+3.1.5 模块运行
+  --module-path 的缩写格式 -p, --module 的缩写格式 -m 
+  如果运行模块化JAR,则只需提供模块名称即可(因为jar里已设置了主类, jar包放在了 mods 下)
+		$JAVA_HOME/bin/java --module-path mods --module helloworld
+  chapter3中的所有脚本文件都看看
+  在模块系统出现之前，只有当 JVM 在运行时尝试加载不存在的类时才会注意到缺少的依赖项。通过使用模块描述符的显式依赖信息，模块解析可以确保在运行任何代码之前对模块进行工作配置。
+3.1.6 模块路径
+3.1.7 链接模块
+3.2.2
+	module easytext.analysis {
+		exports javamodularity.easytext. analysis; 
+	}
+  通过使用关键字 exports ，可以将模块中的包公开以供其他模块使用。通过声明导出包javamodularity.easytext analysis ，其所有的公共类型都可以被其他模块
+使用。 一个模块可以导出多个包。在本示例中，仅将 FleschKincaid 类导出。反之，模块中未导出的包都是模块私有的。
+  模块系统执行的另一个检查是循环依赖。在上一章已经讲过，在编译肘， 模块之间的可读性关系 必须是非循环的
+
+3.3.2 创建 GUI 模块
+

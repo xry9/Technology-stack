@@ -1,0 +1,68 @@
+3.2.1 
+  字字珠玑
+  说下重点：
+  a. 可见性的保障是通过写线程冲刷处理器缓存和读线程刷新处理器缓存这两个动作实现的。锁的获得隐含着刷新处理器缓存这个动作，这使得读线程在执行临界区代码
+  前(获得锁之后)可以将写线程对共享变量所做的更新同步到该线程执行处理器的高速缓存中；而锁的释放隐含着冲刷处理器缓存这个动作。
+  b. 临界区内的两个操作依然可以在临界区内重排序(这就是单例需要 volatile 的原因吧)
+3.6 线程同步机制的底层助手: 内存屏障
+
+按照可见性保障来划分。内存屏障可分为加载屏障(Load Barrier)和存储屏障(Store Barrier)。加载屏障的作用是刷新处理器缓存，存储屏障的作用冲刷
+处理器缓存。Java虚拟机会在MonitorExit(释放锁)对应的机器码指令之后插入一个存储屏障，这就保障了写线程在释放锁之前在临界区中对共享变量所做的
+更新对读线程的执行处理器来说是可同步的。相应地，Java虚拟机会在MonitorEnter(申请锁)对应的机器码指令之后临界区开始之前的地方插入一个加载屏障，
+这使得读线程的执行处理器能够将写线程对相应共享变量所做的更新从其他处理器同步到该处理器的高速缓存中。因此，可见性的保障是通过写线程和读线程成对地使用
+存储屏障和加载屏障实现的。
+
+按照有序性保障来划分，内存屏障可以分为获取屏障(AcquireBarrier)和释放屏障(ReleaseBarrier)。
+获取屏障的使用方式是在一个读操作
+(包括Read-Modify-Write以及普通的读操作)之后插入该内存屏障，其作用是禁止该读操作与其后的任何读写操作之间进行重排序，这相当于在进行后续操作之前先
+要获得相应共享数据的所有权(这也是该屏障的名称来源)。
+释放屏障的使用方式是在一个写操作之前插入该内存屏障，其作用是禁止该写操作与其前面的任何读写
+操作之间进行重排序。这相当于在对相应共享数据操作结束后释放所有权(这也是该屏障的名称来源)。Java虚拟机会在MonitorEnter(它包含了读操作)
+对应的机器码指令之后临界区开始之前的地方插入一个获取屏障，并在临界区结束之后MonitorExit(它包含了写操作)对应的机器码指令之前的地方插入一个
+释放屏障。
+
+
+--------
+临界区内的代码不可以跳出临界区, 否则得到锁与没得到锁的线程之间还有何区别
+
+临界区内的代码相当于操纵主存了吧, 首先写的代码肯定不能出圈, 出圈相当于外面线程也执行了代码, 那还叫什么临界区,
+读操作也不能出圈应该, 出了圈读到的值可能就不一样了, 圈外的代码也不能进来, 进来该代码就只能被得到锁的线程执行了
+所以我觉得临界区上下都应该加4个屏障
+
+
+
+
+
+6.4.1 ThreadLocal 内存泄露
+	闲的实在没事再看吧
+
+图 12-3 使用 JMC 监视锁争用情况
+
+12.5.1
+https://repo1.maven.org/maven2/org/openjdk/jol/jol-cli/0.8/jol-cli-0.8-full.jar
+java -XX:-RestrictContended -cp ./jol-cli-0.8-full.jar org.openjdk.jol.Main internals java.util.concurrent.ThreadLocalRandom
+
+12.5.2
+public class DefaultCountingTask{
+  final long iterations;
+  public volatile long value;
+}
+public class ManuallyPaddedCountingTask{
+  final long iterations;
+  public volatile long value;
+  protected volatile long p1, p2, p3, p4;// 填充
+}
+public class AutoPaddedCountingTask{
+  private final long iterations;
+  @sun.misc.Contended
+  public volatile long value;
+}
+ManuallyPaddedCountingTask 执行时间不到 5s, DefaultCountingTask 执行时间 20s, 但是 AutoPaddedCountingTask 经 jol 观察注解未生效，而且执行了 30s，
+但是执行时加上 -XX:-RestrictContended 却可以了，然而 job 时也用了该参数怎么没好使
+关于 perf 命令那块有精力要再看看，代码不用看了，删了
+
+perf stat -e cpu-clock,task-clock,cs,instructions,L1-dcache-load-misses,L1-dcache-store-misses,LLC-loads,LLC-stores java other.FalseSharingDemo 1
+task-clock：任务真正占用的处理器时间，单位为ms
+instructions：该进程在这段时间内完成的CPU指令
+L1-dcache-loads：一级数据缓存读取次数
+L1-dcache-load-missed：一级数据缓存读取失败次数
