@@ -1,0 +1,13 @@
+
+sbt 用 ivy 构建, 不是 maven
+以 zip 形式下载的 scala 源码不能用 sbt 构建, 说不是 git 工程
+git clone -b v2.11.12 https://github.com/scala/scala.git
+sbt 命令:
+    clean
+    compile
+    dist/mkBin
+    dist/mkPack
+编译出来的结果与官方安装包中的 jar 包, 大体一致
+
+sbt 源码的编译更简单, clean compile package 就行了, 结果在 launch/target/sbt-launch.jar
+

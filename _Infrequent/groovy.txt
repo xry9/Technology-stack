@@ -1,0 +1,8 @@
+
+git 上下载 groovy-GROOVY_2_5_10.zip
+./gradlew clean dist
+结果在 target/distributions
+-rw-r--r--  1 fintopia  staff    29M  3 17 12:24 apache-groovy-binary-2.5.10.zip
+-rw-r--r--  1 fintopia  staff    16M  3 17 12:26 apache-groovy-docs-2.5.10.zip
+-rw-r--r--  1 fintopia  staff    52M  3 17 12:27 apache-groovy-sdk-2.5.10.zip
+-rw-r--r--  1 fintopia  staff   7.3M  3 17 12:26 apache-groovy-src-2.5.10.zip

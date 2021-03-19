@@ -1,0 +1,78 @@
+本想看看在哪里打 jar 包, 发现 plexus-archiver 中用到了多个分支, 只能说太乱, 追不下去了
+
+maven-archiver:
+createArchive===562
+----
+maven-jar-plugin:
+execute===203
+----
+plexus-compiler:
+compile===137
+----
+plexus-classworlds:
+launchEnhanced===268
+----
+maven-compiler-plugin
+execute===365
+----
+maven-clean-plugin:
+delete===112
+
+
+1、maven-jar-plugin 插件在 plexus-archiver(3.4) 的 org.codehaus.plexus.archiver.zip.AbstractZipArchiver#createArchiveMain 方法中, 实现打 jar 包, 
+猜测所有打 jar 包操作都在此插件的此方法中, 只是版本太乱了不想再深入看。maven-assembly-plugin 插件同样调用 JarArchiver, 所以应该是一样的
+
+2、org.apache.maven.plugin.internal.DefaultPluginDependenciesResolver#resolveInternal(maven-core) 方法中请求下载资源, 会调用到 maven-resolver-impl org.eclipse.aether.internal.impl.DefaultArtifactResolver#artifactDownloading
+
+============================================
+
+1、
+mvn archetype:generate -DgroupId=com.xryj -DartifactId=maven-demo -Dversion=1.0-SNAPSHOT -Dpackage=com.xryj
+默认会选 maven-archetype-quickstart
+
+mvn compile
+mvn exec:java -Dexec.mainClass="com.xryj.App"
+mvn exec:java -Dexec.mainClass="com.xryj.App" -Dexec.args="arg0 arg1 arg2"
+指定运行时库：mvn exec:java -Dexec.mainClass="com.xryj.App" -Dexec.classpathScope=runtime
+
+不知道主类中引用其它 jar 时咋样
+
+2、
+mvn archetype:generate \
+-DinteractiveMode=false \ # 禁止交互式
+-DarchetypeCatalog=internal \ # 中央仓库元数据列表太长，手动指定内部元数据
+-DarchetypeGroupId=org.scala-tools.archetypes \
+-DarchetypeArtifactId=scala-archetype-simple \
+-DremoteRepositories=http://scala-tools.org/repo-releases \
+-DgroupId=com.xryj.spark.app \
+-DartifactId=apache-logs-analysis \
+-Dpackage=com.xryj.spark.app \
+-Dversion=1.0
+-X \ # DEBUG模式
+
+mvn archetype:generate -DinteractiveMode=false -DarchetypeCatalog=internal -DarchetypeGroupId=org.scala-tools.archetypes -DarchetypeArtifactId=scala-archetype-simple -DremoteRepositories=http://scala-tools.org/repo-releases -DgroupId=com.xryj.spark.app -DartifactId=apache-logs-analysis -Dpackage=com.xryj.spark.app -Dversion=1.0
+生成的 pom.xml 文件中 scala 版本有点低, 默认生成的 App.scala 也有问题, 手动改一下
+mvn exec:java -Dexec.mainClass="com.xryj.spark.app.App"
+
+3、
+mvn archetype:generate \
+-X \ # DEBUG模式
+-DinteractiveMode=false \ # 禁止交互式
+-DarchetypeCatalog=internal \ # 中央仓库元数据列表太长，手动指定内部元数据
+-DarchetypeGroupId=org.apache.maven.archetypes \
+-DarchetypeArtifactId=maven-archetype-quickstart \
+-DremoteRepositories=http://maven.aliyun.com/nexus/content/groups/public \
+-DgroupId=com.xryj.spark.app \
+-DartifactId=apache-logs-analysis-java \
+-Dpackage=com.xryj.Demo \
+-Dversion=1.0
+
+mvn archetype:generate -DarchetypeCatalog=internal -DarchetypeGroupId=org.apache.maven.archetypes -DarchetypeArtifactId=maven-archetype-quickstart -DremoteRepositories=http://maven.aliyun.com/nexus/content/groups/public -DgroupId=com.xryj.spark.app -DartifactId=apache-logs-analysis-java -Dpackage=com.xryj.Demo -Dversion=1.0
+
+
+
+
+
+
+
+mvn archetype:generate -DgroupId=com.xryj -DartifactId=maven-demo1 -Dversion=1.0.0 -Dpackage=com.xryj
