@@ -1,0 +1,21 @@
+1、vim redis.conf
+	# maxmemory <bytes> -- >maxmemory 200mb
+	daemonize no --> daemonize yes
+2、make
+3、make install(不安装也可，只不过要在src下执行命令了)
+4、redis-server redis.conf	（不加redis.conf是默认配置）
+5、redis-cli
+6、ping
+7、redis-cli shutdown
+--------------------
+配置三个节点（两台服务器）：
+1、cp redis.conf redis6380.conf，更改端口为6380
+2、redis-server redis6380.conf
+3、redis-cli -p 6380
+--------------------
+做主从，只需要在从节点配置中加入：slaveof hostname/ip port(slaveof cloud01 6379)
+也可以命令执行：slaveof 192.168.33.130 6379（没测试）
+================================
+telnet也可以连接：telnet 192.168.58.171 6379
+3.2.8版本连不上jedis,要注释掉  bind 127.0.0.1，还连不上，设置protected-mode no，或设置密码(config set requirepass 123)
+yum install gcc -y

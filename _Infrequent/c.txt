@@ -1,16 +1,24 @@
-https://www.runoob.com/cprogramming/c-storage-classes.html
+1、
+    auto 存储类是所有局部变量默认的存储类, auto 只能用在函数内，即 auto 只能修饰局部变量
+    register 存储类用于定义存储在寄存器中而不是 RAM 中的局部变量。这意味着变量的最大尺寸等于寄存器的大小（通常是一个词），且不能对它应用一元的 '&' 运算符（因为它没有内存位置）。
+    extern 是用来在另一个文件中声明一个全局变量或函数. extern 修饰符通常用于当有两个或多个文件共享相同的全局变量或函数的时候
     https://www.runoob.com/w3cnote/cpp-static-usage.html
-https://www.runoob.com/cprogramming/c-array-of-pointers.html
-https://www.runoob.com/cprogramming/c-passing-pointers-to-functions.html
-https://www.runoob.com/cprogramming/c-return-pointer-from-functions.html
-https://www.runoob.com/cprogramming/c-fun-pointer-callback.html
-https://www.runoob.com/cprogramming/c-unions.html
-https://www.runoob.com/cprogramming/c-preprocessors.html
-https://www.runoob.com/cprogramming/c-header-files.html
-https://www.runoob.com/cprogramming/c-error-handling.html
-https://www.runoob.com/cplusplus/cpp-storage-classes.html
-https://www.runoob.com/cplusplus/cpp-functions.html
+
+    从 C++ 17 开始，auto 关键字不再是 C++ 存储类说明符，且 register 关键字被弃用
+    extern 是用来在另一个文件中声明一个全局变量或函数
+    g++ main.cpp support.cpp -o write,   ./write
+
+    指针调用	该方法把参数的地址赋值给形式参数。在函数内，该地址用于访问调用中要用到的实际参数。这意味着，修改形式参数会影响实际参数。
+    引用调用	该方法把参数的引用赋值给形式参数。在函数内，该引用用于访问调用中要用到的实际参数。这意味着，修改形式参数会影响实际参数。
+    C++ 使用传值调用来传递参数。一般来说，这意味着函数内的代码不能改变用于调用函数的参数。
+
 https://www.runoob.com/cplusplus/cpp-references.html
+C++ 引用 vs 指针
+    引用很容易与指针混淆，它们之间有三个主要的不同：
+    不存在空引用。引用必须连接到一块合法的内存。
+    一旦引用被初始化为一个对象，就不能被指向到另一个对象。指针可以在任何时候指向到另一个对象。
+    引用必须在创建时被初始化。指针可以在任何时间被初始化。
+
 https://www.runoob.com/cplusplus/cpp-basic-input-output.html
 https://www.runoob.com/cplusplus/cpp-constructor-destructor.html
 https://www.runoob.com/cplusplus/cpp-copy-constructor.html
@@ -23,6 +31,47 @@ https://www.runoob.com/cplusplus/cpp-data-abstraction.html
 https://www.runoob.com/cplusplus/cpp-interfaces.html
 https://www.runoob.com/cplusplus/cpp-multithreading.html
 
+https://www.runoob.com/w3cnote/working-process-of-the-compiler.html
+https://www.runoob.com/w3cnote/gcc-parameter-detail.html
+https://www.bilibili.com/video/BV1B4411F7EK?from=search&seid=2240690420462753305
+
+https://blog.csdn.net/freeking101/article/details/51610782/
+https://blog.csdn.net/hetoto/article/details/83593797
+http://www.openpcba.com/web/contents/get?id=4638&tid=15
+https://zhidao.baidu.com/question/180421581142924044.html
+https://www.zhihu.com/question/22573737
+https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
+https://mirrors.edge.kernel.org/pub/linux/kernel/v2.6/
+
+https://blog.csdn.net/weixin_33950035/article/details/91552386
+https://docs.huihoo.com/lfs/lfs-4.0/index.html
+https://blog.csdn.net/reblue520/article/details/50786092
+https://blog.csdn.net/sinat_32336967/article/details/88074200
+https://zhuanlan.zhihu.com/p/23618489
+linux /sbin/service 它本身是一个shell脚本程序, 然后调用 /etc/rc.d/init.d/
+uname -r,  uname -m,  uname -a
+https://www.cnblogs.com/hbtmwangjin/articles/9051574.html
+https://www.w3cschool.cn/mexvtg/dsiguozt.html
+https://www.cnblogs.com/cmt/p/14553189.html, http://blog.itpub.net/23718752/viewspace-2144939/ 原来是刚才那个文件名有问题
+https://baike.baidu.com/item/%E5%BA%93%E6%96%87%E4%BB%B6/2550595?fr=aladdin
+http://hadoop.apache.org/docs/r1.0.4/cn/native_libraries.html
+https://www.runoob.com/java/java8-new-features.html
+https://blog.csdn.net/afei__/article/details/81201039
+https://blog.csdn.net/xiaoxiaoyusheng2012/article/details/56672173
+https://blog.csdn.net/weixin_34205076/article/details/85689059
+https://www.jb51.net/article/200540.htm
+https://blog.csdn.net/u013896064/article/details/82874152
+https://www.cnblogs.com/cmt/p/14553189.html
+https://www.cnblogs.com/buchizaodian/p/12598101.html
+https://wiki.jikexueyuan.com/project/sbt-getting-started/install-sbt-manual.html
+http://www.micmiu.com/software/build/apache-ivy-start/
+windows jenkins.msi, 这东西是 java 开发的
+
+https://www.cnblogs.com/pistachio123/p/14301949.html
+https://www.cnblogs.com/xbycf/p/12389602.html
+https://www.cnblogs.com/eddie1127/p/11439718.html
+https://www.cnblogs.com/mhq-martin/p/11898245.html
+https://www.cnblogs.com/biaohc/p/6353640.html
 
 https://github.com/EZLippi/Tinyhttpd
 https://github.com/EZLippi/WebBench
