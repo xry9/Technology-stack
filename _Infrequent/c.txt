@@ -2,7 +2,7 @@
     auto 存储类是所有局部变量默认的存储类, auto 只能用在函数内，即 auto 只能修饰局部变量
     register 存储类用于定义存储在寄存器中而不是 RAM 中的局部变量。这意味着变量的最大尺寸等于寄存器的大小（通常是一个词），且不能对它应用一元的 '&' 运算符（因为它没有内存位置）。
     extern 是用来在另一个文件中声明一个全局变量或函数. extern 修饰符通常用于当有两个或多个文件共享相同的全局变量或函数的时候
-    https://www.runoob.com/w3cnote/cpp-static-usage.html
+    
 
     从 C++ 17 开始，auto 关键字不再是 C++ 存储类说明符，且 register 关键字被弃用
     extern 是用来在另一个文件中声明一个全局变量或函数
@@ -19,39 +19,59 @@ C++ 引用 vs 指针
     一旦引用被初始化为一个对象，就不能被指向到另一个对象。指针可以在任何时候指向到另一个对象。
     引用必须在创建时被初始化。指针可以在任何时间被初始化。
 
-https://www.runoob.com/cplusplus/cpp-basic-input-output.html
-https://www.runoob.com/cplusplus/cpp-constructor-destructor.html
+c ++ 的几个流 cout, cin, cerr, clog
+Line::Line( double len): length(len){} 等同于 Line::Line( double len){length = len;}
+
 https://www.runoob.com/cplusplus/cpp-copy-constructor.html
-https://www.runoob.com/cplusplus/cpp-friend-functions.html
+如果在类中没有定义拷贝构造函数，编译器会自行定义一个。如果类带有指针变量，并有动态内存分配，则它必须有一个拷贝构造函数。拷贝构造函数的最常见形式如下：classname (const classname &obj) {// 构造函数的主体}
+
+关于 delete  display 再看一下
+
+friend 友元函数 友元类
+
+全局（静态）存储区：分为 DATA 段和 BSS 段。DATA 段（全局初始化区）存放初始化的全局变量和静态变量；BSS 段（全局未初始化区）存放未初始化的全局变量和静态变量。程序运行结束时自动释放。
+其中BBS段在程序执行之前会被系统自动清0，所以未初始化的全局变量和静态变量在程序执行之前已经为0。在 C++ 中 static 的内部实现机制：静态数据成员要在程序一开始运行时就必须存在。因为函数在程序运行中被调用，所以静态数据成员不能在任何函数内分配空间和初始化。
+它的空间分配有三个可能的地方，一是作为类的外部接口的头文件，那里有类声明；二是类定义的内部实现，那里有类的成员函数定义；三是应用程序的 main() 函数前的全局数据声明和定义处
+[静态数据成员要实际地分配空间，故不能在类的声明中定义（只能声明数据成员）。类声明只声明一个类的"尺寸和规格"，并不进行实际的内存分配，所以在类声明中写成定义是错误的。它也不能在头文件中类声明的外部定义，因为那会造成在多个使用该类的源文件中，对其重复定义。]
+static 修饰全局变量的时候，这个全局变量只能在本文件中访问，不能在其它文件中访问，即便是 extern 外部声明也不可以。
+static 修饰一个函数，则这个函数的只能在本文件中调用，不能被其他文件调用。static 修饰的变量存放在全局数据区的静态变量区，包括全局静态变量和局部静态变量，都在全局数据区分配内存。初始化的时候自动初始化为 0。
+考虑到数据安全性（当程序想要使用全局变量的时候应该先考虑使用 static）。
+静态变量都在全局数据区分配内存，包括后面将要提到的静态局部变量
+未经初始化的静态全局变量会被程序自动初始化为0（在函数体内声明的自动变量的值是随机的，除非它被显式初始化，而在函数体外被声明的自动变量也会被初始化为 0）
+静态全局变量在声明它的整个文件都是可见的，而在文件之外是不可见的
+
+gcc 与 g++ 分别是 gnu 的 c & c++ 编译器 gcc/g++ 在执行编译工作的时候，总共需要4步：
+    1、预处理,生成 .i 的文件[预处理器cpp]
+    2、将预处理后的文件转换成汇编语言, 生成文件 .s [编译器egcs]
+    3、有汇编变为目标代码(机器代码)生成 .o 的文件[汇编器as]
+    4、连接目标代码, 生成可执行程序 [链接器ld]
+
+
 https://www.runoob.com/cplusplus/cpp-inline-functions.html
 https://www.runoob.com/cplusplus/cpp-overloading.html
 https://www.runoob.com/cplusplus/cpp-polymorphism.html
-https://www.runoob.com/cplusplus/cpp-data-abstraction.html
-https://www.runoob.com/cplusplus/cpp-interfaces.html
 https://www.runoob.com/cplusplus/cpp-multithreading.html
+https://www.runoob.com/w3cnote/cpp-static-usage.html    -- 看 2 中案例代码即可
 
-https://www.runoob.com/w3cnote/working-process-of-the-compiler.html
-https://www.runoob.com/w3cnote/gcc-parameter-detail.html
-https://www.bilibili.com/video/BV1B4411F7EK?from=search&seid=2240690420462753305
 
-http://www.openpcba.com/web/contents/get?id=4638&tid=15 --内核
-https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
-https://mirrors.edge.kernel.org/pub/linux/kernel/v2.6/
+
+
 
 https://zhuanlan.zhihu.com/p/23618489   --汇编
-linux /sbin/service 它本身是一个shell脚本程序, 然后调用 /etc/rc.d/init.d/
-uname -r,  uname -m,  uname -a
-windows jenkins.msi, 这东西是 java 开发的
-ldd a.out
 
 https://www.cnblogs.com/hbtmwangjin/articles/9051574.html   --make
 https://www.w3cschool.cn/mexvtg/dsiguozt.html   --make
 https://www.cnblogs.com/lidabo/p/7269004.html   --make
 https://blog.csdn.net/afei__/article/details/81201039   --cmake
 https://blog.csdn.net/u013896064/article/details/82874152   --cmake
+https://www.bilibili.com/video/BV1B4411F7EK?from=search&seid=2240690420462753305    --make
 http://www.voidcn.com/article/p-werqseyo-uo.html    --调用栈
 https://zhuanlan.zhihu.com/p/54137636   --调用栈, 调不通
 https://www.cnblogs.com/cmt/p/14553189.html, http://blog.itpub.net/23718752/viewspace-2144939/ 原来是刚才那个文件名有问题
+https://blog.csdn.net/kang___xi/article/details/79571137    --内核
+http://www.openpcba.com/web/contents/get?id=4638&tid=15 --内核
+https://www.runoob.com/w3cnote/gcc-parameter-detail.html    --gcc
+https://www.runoob.com/w3cnote/cpp-static-library-and-dynamic-library.html  --库
 http://hadoop.apache.org/docs/r1.0.4/cn/native_libraries.html   --hadoop native
 https://blog.csdn.net/xiaoxiaoyusheng2012/article/details/56672173  --jni
 https://blog.csdn.net/weixin_34205076/article/details/85689059  --jni
@@ -67,8 +87,8 @@ https://www.zhihu.com/question/20564904    --c 工程
 https://github.com/EZLippi/Tinyhttpd    --c 工程
 https://github.com/EZLippi/WebBench    --c 工程
 
-https://www.runoob.com/w3cnote/cpp-static-library-and-dynamic-library.html
 
+https://blog.csdn.net/seasonsbin/article/details/79093647	--maven
 
 
 

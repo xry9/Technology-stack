@@ -8,7 +8,7 @@ cd /usr/local/src
 tar -xvf linux-3.13.2.tar.xz
 cd linux-3.13.2/
 cp /boot/config-3.10.0-693.el7.x86_64 ./.config
-yum -y groupinstall "development tools"
+yum -y groupinstall "development tools"  --自动安装基本开发工具
 yum -y install ncurses-devel
 make menuconfig
 	General setup --->local version -append to kernel release
@@ -30,6 +30,9 @@ https://www.cnblogs.com/pistachio123/p/14301949.html
 https://www.cnblogs.com/xiaocen/p/3717993.html
 https://blog.csdn.net/qq_34247099/article/details/50949720
 https://www.kernel.org/doc/html/latest/
+https://ftp.gnu.org/gnu/
+https://mirrors.edge.kernel.org/pub/linux/kernel/
+https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
 
 -------------------------------- jdk --------------------------------
 --https://blog.csdn.net/zhanglong_4444/article/details/89207433
@@ -225,8 +228,7 @@ tar -xvf go1.4-bootstrap-20170531.tar.gz
 cd go/src
 CGO_ENABLED=0
 ./make.bash
-----
-https://www.cnblogs.com/dyh004/p/9669406.html
+https://golang.org/doc/install/source?download=go1.4.src.tar.gz	--这连接里好像也有编译方法
 
 -------------------------------- tidb --------------------------------
 https://blog.csdn.net/feinifi/article/details/79657502

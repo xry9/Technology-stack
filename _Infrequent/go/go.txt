@@ -40,6 +40,8 @@ https://github.com/Pad0y/Django2_dailyfresh
 https://blog.csdn.net/wj1066/article/details/83653153
 https://zhuanlan.zhihu.com/p/23639191
 https://www.cnblogs.com/lidabo/p/7269004.html
+https://studygolang.com/articles/19687?fr=sidebar
+http://c.biancheng.net/view/4784.html   http://c.biancheng.net/asm/
 
 ---------------------------------------------------------
 https://www.jianshu.com/p/4e699ff478a5
