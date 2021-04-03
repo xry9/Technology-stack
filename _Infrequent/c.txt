@@ -61,16 +61,13 @@ https://zhuanlan.zhihu.com/p/23618489   --汇编
 
 https://www.cnblogs.com/hbtmwangjin/articles/9051574.html   --make
 https://www.w3cschool.cn/mexvtg/dsiguozt.html   --make
-https://www.cnblogs.com/lidabo/p/7269004.html   --make
 https://blog.csdn.net/afei__/article/details/81201039   --cmake
 https://blog.csdn.net/u013896064/article/details/82874152   --cmake
-https://www.bilibili.com/video/BV1B4411F7EK?from=search&seid=2240690420462753305    --make
 http://www.voidcn.com/article/p-werqseyo-uo.html    --调用栈
 https://zhuanlan.zhihu.com/p/54137636   --调用栈, 调不通
-https://www.cnblogs.com/cmt/p/14553189.html, http://blog.itpub.net/23718752/viewspace-2144939/ 原来是刚才那个文件名有问题
 https://blog.csdn.net/kang___xi/article/details/79571137    --内核
 http://www.openpcba.com/web/contents/get?id=4638&tid=15 --内核
-https://www.runoob.com/w3cnote/gcc-parameter-detail.html    --gcc
+
 https://www.runoob.com/w3cnote/cpp-static-library-and-dynamic-library.html  --库
 http://hadoop.apache.org/docs/r1.0.4/cn/native_libraries.html   --hadoop native
 https://blog.csdn.net/xiaoxiaoyusheng2012/article/details/56672173  --jni
@@ -78,6 +75,7 @@ https://blog.csdn.net/weixin_34205076/article/details/85689059  --jni
 https://www.jb51.net/article/200540.htm --clion
 
 https://docs.huihoo.com/lfs/lfs-4.0/index.html, https://docs.huihoo.com/lfs/lfs-6.1-cn/index.html
+
 https://www.cnblogs.com/buchizaodian/p/12598101.html
 https://www.cnblogs.com/xbycf/p/12389602.html
 https://www.cnblogs.com/eddie1127/p/11439718.html
@@ -102,7 +100,7 @@ int main(int argc, char** argv)
   return 0; 
 } 
 ----
-autoscan
+autoscan    (autoconf 里的)
 mv configure.scan configure.in
 vim configure.in
 ----
@@ -119,7 +117,7 @@ AC_PROG_CC
 AC_OUTPUT(Makefile) 
 -- 第一行注释不要少
 ----
-aclocal
+aclocal (m4 里的)
 autoconf
 vim Makefile.am
 ----

@@ -33,6 +33,7 @@ https://www.kernel.org/doc/html/latest/
 https://ftp.gnu.org/gnu/
 https://mirrors.edge.kernel.org/pub/linux/kernel/
 https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
+http://mirrors.163.com/centos/7/os/x86_64/Packages/
 
 -------------------------------- jdk --------------------------------
 --https://blog.csdn.net/zhanglong_4444/article/details/89207433
@@ -287,3 +288,7 @@ make install
 安装时 python 会报错, 但是应该没有多大影响, 编译时应该也错了只是没看到
 -------------------------------- make --------------------------------
 make-3.81 这个版本的 make 正常安装就可以
+-------------------------------- gradle --------------------------------
+gradle 安装包就是 sh 脚本加 jar 包, 由 Groovy java Kotlin 编写, C++ 占 3%, 但是安装包中没有 C 的东西呀, 可能源码中的 C++ 基本都是测试
+我感觉兴趣的是 brew install gradle 底层是怎么做的
+
