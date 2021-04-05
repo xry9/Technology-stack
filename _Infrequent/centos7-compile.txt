@@ -292,3 +292,40 @@ make-3.81 这个版本的 make 正常安装就可以
 gradle 安装包就是 sh 脚本加 jar 包, 由 Groovy java Kotlin 编写, C++ 占 3%, 但是安装包中没有 C 的东西呀, 可能源码中的 C++ 基本都是测试
 我感觉兴趣的是 brew install gradle 底层是怎么做的
 
+-------------------------------- gcc --------------------------------
+centos8:
+-- 有点依赖需要安装一下
+gcc-8.3.0
+./configure --prefix=/opt/gcc-8.3.0  --disable-checking  --enable-languages=c,c++  --disable-multilib
+make -j4
+make install
+gcc -v
+centos6 安装时 yum install  gmp  gmp-devel  mpfr  mpfr-devel  libmpc  libmpc-devel
+-------------------------------- glibc --------------------------------
+centos8:
+cd glibc-2.18
+mkdir build
+cd build
+../configure --prefix=/usr	----要装在 /usr 下否则 strings 识别不出来
+make
+make install
+ldd --version
+----
+centos6 可以装 glibc-2.18
+strings /lib64/libc.so.6 |grep GLIBC_
+-------------------------------- centos6 --------------------------------
+mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo-backup
+vim /etc/yum.repos.d/CentOS-Base.repo
+	[base]
+	name=CentOS-6
+	failovermethod=priority
+	baseurl=http://mirrors.sohu.com/centos/6.10/os/x86_64/
+yum clean all
+
+
+
+sed -i "s|enabled=1|enabled=0|g" /etc/yum/pluginconf.d/fastestmirror.conf
+mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.backup
+curl -o /etc/yum.repos.d/CentOS-Base.repo https://www.xmpan.com/Centos-6-Vault-Aliyun.repo
+yum clean all
+yum makecache

@@ -45,6 +45,14 @@ gcc 与 g++ 分别是 gnu 的 c & c++ 编译器 gcc/g++ 在执行编译工作的
     2、将预处理后的文件转换成汇编语言, 生成文件 .s [编译器egcs]
     3、有汇编变为目标代码(机器代码)生成 .o 的文件[汇编器as]
     4、连接目标代码, 生成可执行程序 [链接器ld]
+GCC 不是一个孤立的编译工具，而是整个 GNU 工程中的一个组成部分。GNU 工程中的其他软件，包括 GNU C库glibc、GNU的调试工具gdb，以及 GNU二进制工具链 binutils
+（GNU Binutils Toolchains，例如汇编工具 as，连接工具ld，目标文件分析工具 objdump、objcopy 等）等都与 GCC关系密切，互相依赖。
+
+无论何时，只要连接程序需要查找库，就会查找指定的目录列表。这些目录被包含进查询路径，这依赖于使用哪种竞争模式 ld，编译时如何配置 ld，以及命令行指定的目录。
+大多数的系统库保存在目录/lib 和/usr/lib 中，因此会自动查找这两个目录。通过使用一个或多个-L 选项，可以指定查询其他目录。例如，下面的命令告诉连接程序要在当前目录和
+/home/fred/lib 目录中查找所有库，而不使用默认的查找路径∶ gcc -L.-L/home/fred/lib prog.o
+连接程序先查找共享库再查找静态库。下面的命令会为库 libmilt.so 查找每个目录，然后是库 libmilt.a: gcc -lmilt prog.o
+通过在命令行中指定确切的库名可以限制所有的查找操作。下面的例子使用当前目录的库 libjj.a，然后是/home/fred/lib 中的库 libmilt.so∶ gcc libjj.a /home/fred/lib/libmilt.so prog.o
 
 
 https://www.runoob.com/cplusplus/cpp-inline-functions.html
@@ -129,3 +137,19 @@ automake --add-missing
 ./configure
 make
 ./helloworld 
+=================================================================
+//main.c
+#include <stdio.h>      /* printf */
+#include <math.h>       /* cos */
+#define PI 3.14159265
+int main ()
+{
+    double param, result;
+    param = 60.0;
+    result = cos ( param * PI / 180.0 );
+    printf ("The cosine of %f degrees is %f.\n", param, result );
+    return 0;
+}
+gcc main.c -o main.out /usr/lib64/libm.a
+gcc main.c -o main.out -lm
+gcc main.c -o main.out -L/usr/lib -lm

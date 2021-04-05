@@ -1,0 +1,26 @@
+
+--需要依赖 python2 在 centos7 上:
+wget http://nodejs.org/dist/v0.10.24/node-v0.10.24.tar.gz
+./configure --prefix=/usr/local/node/0.10.24
+make
+make install
+export NODE_HOME=/usr/local/node/0.10.24
+node -v
+
+--centos8:
+wget https://nodejs.org/dist/v12.2.0/node-v12.2.0.tar.gz
+./configure --prefix=/usr/local/node/12.2.0
+make -j8
+make install
+
+https://github.com/arterli/CmsWing
+cd CmsWing
+npm install 会有些问题我也看不懂, 执行以下三步, 好像还有问题但是不理了:
+npm audit fix
+npm audit fix --force
+npm audit
+--
+create database cmswing;
+source /root/app/mygit/CmsWing/cmswing.sql
+npm start
+localhost:8360/
