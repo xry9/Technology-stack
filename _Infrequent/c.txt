@@ -66,21 +66,29 @@ https://www.runoob.com/w3cnote/cpp-static-usage.html    -- 看 2 中案例代码
 
 
 https://zhuanlan.zhihu.com/p/23618489   --汇编
-
 https://www.cnblogs.com/hbtmwangjin/articles/9051574.html   --make
 https://www.w3cschool.cn/mexvtg/dsiguozt.html   --make
+https://blog.csdn.net/freeking101/article/details/51610782/	--make
 https://blog.csdn.net/afei__/article/details/81201039   --cmake
 https://blog.csdn.net/u013896064/article/details/82874152   --cmake
+https://blog.csdn.net/djinglan/article/details/8273985	--gcc
+https://blog.csdn.net/qq_34598635/article/details/108337209	--gcc
+https://www.zhihu.com/question/442855055/answer/1780804024	--动态库
 http://www.voidcn.com/article/p-werqseyo-uo.html    --调用栈
 https://zhuanlan.zhihu.com/p/54137636   --调用栈, 调不通
 https://blog.csdn.net/kang___xi/article/details/79571137    --内核
 http://www.openpcba.com/web/contents/get?id=4638&tid=15 --内核
+https://zhuanlan.zhihu.com/p/58868634	--源码
+http://mirror.centos.org/centos/	--linux 库文件听说在这可以下载
+http://www.ruanyifeng.com/blog/computer/
 
 https://www.runoob.com/w3cnote/cpp-static-library-and-dynamic-library.html  --库
 http://hadoop.apache.org/docs/r1.0.4/cn/native_libraries.html   --hadoop native
 https://blog.csdn.net/xiaoxiaoyusheng2012/article/details/56672173  --jni
 https://blog.csdn.net/weixin_34205076/article/details/85689059  --jni
 https://www.jb51.net/article/200540.htm --clion
+https://mp.weixin.qq.com/s/Im_JvqPw1gNl22et2cJAtg
+https://mp.weixin.qq.com/s/uti9GxctgiaBbf3jSVUbjQ
 
 https://docs.huihoo.com/lfs/lfs-4.0/index.html, https://docs.huihoo.com/lfs/lfs-6.1-cn/index.html
 
@@ -95,9 +103,30 @@ https://github.com/EZLippi/WebBench    --c 工程
 
 
 https://blog.csdn.net/seasonsbin/article/details/79093647	--maven
+https://gitee.com/weharmony/kernel_liteos_a_note/tree/master
+https://segmentfault.com/a/1190000007343993	--nodejs
+https://www.zhihu.com/question/20998226
 
 
-
+https://blog.csdn.net/weixin_34236869/article/details/89809078	--进程 cpu
+https://www.cnblogs.com/dongguolei/p/7896466.html	--进程 cpu
+https://blog.csdn.net/taolaodawho/article/details/109146161	--进程 cpu
+https://blog.csdn.net/qq_29503203/article/details/54618275	--进程 cpu
+https://blog.csdn.net/tiantao2012/article/details/78849399
+http://blog.chinaunix.net/uid-10540984-id-3837070.html
+https://www.cnblogs.com/mysky007/p/12306407.html
+http://www.wowotech.net/forum/viewtopic.php?id=77
+https://blog.csdn.net/ibless/article/details/81813153
+https://blog.csdn.net/weixin_30340353/article/details/95487268
+https://blog.csdn.net/kuangyufei/article/details/113782749
+https://www.zhihu.com/column/DIY-OS
+https://www.cnblogs.com/ck1020/p/6089970.html
+https://www.cnblogs.com/ck1020/p/6024330.html
+https://baike.baidu.com/item/8259A%E4%B8%AD%E6%96%AD%E6%8E%A7%E5%88%B6%E5%99%A8/3572337?fr=aladdin
+https://blog.csdn.net/gatieme/article/details/51702662
+https://blog.csdn.net/farmwang/article/details/70173139
+https://zhuanlan.zhihu.com/p/127945132
+https://www.jianshu.com/p/61490effab35
 
 =================================================================
 vim helloworld.c

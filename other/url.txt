@@ -5,6 +5,7 @@ https://www.jianshu.com/p/c5c1443337de	--mac
 git clone -b 163.11103 git@github.com:JetBrains/intellij-community.git
 http://www.usbmi.com/3880.html	--vmware
 https://www.cnblogs.com/duhuo/p/5678286.html	--mysql
+https://mp.weixin.qq.com/s/y19Vh0g6FHTsYS_rEghYTg	--mysql uuid
 https://www.jb51.net/article/166757.htm	--mysql
 https://blog.csdn.net/ystyaoshengting/article/details/82869335	--mysql
 https://www.liangzl.com/get-article-detail-125726.html	--mysql

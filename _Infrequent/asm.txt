@@ -1,0 +1,47 @@
+ubuntu16-32:
+
+https://zhuanlan.zhihu.com/p/23618489
+apt-get install gcc nasm vim gcc-multilib -y
+
+1、vim first.asm
+---
+global main
+main:
+    mov eax, 1
+    ret
+---
+nasm -f elf first.asm -o first.o
+gcc -m32 first.o -o first
+./first ; echo $?
+
+2、fun.asm
+global main
+eax_plus_1s:
+    add eax, 1
+    ret
+ebx_plus_1s:
+    add ebx, 1
+    ret
+main:
+    mov eax, 0
+    mov ebx, 0
+    call eax_plus_1s
+    call eax_plus_1s
+    call ebx_plus_1s
+    add eax, ebx
+    ret
+3、vim plsone.asm
+global main
+eax_plus_1s:
+    add eax, 1
+    ret
+main:
+    mov eax, 0
+    call eax_plus_1s
+    ret
+nasm -f elf plsone.asm -o plsone.o
+gcc -m32 plsone.o -o plsone
+gdb ./plsone
+disas main
+
+

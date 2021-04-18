@@ -1,3 +1,4 @@
+https://blog.csdn.net/xusiwei1236/article/details/39395359
 https://blog.csdn.net/hunter___/article/details/80972878
 ubuntu16:
 apt-get install libx11-dev:i386 libreadline6-dev:i386 libgl1-mesa-dev g++-multilib -y
