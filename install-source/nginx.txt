@@ -1,0 +1,33 @@
+-------------------------------- nginx --------------------------------
+https://www.cnblogs.com/sjks/p/10897345.html
+http://nginx.org/download/nginx-1.8.0.tar.gz
+./configure --prefix=/home/sjk/nginx/
+make
+make install
+cd /home/sjk/nginx
+sbin/nginx -c /home/sjk/nginx/conf/nginx.conf
+
+-------------------------------- apache --------------------------------
+https://blog.csdn.net/zd147896325/article/details/88556948
+https://ftp.pcre.org/pub/pcre/pcre-8.38.zip
+https://archive.apache.org/dist/apr/apr-1.5.2.tar.gz
+https://archive.apache.org/dist/apr/apr-util-1.5.2.tar.gz
+http://archive.apache.org/dist/httpd/httpd-2.4.38.tar.gz
+
+
+./configure --prefix=/usr/local/apr
+make
+make install
+./configure --prefix=/usr/local/apr-util --with-apr=/usr/local/apr
+make
+make install
+./configure --prefix=/usr/local/pcre
+make
+make install
+./configure --prefix=/usr/local/apache24 --with-apr=/usr/local/apr --with-apr-util=/usr/local/apr-util --with-pcre=/usr/local/pcre
+
+/usr/local/apache24/bin/apachectl start
+	--AH00558: httpd: Could not reliably determine the server's fully qualified domain name, using localhost.localdomain. Set the 'ServerName' directive globally to suppress this message
+/usr/local/apache24/bin/apachectl stop
+/usr/local/apache24/bin/apachectl restart
+

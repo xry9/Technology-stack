@@ -1,0 +1,42 @@
+-------------------------------- ClickHouse --------------------------------
+
+https://codeload.github.com/ClickHouse/ClickHouse/zip/20.8
+grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"
+yum install git cmake ninja-build libicu-devel clang libicu-devel readline-devel mysql-devel openssl-devel unixODBC_devel bzip2 -y
+wget ftp://gnu.mirror.iweb.com/gcc/gcc-8.2.0/gcc-8.2.0.tar.xz
+cd gcc-8.2.0
+./contrib/download_prerequisites
+mkdir build
+cd build
+../configure --prefix=/opt/gcc8 --enable-languages=c,c++   --disable-multilib
+export THREADS=$(grep -c ^processor /proc/cpuinfo)
+make -j $THREADS
+make install
+
+cd /opt/gcc8/bin/
+ln -s gcc cc
+ln -s g++ g++-8
+ln -s gcc gcc-8
+ln -s /opt/gcc8/bin/* /usr/local/bin/
+
+vim ~/.bashrc
+export GCC8_HOME=/opt/gcc8
+export PATH=$GCC8_HOME/bin:$PATH
+export CC=gcc-8
+export CXX=g++-8
+source ~/.bashrc
+gcc --version 
+
+wget https://cmake.org/files/v3.14/cmake-3.14.5-Linux-x86_64.tar.gz
+tar zxvf cmake-3.14.5-Linux-x86_64.tar.gz -C /opt
+ln -s cmake-3.14.5-Linux-x86_64 cmake
+
+vim /etc/profile
+
+export CMAKE_HOME=/opt/cmake
+export PATH=$CMAKE_HOME/bin:$PATH
+source /etc/profile
+
+wget https://github.com/ninja-build/ninja/releases/download/v1.9.0/ninja-linux.zip
+unzip ninja-linux.zip -d /usr/local/bin/
+ninja --version

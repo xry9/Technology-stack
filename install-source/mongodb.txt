@@ -1,0 +1,14 @@
+-------------------------------- mongodb --------------------------------
+https://www.cnblogs.com/vicowong/p/4171304.html
+https://docs.mongodb.com/manual/administration/install-enterprise/
+
+yum install vim wget lsof gcc gcc-c++ bzip2 -y
+yum install net-tools bind-utils -y
+
+wget http://fastdl.mongodb.org/linux/mongodb-linux-x86_64-2.6.6.tgz
+tar -zvxf mongodb-linux-x86_64-2.6.6.tgz
+mv mongodb-linux-x86_64-2.6.6 /opt/mongodb/
+vim /etc/profile
+
+export MONGODB_HOME=/opt/mongodb
+export PATH=$CMAKE_HOME/bin:$MONGODB_HOME/bin:$PATH

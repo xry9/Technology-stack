@@ -1,0 +1,15 @@
+-------------------------------- kudu --------------------------------
+https://blog.csdn.net/ciqingloveless/article/details/113755928
+
+yum -y install autoconf automake cyrus-sasl-devel cyrus-sasl-gssapi cyrus-sasl-plain flex gcc gcc-c++ gdb git krb5-server krb5-workstation libtool make openssl-devel patch pkgconfig redhat-lsb-core rsync unzip vim-common which numactl-libs numactl-devel
+yum -y install centos-release-scl
+yum -y install yum install devtoolset-8
+scl enable devtoolset-8 bash
+
+cd apache-kudu-1.14.0
+build-support/enable_devtoolset.sh thirdparty/build-if-necessary.sh
+mkdir -p build/release
+cd build/release
+../../build-support/enable_devtoolset.sh ../../thirdparty/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=release ../..
+make -j4
+make DESTDIR=/app/kudu install

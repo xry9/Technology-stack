@@ -1,0 +1,21 @@
+-------------------------------- gcc --------------------------------
+centos8:
+-- 有点依赖需要安装一下
+gcc-8.3.0
+./configure --prefix=/opt/gcc-8.3.0  --disable-checking  --enable-languages=c,c++  --disable-multilib
+make -j4
+make install
+gcc -v
+centos6 安装时 yum install  gmp  gmp-devel  mpfr  mpfr-devel  libmpc  libmpc-devel
+-------------------------------- glibc --------------------------------
+centos8:
+cd glibc-2.18
+mkdir build
+cd build
+../configure --prefix=/usr	----要装在 /usr 下否则 strings 识别不出来
+make
+make install
+ldd --version
+----
+centos6 可以装 glibc-2.18
+strings /lib64/libc.so.6 |grep GLIBC_

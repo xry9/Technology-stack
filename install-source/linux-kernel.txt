@@ -1,0 +1,35 @@
+-------------------------------- Linux kernel --------------------------------
+centos7:
+https://w.cnblogs.com/eddie1127/p/11439718.html
+cd /usr/local/src
+tar -xvf linux-3.13.2.tar.xz
+cd linux-3.13.2/
+cp /boot/config-3.10.0-693.el7.x86_64 ./.config
+yum -y groupinstall "development tools"  --自动安装基本开发工具
+yum -y install ncurses-devel
+make menuconfig
+	General setup --->local version -append to kernel release
+	File systems --->DOS/FAT/NT Filesystems --->NTFS file system support, <> --> <M>
+make -j 4
+yum -y install openssh-devel elfutils-libelf-devel bc
+make modules_install
+	--depmod: ERROR: Module 'hci_vhci' has devname (vhci) but lacks major and minor information. Ignoring.
+make install
+reboot
+grub2-set-default 0
+reboot
+uname -r
+cat /boot/grub/grub.conf
+--------
+https://blog.csdn.net/weixin_33950035/article/details/91552386
+https://blog.csdn.net/reblue520/article/details/50786092
+https://www.cnblogs.com/pistachio123/p/14301949.html
+https://www.cnblogs.com/xiaocen/p/3717993.html
+https://blog.csdn.net/qq_34247099/article/details/50949720
+https://www.kernel.org/doc/html/latest/
+https://ftp.gnu.org/gnu/
+https://mirrors.edge.kernel.org/pub/linux/kernel/
+https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
+http://mirrors.163.com/centos/7/os/x86_64/Packages/
+
+https://www.cnblogs.com/linkchen/p/13926846.html

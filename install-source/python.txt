@@ -1,0 +1,18 @@
+-------------------------------- python --------------------------------
+https://www.cnblogs.com/Dev0ps/p/11303983.html
+yum install yum-utils
+yum-builddep python
+curl -O https://www.python.org/ftp/python/3.5.0/Python-3.5.0.tgz
+tar xf Python-3.5.0.tgz
+cd Python-3.5.0
+./configure
+make
+sudo make install
+python3 -V
+----
+
+rpm -qa|grep python|xargs rpm -ev --allmatches --nodeps ##强制删除已安装程序及其关联
+whereis python |xargs rm -frv ##删除所有残余文件 ##xargs，允许你对输出执行其他某些命令
+whereis python ##验证删除，返回无结果
+--在 centos8 中彻底卸载之后(yum 用不了了)，新测可以安装3.6, 据说 3.7 及以上装不了, 亲测 make install 时会报如 https://www.jianshu.com/p/69681655309b 的错误
+https://github.com/python/cpython

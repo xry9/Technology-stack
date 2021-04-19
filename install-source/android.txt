@@ -1,0 +1,11 @@
+-------------------------------- android --------------------------------
+https://blog.csdn.net/hunter___/article/details/80972878
+
+REPO_URL = 'https://gerrit-google.tuna.tsinghua.edu.cn/git-repo' -- 这应该是清华的源
+
+
+sed -i "s|enabled=1|enabled=0|g" /etc/yum/pluginconf.d/fastestmirror.conf
+mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.backup
+curl -o /etc/yum.repos.d/CentOS-Base.repo https://www.xmpan.com/Centos-6-Vault-Aliyun.repo
+yum clean all
+yum makecache

@@ -1,0 +1,20 @@
+-------------------------------- jdk --------------------------------
+--https://blog.csdn.net/zhanglong_4444/article/details/89207433
+--https://blog.csdn.net/u013956074/article/details/88204216
+--https://github.com/openjdk/jdk8u
+https://www.jianshu.com/p/c0fa5f987ea0
+	--yum install java-1.8.0-openjdk
+--yum install java-1.8.0-openjdk-devel
+--java -version	--1.8.0_191
+--yum install hg
+--hg clone http://hg.openjdk.java.net/jdk8u/jdk8u openjdk8
+--sh get_source.sh
+--以上步骤没有操作, 系统是 centos7 纯净, openjdk version "1.8.0_131", 源码从 github 上下载, https://github.com/openjdk/jdk8u
+
+yum install -y alsa-lib-devel cups-devel libX* gcc gcc-c++ freetype-devel libstdc++-static ant make
+chmod +x configure
+./configure --enable-debug
+make CONF=linux-x86_64-normal-server-fastdebug
+---- jdk9u 同样
+rpm -qa |grep jdk
+rpm --nodeps -e

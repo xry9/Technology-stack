@@ -1,0 +1,25 @@
+-------------------------------- tidb --------------------------------
+https://blog.csdn.net/feinifi/article/details/79657502
+centos8 机器, 内存要大于 1g
+
+yum install gcc-c++ git cmake3 golang -y
+--ln -s /usr/bin/cmake3 /usr/bin/cmake
+rust的安装:
+curl https://sh.rustup.rs -sSf | sh -s
+
+export GOPATH=/data/tidb
+mkdir -p /data/tidb/src/github.com/pingcap
+
+cd $GOPATH/src/github.com/pingcap
+git clone -b v3.0.8 git@github.com:pingcap/tidb.git
+gmake
+git clone -b v3.0.8 git@github.com:tikv/pd.git
+gmake
+git clone -b v3.0.8 git@github.com:tikv/tikv.git
+cargo build
+--rustc 编译时错误日志在 /var/log/messages
+
+pd/bin/pd-server --data-dir=pd --log-file=pd.log &
+tikv/target/debug/tikv-server --pd='127.0.0.1:2379' --data-dir=tikv --log-file=tikv.log &
+tidb/bin/tidb-server --store=tikv --path='127.0.0.1:2379' --log-file=tidb.log &
+mysql -h 127.0.0.1 -u root -P 4000

@@ -1,0 +1,40 @@
+-------------------------------- mysql --------------------------------
+--https://blog.csdn.net/weixin_42018518/article/details/103639172
+https://www.cnblogs.com/houml/p/12520933.html
+useradd -M -s /sbin/nologin mysql
+mkdir -pv /opt/mysql/data
+yum -y install gcc gcc-devel gcc-c++ gcc-c++-devel autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel bisonbison-devel perl-Data-Dumper boost boost-doc boost-devel readline-devel libedit libedit-devel libevent-devel php-mysql libaio
+cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
+make -j 4
+make install
+chown -R mysql:mysql /opt/mysql/
+vim /etc/my.cnf
+	datadir=/opt/mysql/data
+	socket=/tmp/mysql.sock
+	log-error=/opt/mysql/mysql.log
+	pid-file=/opt/mysql/data/mysql.pid
+
+touch /opt/mysql/mysql.log
+chown -R mysql.mysql /opt/mysql/
+/opt/mysql/bin/mysqld --initialize --user=mysql --basedir=/opt/mysql --datadir=/opt/mysql/data
+	--生成密码
+echo "PATH=$PATH:/opt/mysql/bin" >> /etc/profile
+. /etc/profile
+
+cp -a /opt/mysql/support-files/mysql.server /opt/mysql/bin/mysql.sh
+chown -R mysql.mysql /opt/mysql
+/opt/mysql/bin/mysql.sh start
+--登录 mysql
+alter user'root'@'localhost' identified by 'root';
+use mysql;
+update user set authentication_string=password('root') where user='root';
+
+忘记密码的操作:
+/opt/mysql/bin/mysql.sh stop
+vim /etc/my.cnf
+skip-grant-tables
+/opt/mysql/bin/mysql.sh start
+mysql -uroot -p	--回车
+use mysql
+
+update user set password_expired='N' where user='root';	--改为永不超时
