@@ -1,5 +1,7 @@
 -------------------------------- ClickHouse --------------------------------
 
+https://blog.csdn.net/wbl381/article/details/106995351/
+
 https://codeload.github.com/ClickHouse/ClickHouse/zip/20.8
 grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"
 yum install git cmake ninja-build libicu-devel clang libicu-devel readline-devel mysql-devel openssl-devel unixODBC_devel bzip2 -y

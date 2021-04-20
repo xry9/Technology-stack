@@ -1,9 +1,7 @@
 -------------------------------- jdk --------------------------------
---https://blog.csdn.net/zhanglong_4444/article/details/89207433
 --https://blog.csdn.net/u013956074/article/details/88204216
 --https://github.com/openjdk/jdk8u
-https://www.jianshu.com/p/c0fa5f987ea0
-	--yum install java-1.8.0-openjdk
+--yum install java-1.8.0-openjdk
 --yum install java-1.8.0-openjdk-devel
 --java -version	--1.8.0_191
 --yum install hg
@@ -15,6 +13,7 @@ yum install -y alsa-lib-devel cups-devel libX* gcc gcc-c++ freetype-devel libstd
 chmod +x configure
 ./configure --enable-debug
 make CONF=linux-x86_64-normal-server-fastdebug
----- jdk9u 同样
+--结果 build/linux-x86_64-normal-server-fastdebug
+---- jdk9u 同样, 但是 centos8 只有编译成功 jdk8u. jdk7u 在 centos7 centos8 都不能编译成功, 貌似依赖 jdk6 啊
 rpm -qa |grep jdk
 rpm --nodeps -e

@@ -1,11 +1,23 @@
 -------------------------------- mysql --------------------------------
+https://downloads.mysql.com/archives/community/
 --https://blog.csdn.net/weixin_42018518/article/details/103639172
 https://www.cnblogs.com/houml/p/12520933.html
 useradd -M -s /sbin/nologin mysql
 mkdir -pv /opt/mysql/data
+--------
+centos7:
 yum -y install gcc gcc-devel gcc-c++ gcc-c++-devel autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel bisonbison-devel perl-Data-Dumper boost boost-doc boost-devel readline-devel libedit libedit-devel libevent-devel php-mysql libaio
 cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
 make -j 4
+--------
+centos8:
+yum -y install gcc gcc-c++  autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel perl-Data-Dumper boost boost-devel readline-devel libedit libevent-devel libaio
+yum -y install libcurl-devel libtirpc-devel
+wget http://github.com/thkukuk/rpcsvc-proto/releases/download/v1.4/rpcsvc-proto-1.4.tar.gz
+./configure && make && make install
+cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
+make -j8
+--------
 make install
 chown -R mysql:mysql /opt/mysql/
 vim /etc/my.cnf
