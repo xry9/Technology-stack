@@ -1,6 +1,5 @@
 -------------------------------- mysql --------------------------------
 https://downloads.mysql.com/archives/community/
---https://blog.csdn.net/weixin_42018518/article/details/103639172
 https://www.cnblogs.com/houml/p/12520933.html
 useradd -M -s /sbin/nologin mysql
 mkdir -pv /opt/mysql/data
@@ -8,7 +7,7 @@ mkdir -pv /opt/mysql/data
 centos7:
 yum -y install gcc gcc-devel gcc-c++ gcc-c++-devel autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel bisonbison-devel perl-Data-Dumper boost boost-doc boost-devel readline-devel libedit libedit-devel libevent-devel php-mysql libaio
 cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
-make -j 4
+make -j4
 --------
 centos8:
 yum -y install gcc gcc-c++  autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel perl-Data-Dumper boost boost-devel readline-devel libedit libevent-devel libaio
@@ -19,8 +18,10 @@ cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATI
 make -j8
 --------
 make install
+-- 安装 mysql-8.0.23 时, centos7 的 cmake 的版本太低, 在 centos8 上也有问题执行 cmake 时需要加 -DFORCE_INSOURCE_BUILD=1 参数
 chown -R mysql:mysql /opt/mysql/
 vim /etc/my.cnf
+	[mysqld]	--第一行加上这个, 否则可能会出问题
 	datadir=/opt/mysql/data
 	socket=/tmp/mysql.sock
 	log-error=/opt/mysql/mysql.log
@@ -29,7 +30,7 @@ vim /etc/my.cnf
 touch /opt/mysql/mysql.log
 chown -R mysql.mysql /opt/mysql/
 /opt/mysql/bin/mysqld --initialize --user=mysql --basedir=/opt/mysql --datadir=/opt/mysql/data
-	--生成密码
+	--生成密码, 控制台没有的话看日志
 echo "PATH=$PATH:/opt/mysql/bin" >> /etc/profile
 . /etc/profile
 
@@ -39,7 +40,7 @@ chown -R mysql.mysql /opt/mysql
 --登录 mysql
 alter user'root'@'localhost' identified by 'root';
 use mysql;
-update user set authentication_string=password('root') where user='root';
+update user set authentication_string=password('root') where user='root';	--新版本用 SHA1 函数
 
 忘记密码的操作:
 /opt/mysql/bin/mysql.sh stop

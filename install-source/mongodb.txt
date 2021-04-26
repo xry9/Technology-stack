@@ -9,6 +9,76 @@ wget http://fastdl.mongodb.org/linux/mongodb-linux-x86_64-2.6.6.tgz
 tar -zvxf mongodb-linux-x86_64-2.6.6.tgz
 mv mongodb-linux-x86_64-2.6.6 /opt/mongodb/
 vim /etc/profile
-
 export MONGODB_HOME=/opt/mongodb
 export PATH=$CMAKE_HOME/bin:$MONGODB_HOME/bin:$PATH
+
+mongod -version
+mkdir -p /data/mongodb/journal
+mkdir -p /data/mongodb/log
+touch /data/mongodb/log/mongodb.log
+useradd mongodb -M -s /sbin/nologin
+chown -R mongodb.mongodb /data/mongodb
+vim /etc/mongodb.conf
+	dbpath=/data/mongodb
+	logpath=/data/mongodb/log/mongodb.log
+	logappend=true
+	port=27017
+	fork=true
+	noauth=true
+	nojournal = true
+	smallfiles = true
+	noprealloc = true
+vim /lib/systemd/system/mongodb.service
+	[Unit]
+	Description=mongodb
+	After=network.target remote-fs.target nss-lookup.target
+
+	[Service]
+	Type=forking
+	PIDFile=/data/mongodb/mongod.lock
+	ExecStart=/opt/mongodb/bin/mongod -f /etc/mongodb.conf
+	ExecReload=/bin/kill -s HUP $MAINPID
+	ExecStop=/bin/kill -s QUIT $MAINPID
+	PrivateTmp=true
+
+	[Install]
+	WantedBy=multi-user.target
+
+systemctl enable mongodb.service
+systemctl list-unit-files|grep enabled|grep mongodb
+systemctl daemon-reload
+systemctl start mongodb.service
+systemctl status mongodb.service -l
+ps -ef|grep mongod
+mongo admin
+> show dbs
+> use admin
+> db.addUser('admin','manager')
+> db.auth('admin','manager')
+> show collections
+> db.system.users.find()
+> exit
+防火墙添加27017端口:
+iptables -L|grep ACCEPT
+firewall-cmd --zone=public --add-port=27017/tcp --permanent
+firewall-cmd --reload
+iptables -L|grep ACCEPT
+
+
+
+mongod --dbpath /var/lib/mongo --logpath /var/log/mongodb/mongod.log --fork
+------------
+ubuntu 20, 8g 8core:
+https://github.com/mongodb/mongo/blob/master/docs/building.md
+git clone -b v4.4 http://github.com/mongodb/mongo.git	--一定要这薪拉代码, 因为编译时需要用到 git 信息
+
+apt-get install libcurl4-openssl-dev -y
+apt-get install libcurl4-nss-dev -y
+apt-get install libcurl4-gnutls-dev -y
+apt-get install liblzma-dev -y
+apt-get install python3-pip -y
+apt-get install python3.8-dev libssl-dev -y	--根据 python 决定 python3.x-dev
+python3 -m pip install -r etc/pip/compile-requirements.txt
+apt-get install build-essential -y
+python3 buildscripts/scons.py install-mongod --disable-warnings-as-errors
+python3 buildscripts/scons.py install-core --disable-warnings-as-errors

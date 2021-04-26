@@ -2,9 +2,34 @@
 
 https://blog.csdn.net/wbl381/article/details/106995351/
 
-https://codeload.github.com/ClickHouse/ClickHouse/zip/20.8
 grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"
+systemctl stop firewalld.service
+systemctl disable firewalld.service
+mkdir -p /opt/software/clickhouse/
+clickhouse-client-20.3.15.133-1.el7.x86_64.rpm
+clickhouse-common-static-20.3.15.133-1.el7.x86_64.rpm
+clickhouse-server-20.3.15.133-1.el7.x86_64.rpm
+clickhouse-server-common-20.3.15.133-1.el7.x86_64.rpm
+rpm -ivh ./*.rpm
+vim /etc/clickhouse-server/config.xml
+	<!-- 放开注释 -->
+	<listen_host>::1</listen_host>
+    <listen_host>127.0.0.1</listen_host>
+	/var/lib/clickhouse : 默认的数据存储目录，通常会修改，将数据保存到大容量磁盘路径中
+	/var/log/cilckhouse-server : 默认保存日志的目录，通常会修改，将数据保存到大容量磁盘路径中
+service clickhouse-server start
+--clickhouse-server --config-file=/etc/clickhouse-server/config.xml
+clickhouse-client
+	执行 sql: select 1
+=====================================================================
+
+centos7, 8g 8core:
+
+grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"
+
 yum install git cmake ninja-build libicu-devel clang libicu-devel readline-devel mysql-devel openssl-devel unixODBC_devel bzip2 -y
+yum install gcc gcc-c++ -y
+yum install zlib-devel.x86_64 -y
 wget ftp://gnu.mirror.iweb.com/gcc/gcc-8.2.0/gcc-8.2.0.tar.xz
 cd gcc-8.2.0
 ./contrib/download_prerequisites
@@ -31,6 +56,7 @@ gcc --version
 
 wget https://cmake.org/files/v3.14/cmake-3.14.5-Linux-x86_64.tar.gz
 tar zxvf cmake-3.14.5-Linux-x86_64.tar.gz -C /opt
+cd /opt
 ln -s cmake-3.14.5-Linux-x86_64 cmake
 
 vim /etc/profile
@@ -41,4 +67,20 @@ source /etc/profile
 
 wget https://github.com/ninja-build/ninja/releases/download/v1.9.0/ninja-linux.zip
 unzip ninja-linux.zip -d /usr/local/bin/
+--yum install glibc* -y
+mv /lib64/libstdc++.so.6 /lib64/libstdc++.so.6.bak
+cp /opt/gcc8/lib64/libstdc++.so.6.0.25 /lib64
+cd /lib64
+ln -s libstdc++.so.6.0.25 libstdc++.so.6
 ninja --version
+ln -s /usr/local/bin/ninja /usr/bin/ninja-build
+ln -s /usr/local/bin/ninja /usr/bin/ninja
+git clone -b v18.4.0-stable https://github.com/ClickHouse/ClickHouse.git
+git submodule sync
+git submodule update --init --recursive
+mkdir build
+cd build
+cmake -DCMAKE_INSTALL_PREFIX=/usr/local/clickhouse ../
+vim CMakeLists.txt 
+	#include (libs/libmysqlxx/cmake/find_mysqlclient.cmake)
+ninja clickhouse
