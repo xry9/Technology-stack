@@ -14,6 +14,7 @@ mkdir -p build/release
 cd build/release
 ../../build-support/enable_devtoolset.sh ../../thirdparty/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=release ../..
 --可能找不到 java, 虽然 openjdk 是存在的, 所以再装一个指定好 JAVA_HOME 就好, java -version 不生效也没关系
+wget https://downloads.gradle.org/distributions/gradle-4.10.2-all.zip
 unzip -D gradle-4.10.2-all.zip 
 mv gradle-4.10.2 /usr/local/gradle
 ll /usr/local/gradle

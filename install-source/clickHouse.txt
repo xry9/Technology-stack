@@ -30,6 +30,7 @@ grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not su
 yum install git cmake ninja-build libicu-devel clang libicu-devel readline-devel mysql-devel openssl-devel unixODBC_devel bzip2 -y
 yum install gcc gcc-c++ -y
 yum install zlib-devel.x86_64 -y
+
 wget ftp://gnu.mirror.iweb.com/gcc/gcc-8.2.0/gcc-8.2.0.tar.xz
 cd gcc-8.2.0
 ./contrib/download_prerequisites
