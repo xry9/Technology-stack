@@ -2,6 +2,11 @@
 https://blog.csdn.net/sinat_32336967/article/details/88074200
 git clone -b v1.7.4 git@github.com:influxdata/influxdb.git
 
+
+
+https://www.cnblogs.com/MikeZhang/p/installInfluxdbFromSrc20171218.html
+    --centos8: 这个连接可以 go 用的是 go1.11.5.linux-amd64.tar.gz, 1.8.3 的缺包。配置 GOROOT
+
 -------------------------------- rpm --------------------------------
 https://blog.51cto.com/13453496/2071894
 https://www.linuxprobe.com/download-allrpm-relevant.html
