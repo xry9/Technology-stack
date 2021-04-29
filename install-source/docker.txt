@@ -1,0 +1,4 @@
+ubuntu16,docker 版本是 v18.09.0
+
+https://blog.csdn.net/wujianyongw4/article/details/70598722?utm_medium=distribute.pc_relevant.none-task-blog-OPENSEARCH8.not_use_machine_learn_pai&depth_1-utm_source=distribute.pc_relevant.none-task-blog-OPENSEARCH-8.not_use_machine_learn_pai
+
