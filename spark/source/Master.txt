@@ -1,6 +1,3 @@
-./dev/make-distribution.sh --name without-hive --tgz -Phadoop-2.7 -Dhadoop.version=2.7.2 -Pyarn
-./build/mvn -DskipTests clean package	--github 上给出的编译方式
-
 
 
 private[deploy] class org.apache.spark.deploy.master.Master(override val rpcEnv: RpcEnv, address: RpcAddress, webUiPort: Int, val securityMgr: SecurityManager, val conf: SparkConf) extends ThreadSafeRpcEndpoint with Logging with LeaderElectable {

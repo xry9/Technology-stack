@@ -21,15 +21,34 @@ reboot
 uname -r
 cat /boot/grub/grub.conf
 --------
-https://blog.csdn.net/weixin_33950035/article/details/91552386
-https://blog.csdn.net/reblue520/article/details/50786092
-https://www.cnblogs.com/pistachio123/p/14301949.html
-https://www.cnblogs.com/xiaocen/p/3717993.html
-https://blog.csdn.net/qq_34247099/article/details/50949720
 https://www.kernel.org/doc/html/latest/
 https://ftp.gnu.org/gnu/
 https://mirrors.edge.kernel.org/pub/linux/kernel/
 https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
 http://mirrors.163.com/centos/7/os/x86_64/Packages/
+--------
+ubuntu20, 8g: 
 
-https://www.cnblogs.com/linkchen/p/13926846.html
+apt-get install libncurses5-dev openssl libssl-dev -y
+apt-get install build-essential -y
+apt-get install pkg-config -y
+apt-get install libc6-dev -y
+apt-get install bison -y
+apt-get install flex -y
+apt-get install libelf-dev -y
+apt-get install zlibc minizip -y
+apt-get install libidn11-dev libidn11 -y
+cd linux-5.9.3
+cp /boot/config-5.4.0-42-generic ./.config
+make menuconfig
+--make clean
+make
+make modules_install
+make install
+
+mkinitramfs -o /boot/initrd.img-5.9.3
+update-initramfs -c -k 5.9.3
+update-grub2
+uname -a
+reboot
+uname -a

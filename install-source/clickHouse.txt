@@ -63,7 +63,7 @@ ln -s cmake-3.14.5-Linux-x86_64 cmake
 vim /etc/profile
 
 export CMAKE_HOME=/opt/cmake
-export PATH=$CMAKE_HOME/bin:$PATH
+export PATH=$CMAKE_HOME/bin:$PATH	-- CMAKE_HOME 放在前面, 否则可能用的还是老版本
 source /etc/profile
 
 wget https://github.com/ninja-build/ninja/releases/download/v1.9.0/ninja-linux.zip
@@ -82,6 +82,6 @@ git submodule update --init --recursive
 mkdir build
 cd build
 cmake -DCMAKE_INSTALL_PREFIX=/usr/local/clickhouse ../
-vim CMakeLists.txt 
+vim ../CMakeLists.txt 
 	#include (libs/libmysqlxx/cmake/find_mysqlclient.cmake)
 ninja clickhouse

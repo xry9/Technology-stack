@@ -1,0 +1,16 @@
+centos7/8:
+1¡¢vim /etc/sysconfig/network-scripts/ifcfg-ens33
+BOOTPROTO="static"
+IPADDR=192.168.58.161
+NETMASK=255.255.255.0
+DNS1=114.114.114.114
+
+2¡¢vim /etc/sysconfig/network
+NETWORKING=yes
+NETWORKING_IPV6=no
+HOSTNAME=localhost.localdomain
+GATEWAY=192.168.58.2
+3¡¢systemctl restart network
+========================
+systemctl stop firewalld
+systemctl disable firewalld

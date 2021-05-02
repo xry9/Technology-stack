@@ -1,6 +1,8 @@
 -------------------------------- kudu --------------------------------
 https://blog.csdn.net/ciqingloveless/article/details/113755928
 https://kudu.apache.org/docs/installation.html
+centos8: 编译后 112G
+
 yum -y install autoconf automake cyrus-sasl-devel cyrus-sasl-gssapi cyrus-sasl-plain flex gcc gcc-c++ gdb git krb5-server krb5-workstation libtool make openssl-devel patch pkgconfig redhat-lsb-core rsync unzip vim-common which numactl-libs numactl-devel
 --yum update
 --yum -y install centos-release-scl
@@ -15,10 +17,10 @@ cd build/release
 ../../build-support/enable_devtoolset.sh ../../thirdparty/installed/common/bin/cmake -DCMAKE_BUILD_TYPE=release ../..
 --可能找不到 java, 虽然 openjdk 是存在的, 所以再装一个指定好 JAVA_HOME 就好, java -version 不生效也没关系
 wget https://downloads.gradle.org/distributions/gradle-4.10.2-all.zip
-unzip -D gradle-4.10.2-all.zip 
+unzip -D gradle-4.10.2-all.zip
 mv gradle-4.10.2 /usr/local/gradle
 ll /usr/local/gradle
 ln -s /usr/local/gradle/bin/gradle  /usr/bin/gradle
 
-make -j4
+make -j8
 make DESTDIR=/app/kudu install

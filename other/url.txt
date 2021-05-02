@@ -21,6 +21,7 @@ https://blog.csdn.net/thwsir/article/details/86480956 -- presto 编译引起
 
 https://blog.csdn.net/hellozhxy/article/details/82687863	--特征工程
 https://www.cnblogs.com/ling1995/p/7339424.html	--hive
+https://www.cnblogs.com/pistachio123/p/14301949.html	--yum
 
 
 https://www.cnblogs.com/mq0036/p/11187138.html	--抓包
