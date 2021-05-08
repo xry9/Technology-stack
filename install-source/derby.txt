@@ -3,8 +3,11 @@ cd db-derby-10.14.2.0-src
 ant
 ant buildjars
 ------------
+
 bin/ij
 connect 'jdbc:derby:dedb;user=db_user1;password=111111;create=true';
 create table t_user(uuid varchar(32), name varchar(10), age int, address varchar(40));
 insert into t_user values('B82A6C5244244B9BB226EF31D5CBE508', 'Miachel', 20, 'street 1');
-
+select * from t_user;
+select uuid,sum(age) from t_user group by uuid;
+select uuid,sum(age) from (select * from t_user where age>0)t group by uuid;

@@ -49,6 +49,7 @@ Operator<? extends OperatorDesc> reducerOp = rWork.getReducer();
 8、HiveServer 拿数据时创建 FetchOperator#getRecordReader, 其实是一个 LineRecordReader
 9、记录一次故障吧，日志打印完 Kill Command = /usr/local/app/hadoop-2.7.2/bin/hadoop job  -kill job_1601773179465_0003 就是启动不了, 单独启动一个 mr 也不行, 替换了干净的 hive/hadoop jar 也不行, 日志也都看了, 没有端倪. 灵机一动是不是磁盘满了, 果然啊
 10、MapJoin 方式会启动 org.apache.hadoop.hive.ql.exec.mr.ExecDriver#main -->setupChildLog4j 这里面有日志的各种骚操作
+11、SemanticAnalyzer.doPhase1 中 processSubQuery 方法可以说极其重要了
 
 =============================================
 select name,sum(age) from db.tab group by name;
