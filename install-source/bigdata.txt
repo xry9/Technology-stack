@@ -34,10 +34,13 @@ centos7 上编译 hadoop-3.2.2 需要装 cmake-3.10.2, ./configure && make -j8 &
 2、hbase:
 mvn clean package -DskipTests
 [ERROR] The specified user settings file does not exist: /home/tyx/.m2/settings.xml
+
 3、hive:
 https://cwiki.apache.org/confluence/display/Hive/GettingStarted#GettingStarted-BuildingHivefromSource
 mvn clean install -Phadoop-2,dist -DskipTests
 需要用 aliyun mirror
+apache-hive-3.1.2-src:
+  mvn clean install -Phadoop-3,dist -DskipTests
 
 4、spark
 ./dev/make-distribution.sh --name without-hive --tgz -Phadoop-2.7 -Dhadoop.version=2.7.2 -Pyarn
