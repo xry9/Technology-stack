@@ -15,40 +15,7 @@ JDK1.8引入了 LongAdder 类。CAS 机制就是，在一个死循环内，不�
 传统 AtomicInteger 等原子类的改进思路, 也有一些低并发时不会立即进入分支做分段更新操作, 并发高时扩容的优化
 
 ----
-请说明一下 synchronized 的可重入怎么实现
 
-每个锁关联一个线程持有者和一个计数器。当计数器为0时表示该锁没有被任何线程持有，那么任何线程都都可能获得该锁而调用相应方法。当一个线程请求成功后，
-JVM会记下持有锁的线程，并将计数器计为1。此时其他线程请求该锁，则必须等待。而该持有锁的线程如果再次请求这个锁，就可以再次拿到这个锁，同时计数器会递增。
-当线程退出一个 synchronized 方法/块时，计数器会递减，如果计数器为0则释放该锁。
-----
-请讲一下非公平锁和公平锁在reetrantlock里的实现过程是怎样的。
-如果一个锁是公平的，那么锁的获取顺序就应该符合请求的绝对时间顺序，FIFO。对于非公平锁，只要CAS设置同步状态成功，则表示当前线程获取了锁，
-而公平锁还需要判断当前节点是否有前驱节点，如果有，则表示有线程比当前线程更早请求获取锁，因此需要等待前驱线程获取并释放锁之后才能继续获取锁。
-
-----
-本文里面讲的是广义上的可重入锁，而不是单指JAVA下的 ReentrantLock。
-可重入锁，也叫做递归锁，指的是同一线程 外层函数获得锁之后 ，内层递归函数仍然有获取该锁的代码，但不受影响。
-在JAVA环境下 ReentrantLock 和synchronized 都是 可重入锁。可重入锁最大的作用是避免死锁
-public synchronized void get(){
-	System.out.println(Thread.currentThread().getId());
-	set();
-}
-public synchronized void set(){
-	System.out.println(Thread.currentThread().getId());
-}
---
-public void get() {
-	lock.lock();
-	System.out.println(Thread.currentThread().getId());
-	set();
-	lock.unlock();
-}
-public void set() {
-	lock.lock();
-	System.out.println(Thread.currentThread().getId());
-	lock.unlock();
-}
---
 不可重入自旋:
 public class SpinLock {
 	private AtomicReference<Thread> owner =new AtomicReference<>();
@@ -87,12 +54,7 @@ public class SpinLock1 {
 	}
 }
 ----
-JAVA中如何确保N个线程可以访问N个资源，但同时又不导致死锁？ 
-参考回答：
-使用多线程的时候，一种非常简单的避免死锁的方式就是：指定获取锁的顺序，并强制线程按照指定的顺序获取锁。如果所有的线程都是以同样的顺序加锁和释放锁，
-就不会出现死锁了。
-----
-请你说明一下ConcurrentHashMap的原理？
+请你说明一下 ConcurrentHashMap 的原理？
 参考回答：
 ConcurrentHashMap 类中包含两个静态内部类 HashEntry 和 Segment。HashEntry 用来封装映射表的键 / 值对；Segment 用来充当锁的角色，每个 Segment 对象守护
 整个散列映射表的若干个桶。每个桶是由若干个 HashEntry 对象链接起来的链表。一个 ConcurrentHashMap 实例中包含由若干个 Segment 对象组成的数组。HashEntry 
@@ -105,7 +67,7 @@ Concurrenthashmap线程安全的，1.7是在jdk1.7中采用Segment + HashEntry�
 连续计算元素的个数，最多计算3次：1、如果前后两次计算结果相同，则说明计算出来的元素个数是准确的；
 2、如果前后两次计算结果都不同，则给每个Segment进行加锁，再计算一次元素的个数；
 
-1.8中放弃了Segment臃肿的设计，取而代之的是采用 Node + CAS + Synchronized 来保证并发安全进行实现，1.8中使用一个volatile类型的变量baseCount记录元素的个数，
+1.8 中放弃了 Segment 臃肿的设计，取而代之的是采用 Node + CAS + Synchronized 来保证并发安全进行实现，1.8中使用一个volatile类型的变量baseCount记录元素的个数，
 当插入新数据或则删除数据时，会通过addCount()方法更新baseCount，通过累加baseCount和CounterCell数组中的数量，即可得到元素的总个数；
 ----
 请解释一下TreeMap?

@@ -17,7 +17,7 @@ public class java.lang.Thread implements Runnable {
     private native boolean isInterrupted(boolean ClearInterrupted);
 	private native void interrupt0();
 	public static native void sleep(long millis) throws InterruptedException;
-	public final native boolean isAlive(); // start 之前不是 alive
+	public final native boolean isAlive(); // start 之前、run()结束, 不是 alive, 
 }
 public interface sun.nio.ch.Interruptible { // 实现类就 nio 中有两个
     void interrupt(Thread var1);
@@ -28,7 +28,7 @@ Thread thread = new MyInerruptThread();thread.interrupt();
 在 sleep 期间或 sleep 之前调用 interrupt, sleep 时都会 InterruptedException, 当然异常之后 isInterrupted() 失效, 当遇到 wait(); 时完全一样
 isInterrupted() 也可以在外面调用的 thread.isInterrupted(), 而且不会清除状态, 当然他遇到 sleep/wait 是没有问题的
 Lock 中 UNSAFE.park 不会抛出 InterruptedException, 所以 lock.lock(); 得到锁会也不必太担心 intercept 操作
-
+--涉及到了 SecurityManager, 在 Hadoop 中会用到一些
 ================================ ThreadLocal ================================
 // ThreadLocal 通常做为某个类的静态变量使用
 public class ThreadLocal<T> {
@@ -109,29 +109,25 @@ ThreadLocal 明显的问题是内存泄露, 即不断有新线程产生, 还有�
 |-------------------|			|---------------------------------------|
 
 1. tl = null; 前做一下 tl.set(null);当然 tl.remove(); 更好, 其实最重要的是 remove, remove 之后 t1 与普通对象无异, 置不置 null 全凭心情
-  其实以引申一下, 什么情况下要对引用显式置 null, 就是那种常住内存对象的属性吧
 2. 线程运行结束后及时线程引用置 null (但是怎样确定是否运行结束是不可能的吧，只有要 run 结束之前标识用其它变量来标识一下)
-3. 总结一下 TL 一切问题的根源是, 一个对象存在显示和隐式两个引入, 显示引用断开了之后隐式隐用就不能断开(因为确定不了可以可以断开), 造成了内存泄露
-  其实想想我用 HashMap 时考虑过内存泄露问题么, 但是通常又没什么问题, 应该是因为我用的场景都不是一个常住内存的 Map, 要么内存不够直接 oom了, 
-  不存在内存泄露问题, 所以说 TL 有这问题也不奇怪, 常住内存的 Map 都有这问题, 例如 datanode.fsdataset.impl.ReplicaMap#map 中的这种用法是有 remove 的
-4. 我突然懂了为什么要把 ThreadLocalMap 放在 Thread 中, 如果放在 ThreadLocal(Thread 做 key) 或者 单独存在(这种其实最省空间), 但是无法做到 remove, 
+4. 我突然懂了为什么要把 ThreadLocalMap 放在 Thread 中, 如果放在 ThreadLocal(Thread 做 key) 或者 单独存在(好像没有这种情况), 但是无法做到 remove, 
 因为不知道线程什么时候执行完, 现在这样设计虽然很蹩脚, 但是只要用的好是可以规避风险的(能不能让每个线程都 remove 也得看情况了)
---------
-分析: 首先应想到的是 Map 放在哪, Map 的 key 是啥
-a. Map 放在外面的话,在 ThreadLocal 内即可, key 就是线程, 数据没有冗余, 问题是线程销毁有内存泄露, 但是我觉得应该有办法挽救吧, 但是肯定很不容易
-b. Map 放在 Thread 里, 也没有数据冗余, 也有内存泄露风险, ThreadLocal 对象不好回收, 但是处理得当应该没问题
-c. 所以结果是 b 方案更好
-5. 我认为 ThreadLocal 使用场景的话就是类 session, 在 server 记录 client 用户信息
 
+Thread: m0 ~ m1
+ThreadLocal: n0 ~ n1
+a. ThreadLocalMap 在 Thread 中: m0(ThreadLocalMap) + m0*n1(kv). 内存泄露了 (n1-n0)m0
+b. ThreadLocalMap 在 ThreadLocal n0(ThreadLocalMap) + m1*n0(kv)n. 内存泄露了 (m1-m0)n0
+c. ThreadLocalMap 单独存在, 呵呵, 没有这种情况的.
+实际情况中 m1-m0 远大于 n1 -n0, 所以 a 方式更好
+5. 我认为 ThreadLocal 使用场景的话就是类 session, 在 server 记录 client 用户信息
 ================================ Thread 提交 ================================
 1、多线程异步调用有一个成功怎样让其它结束, 应该是成功的线程将其它都 intercept 一下, 我突然理解了 hbase client 采用两级线程的新的好处了, 
 而线程的 run/call 方法内 while 并跟据 intercept 状态 break;
 
 2、java.util.concurrent.FutureTask#cancel 这方法是什么鬼
 
-1、关 connection 时, 线程 intercept 了, 遇到 wait 会结束, 但是内部的 socket 没有 close 会有问题吗, 放心 catch 里会捕获 InterruptedException, 然后去...
+1、关 connection 时, 线程 intercept 了, 遇到 wait 会结束, 但是内部的 socket 没有 close 会有问题吗, 应该会, 所以 close() 方法中 关流会放在最后来保证会被执行
   socket io 阻塞时 intercept 不会出现 InterruptedException
-2、线程池 shutdown 时会把每个线程都 interrupt 一下, 
 
 public interface Runnable {
     public abstract void run();
@@ -150,8 +146,7 @@ public interface Future<V> {
     V get() throws InterruptedException, ExecutionException;
     V get(long timeout, TimeUnit unit)throws InterruptedException, ExecutionException, TimeoutException;
 }
-public interface RunnableFuture<V> extends Runnable, Future<V> {
-}
+public interface RunnableFuture<V> extends Runnable, Future<V> {}
 public interface Callable<V> {
     V call() throws Exception;
 }
@@ -187,6 +182,8 @@ public abstract class AbstractExecutorService implements ExecutorService {
     }
 }
 public class ThreadPoolExecutor extends AbstractExecutorService {
+    private volatile int corePoolSize;
+    private volatile int maximumPoolSize;
 	public void execute(Runnable command) {
 		if (addWorker(command, true)) return;
 	}
@@ -216,12 +213,15 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         }
     }
 	final void runWorker(Worker w) {
+        w.unlock();// 我最初的想法: 这里用到锁我只能理解为防止 runWorker/run 被直接调用. 后来我知道了线程池 shutdown, 对线程 interrupt 时会用到锁啊
 		try{
 			// getTask() 可以认为是去一个阻塞队列里取 task 了
 			while (task != null || (task = getTask()) != null) {
+                w.lock();
 				Runnable task = w.firstTask;
 				task.run();
 			}
+            w.unlock();
 		}finally {
 			// 讨论一下线程池运行原理,这里只是推测,不代表结论. 线程池的活跃线程数即上面 start 的次数,而 processWorkerExit 方法执行表示线程
 			// 运行结束, 如不执行 pool.shutdown(); 则 processWorkerExit 就不会执行,没有结束的线程去 getTask() 了. 
@@ -229,6 +229,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             processWorkerExit(w, completedAbruptly);// 走到这 worker 及所对应的 Thread 就结束了, 线程数降到核心线程数就是这么实现的
         }
     }
+
 	private Runnable getTask() {
 		boolean timedOut = false; // Did the last poll() time out?
 		for (;;) {
@@ -387,7 +388,7 @@ public abstract class Reference<T> {
     		//pending 是 reference 能入队列的关键, 据非官方资料说 pending 值是 jvm 给的, 我也认同。更多信息源码注释部分说了好多, 如果 jvm 直接调用方法而不是通过 pending 其实不这个线程了
 			if (pending != null) {
 				r = pending;
-				c = r instanceof Cleaner ? (Cleaner) r : null;
+				c = r instanceof Cleaner ? (Cleaner) r : null; 
 			} else {
 				return waitForNotify;
 			}
@@ -460,16 +461,14 @@ public class java.lang.ref.ReferenceQueue<T> {
 		每次添加元素 r,会将 r 做为 head, 原 head 做为了 r 的 next, 删除就元素没有必要说了吧
 	1. 经内存压力测试和 ReferenceQueue 队列回收情况
 		A. SoftReference:
-			a. 发生 Full GC 时年轻代减少的空间，几乎都跑到老年代了，说明 SoftReference 的实例都跑到老年代了，而且多少 Full GC 后老年代也会减少，
-				说明 SoftReference 被回收了
+			a. 发生 Full GC 时年轻代减少的空间，几乎都跑到老年代了，说明 SoftReference 的实例都跑到老年代了，而且多少 Full GC 后老年代也会减少，说明 SoftReference 被回收了
 			b. Debug + 日志观察：java.lang.ref.ReferenceQueue#enqueue 添加元素时是与GC之后
-			c. 有个疑问如果不手动 remove 队列里的对象不会堆积导致内存泄露么？不是的，即便不传入 ReferenceQueue 队列，还是会内存溢出，因为
-			  必须要 list.add(WeakReference), 不解释这是前提
+			c. 有个疑问如果不手动 remove 队列里的对象不会堆积导致内存泄露么？ 多滤了.
+            d. 创建 Reference 对象时, 可以不传入 ReferenceQueue, 但是传与不传对内存没啥影响
 			   粗看网上说的 Pending 队列，Reference 实例几种态度的东东，感觉不太对，不细究了
 		B. WeakReference:
 			a. GC 是 SoftReference 的一半，而且没有 Full GC,而且每次GC后都能从队列出拿到几乎全部创建的WeakReference对应，说明都回收了呗
-			b. 通过日志和调试也不能得出：SoftReference 内存不够时回收, WeakReference 每次gc都回收的结论，但是可以得出GC时对 WeakReference 
-			回收的力度要大于 SoftReference			
+			b. 通过日志和调试也不能得出：SoftReference 内存不够时回收, WeakReference 每次gc都回收的结论，但是可以得出GC时对 WeakReference 回收的力度要大于 SoftReference			
 		C. PhantomReference:
 			程序很容易就 OutOfMemoryError, 说明它的回收力度远低于前两者呀, SoftReference 再不ji, Full GC 多，也没让程序挂呀
 			测试(对象大小*对象个数≈整heap)发现 PhantomReference 压根就不清除, 与文档所说对得上
@@ -506,7 +505,7 @@ DirectByteBuffer 对象是有强引用的吧, 所以也不必担心被回收, �
 2、堆外内存本质就这两个方法，当然里面还有一些
 long pointer = unsafe.allocateMemory(1024 * 1024 * 200);    unsafe.getByte(pointer + 1);    unsafe.freeMemory(pointer);
 如果一直没有 freeMemory 则会报错：Process finished with exit code 137 (interrupted by signal 9: SIGKILL), 好像跟 jdk 版本有关,jdk6: OutOfMemoryError 本质是内存溢出导致
-3、DirectByteBuffer 内没有一个 byte[] 相关的属性, 当然不能有啊, 有就是在堆内了
+3、DirectByteBuffer 内没有一个 byte[] 相关的属性, 当然不能有啊, 有就是在堆内了, 所以 DirectByteBuffer 就是指向内核空间吧
 
 public abstract class Buffer {
     private int mark = -1;
@@ -725,7 +724,6 @@ class java.nio.Bits {
         if (pageSize == -1) pageSize = unsafe().pageSize();
         return pageSize;
     }
-    private static volatile long maxMemory = VM.maxDirectMemory();
     static void reserveMemory(long size, int cap) {
         if (!memoryLimitSet && VM.isBooted()) {
             maxMemory = VM.maxDirectMemory(); memoryLimitSet = true;
@@ -1045,5 +1043,3 @@ class other.mypackage.DemoOne$1 implements other.mypackage.InterOne {
 ================================ 原子类 ================================
 fieldUpdater = AtomicLongFieldUpdater.newUpdater(CASBasedCounter.class, "count");// private volatile long count; 注意 count 必需是 volatile, 否则这行代码执行报错
 fieldUpdater.compareAndSet(this, oldValue, newValue);
-
-
