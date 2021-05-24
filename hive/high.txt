@@ -17,7 +17,7 @@ select *,f.* from tab2 lateral view explode(split(name,"")) f;
 	--没有 partition by 则 sum 前面所有值, 通过这个现象我也理解 BETWEEN ... AND ... 用法了, 说白了 BETWEEN ... AND 是个窗口, 在组内开窗
 	--说白了, 开窗是对前面的输出结果开窗
 --------
-create table testaa (id int ,month string ,num int )row format delimited fields terminated by ',';
+create table testaa (id int ,month string ,num int)row format delimited fields terminated by ',';
 insert into testaa 
 select  1,'A',100 union all
 select  2,'A',200 union all
@@ -28,9 +28,9 @@ select  1,'C',10000 union all
 select  4,'A',50  
 
 select id,month,num,sum(num) over(partition by month order by id) from testaa group by id,month,num
-select id,month,num,sum(num) over(partition by month order by id) from testaa
+  select id,month,num,sum(num) over(partition by month order by id) from testaa
 select id,month,num,sum(num) over(partition by month) from testaa
-select month, sum(num), sum(sum(num)) over(order by month) from testaa group  by month
+select month, sum(num), sum(sum(num)) over(order by month) from testaa group by month
 --------
 	
 2、关于怎么处理 session 问题:
@@ -110,7 +110,6 @@ hive.multigroupby.singlemr 要设为 ture, 但是原生不支持, 我觉得利�
 但是别忽略多表相同key的情况
 
 12、map 端 join 解决数据倾斜，如果小表过大，可以采用分片方式，小表分成两个，两个 map 端 join, 本质大表被读两次
-20、
 
 
 6、不执行mapreduce，提高速度 set hive.fetch.task.conversion=more;
