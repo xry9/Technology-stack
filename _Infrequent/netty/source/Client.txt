@@ -1,0 +1,339 @@
+
+public final class io.netty.example.echo.EchoClient {
+    public static void main(String[] args) throws Exception {
+        EventLoopGroup group = new NioEventLoopGroup();
+        Bootstrap b = new Bootstrap();
+        b.group(group).channel(NioSocketChannel.class).option(ChannelOption.TCP_NODELAY, true)
+        .handler(new ChannelInitializer<SocketChannel>() {
+            public void initChannel(SocketChannel ch) throws Exception {
+                ChannelPipeline p = ch.pipeline();
+                p.addLast(new EchoClientHandler());
+            }
+        });
+        ChannelFuture f = b.connect(HOST, PORT).sync();
+        f.channel().closeFuture().sync();
+        group.shutdownGracefully();
+    }
+}
+
+public class io.netty.example.echo.EchoClientHandler extends ChannelInboundHandlerAdapter {
+    private final ByteBuf firstMessage;
+    public EchoClientHandler() {
+        firstMessage = Unpooled.buffer(EchoClient.SIZE);
+        for (int i = 0; i < firstMessage.capacity(); i ++) { firstMessage.writeByte((byte) i); }
+    }
+    public void channelActive(ChannelHandlerContext ctx) { ctx.writeAndFlush(firstMessage); }
+    public void channelRead(ChannelHandlerContext ctx, Object msg) { ctx.write(msg); }
+    public void channelReadComplete(ChannelHandlerContext ctx) { ctx.flush(); }
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) { cause.printStackTrace(); ctx.close(); }
+}
+
+public class io.netty.bootstrap.Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
+    public ChannelFuture connect(String inetHost, int inetPort) { return connect(new InetSocketAddress(inetHost, inetPort)); }
+    public ChannelFuture connect(SocketAddress remoteAddress) { return doConnect(remoteAddress, localAddress()); }
+    private ChannelFuture doConnect(final SocketAddress remoteAddress, final SocketAddress localAddress) {
+        final ChannelFuture regFuture = initAndRegister();
+        final Channel channel = regFuture.channel();
+        final ChannelPromise promise = channel.newPromise();
+        regFuture.addListener(new ChannelFutureListener() {
+            public void operationComplete(ChannelFuture future) throws Exception { doConnect0(regFuture, channel, remoteAddress, localAddress, promise); }
+        });
+        return promise;
+    }
+    private static void doConnect0(final ChannelFuture regFuture, final Channel channel, final SocketAddress remoteAddress, final SocketAddress localAddress, final ChannelPromise promise) {
+        channel.eventLoop().execute(new Runnable() {
+            public void run() {
+                channel.connect(remoteAddress, promise);
+            }
+        });
+    }
+}
+
+public abstract class io.netty.channel.AbstractChannel extends DefaultAttributeMap implements Channel {
+    private final CloseFuture closeFuture = new CloseFuture(this);
+    public ChannelFuture connect(SocketAddress remoteAddress, ChannelPromise promise) {
+        return pipeline.connect(remoteAddress, promise);
+    }
+}
+public class io.netty.channel.DefaultChannelPipeline implements ChannelPipeline {
+    public final ChannelFuture connect(SocketAddress remoteAddress, ChannelPromise promise) {
+        return tail.connect(remoteAddress, promise);
+    }
+    public void connect(
+        ChannelHandlerContext ctx,  
+        SocketAddress remoteAddress, SocketAddress localAddress,
+        ChannelPromise promise) throws Exception {
+        unsafe.connect(remoteAddress, localAddress, promise);
+    }
+
+}
+abstract class io.netty.channel.AbstractChannelHandlerContext extends DefaultAttributeMap implements ChannelHandlerContext {
+    public ChannelFuture connect(SocketAddress remoteAddress, ChannelPromise promise) {
+        return connect(remoteAddress, null, promise);
+    }
+    public ChannelFuture connect(final SocketAddress remoteAddress, final SocketAddress localAddress, final ChannelPromise promise) {
+        final AbstractChannelHandlerContext next = findContextOutbound();
+        EventExecutor executor = next.executor();
+        next.invokeConnect(remoteAddress, localAddress, promise);
+        return promise;
+    }
+    private void invokeConnect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
+        ((ChannelOutboundHandler) handler()).connect(this, remoteAddress, localAddress, promise);
+    }
+}
+public abstract class io.netty.channel.nio.AbstractNioChannel extends AbstractChannel {
+    public final void connect(final SocketAddress remoteAddress, final SocketAddress localAddress, final ChannelPromise promise) {
+            boolean wasActive = isActive();
+        if (doConnect(remoteAddress, localAddress)) {
+        } else {
+            ...
+        }
+    }
+}
+public final class io.netty.util.internal.SocketUtils {
+    public static boolean connect(final SocketChannel socketChannel, final SocketAddress remoteAddress) throws IOException {
+        return AccessController.doPrivileged(new PrivilegedExceptionAction<Boolean>() {
+            public Boolean run() throws IOException {
+                return socketChannel.connect(remoteAddress);// 这里是 nio 的 channel 了
+            }
+        });
+    }
+}
+
+public class io.netty.channel.DefaultChannelPromise extends DefaultPromise<Void> implements ChannelPromise, FlushCheckpoint {
+    public DefaultChannelPromise(Channel channel) {
+        this.channel = checkNotNull(channel, "channel");
+    }
+    public ChannelPromise sync() throws InterruptedException {
+        super.sync();
+        return this;
+    }
+}
+public class io.netty.util.concurrent.DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
+    public Promise<V> sync() throws InterruptedException {
+        await();
+        rethrowIfFailed();
+        return this;
+    }
+    public Promise<V> await() throws InterruptedException {
+        while (!isDone()) {
+            incWaiters();
+            try {
+                wait();// Object 的 方法
+            } finally {
+                decWaiters();
+            }
+        }
+        return this;
+    }
+    private void incWaiters() {
+        ++waiters;
+    }
+}
+
+
+public class io.netty.channel.nio.NioEventLoopGroup extends MultithreadEventLoopGroup {
+    public NioEventLoopGroup() {
+        this(0);
+    }
+    public NioEventLoopGroup(int nThreads) {
+        this(nThreads, null);
+    }
+    public NioEventLoopGroup(int nThreads, ThreadFactory threadFactory) {
+        this(nThreads, threadFactory, SelectorProvider.provider());
+    }
+    public NioEventLoopGroup(
+            int nThreads, ThreadFactory threadFactory, final SelectorProvider selectorProvider) {
+        this(nThreads, threadFactory, selectorProvider, DefaultSelectStrategyFactory.INSTANCE);
+    }
+    public NioEventLoopGroup(int nThreads, ThreadFactory threadFactory,
+        final SelectorProvider selectorProvider, final SelectStrategyFactory selectStrategyFactory) {
+        super(nThreads, threadFactory, selectorProvider, selectStrategyFactory, RejectedExecutionHandlers.reject());
+    }
+    protected EventExecutor newChild(ThreadFactory threadFactory, Object... args) throws Exception {
+        return new NioEventLoop(this, threadFactory, (SelectorProvider) args[0],
+            ((SelectStrategyFactory) args[1]).newSelectStrategy(), (RejectedExecutionHandler) args[2]);
+    }
+}
+public abstract class io.netty.util.concurrent.MultithreadEventExecutorGroup extends AbstractEventExecutorGroup {
+    protected MultithreadEventExecutorGroup(int nThreads, ThreadFactory threadFactory, Object... args) {
+        if (threadFactory == null) {
+            threadFactory = newDefaultThreadFactory();
+        }
+        children = new SingleThreadEventExecutor[nThreads];
+        if (isPowerOfTwo(children.length)) {
+            chooser = new PowerOfTwoEventExecutorChooser();
+        } else {
+            chooser = new GenericEventExecutorChooser();
+        }
+        for (int i = 0; i < nThreads; i ++) {
+            boolean success = false;
+            children[i] = newChild(threadFactory, args);
+            success = true;
+            if (!success) {
+                for (int j = 0; j < i; j ++) {
+                    children[j].shutdownGracefully();
+                }
+                for (int j = 0; j < i; j ++) {
+                    EventExecutor e = children[j];
+                    while (!e.isTerminated()) {
+                        e.awaitTermination(Integer.MAX_VALUE, TimeUnit.SECONDS);
+                    }
+                }
+            }
+        }
+        final FutureListener<Object> terminationListener = new FutureListener<Object>() {
+            @Override
+            public void operationComplete(Future<Object> future) throws Exception {
+                if (terminatedChildren.incrementAndGet() == children.length) {
+                    terminationFuture.setSuccess(null);
+                }
+            }
+        };
+        for (EventExecutor e: children) {
+            e.terminationFuture().addListener(terminationListener);
+        }
+    }
+}
+
+public abstract class io.netty.channel,MultithreadEventLoopGroup extends MultithreadEventExecutorGroup implements EventLoopGroup {
+    protected MultithreadEventLoopGroup(int nThreads, ThreadFactory threadFactory, Object... args) {
+        super(nThreads == 0? DEFAULT_EVENT_LOOP_THREADS : nThreads, threadFactory, args);
+    }
+}
+public final class io.netty.channel.nio.NioEventLoop extends SingleThreadEventLoop {
+    NioEventLoop(NioEventLoopGroup parent, ThreadFactory threadFactory, SelectorProvider selectorProvider, SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
+        super(parent, threadFactory, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);// 就是创建线程去了
+        provider = selectorProvider;
+        final SelectorTuple selectorTuple = openSelector();
+        selector = selectorTuple.selector;
+        unwrappedSelector = selectorTuple.unwrappedSelector;
+        selectStrategy = strategy;
+    }
+    protected void run() {
+        for (;;) {
+            switch (selectStrategy.calculateStrategy(selectNowSupplier, hasTasks())) {
+                case SelectStrategy.CONTINUE:
+                    continue;
+                case SelectStrategy.SELECT:
+                    select(wakenUp.getAndSet(false));
+                    if (wakenUp.get()) {
+                        selector.wakeup();
+                    }
+                default:
+            }
+            cancelledKeys = 0;
+            needsToSelectAgain = false;
+            final int ioRatio = this.ioRatio;
+            if (ioRatio == 100) {
+                processSelectedKeys();
+                runAllTasks();
+            } else {
+                final long ioStartTime = System.nanoTime();
+                processSelectedKeys();
+                final long ioTime = System.nanoTime() - ioStartTime;
+                runAllTasks(ioTime * (100 - ioRatio) / ioRatio);
+            }
+            if (isShuttingDown()) {
+                closeAll();
+                if (confirmShutdown()) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+public abstract class io.netty.channel.SingleThreadEventLoop extends SingleThreadEventExecutor implements EventLoop {
+    protected SingleThreadEventLoop(EventLoopGroup parent, ThreadFactory threadFactory, boolean addTaskWakesUp, int maxPendingTasks, RejectedExecutionHandler rejectedExecutionHandler) {
+        super(parent, threadFactory, addTaskWakesUp, maxPendingTasks, rejectedExecutionHandler);
+    }
+}
+
+public abstract class io.netty.util.concurrent.SingleThreadEventExecutor extends AbstractScheduledEventExecutor implements OrderedEventExecutor {
+    protected SingleThreadEventExecutor(
+            EventExecutorGroup parent, ThreadFactory threadFactory, boolean addTaskWakesUp, int maxPendingTasks,
+            RejectedExecutionHandler rejectedHandler) {
+        if (threadFactory == null) {
+            throw new NullPointerException("threadFactory");
+        }
+        this.parent = parent;
+        this.addTaskWakesUp = addTaskWakesUp;
+        thread = threadFactory.newThread(new Runnable() {
+            @Override
+            public void run() {
+                boolean success = false;
+                updateLastExecutionTime();
+                try {
+                    SingleThreadEventExecutor.this.run();
+                    success = true;
+                } catch (Throwable t) {
+                    logger.warn("Unexpected exception from an event executor: ", t);
+                } finally {
+                    for (;;) {
+                        int oldState = STATE_UPDATER.get(SingleThreadEventExecutor.this);
+                        if (oldState >= ST_SHUTTING_DOWN || STATE_UPDATER.compareAndSet(
+                                SingleThreadEventExecutor.this, oldState, ST_SHUTTING_DOWN)) {
+                            break;
+                        }
+                    }
+                    // Check if confirmShutdown() was called at the end of the loop.
+                    if (success && gracefulShutdownStartTime == 0) {
+                        logger.error(
+                                "Buggy " + EventExecutor.class.getSimpleName() + " implementation; " +
+                                SingleThreadEventExecutor.class.getSimpleName() + ".confirmShutdown() must be called " +
+                                "before run() implementation terminates.");
+                    }
+
+                    try {
+                        // Run all remaining tasks and shutdown hooks.
+                        for (;;) {
+                            if (confirmShutdown()) {
+                                break;
+                            }
+                        }
+                    } finally {
+                        try {
+                            cleanup();
+                        } finally {
+                            STATE_UPDATER.set(SingleThreadEventExecutor.this, ST_TERMINATED);
+                            threadLock.release();
+                            if (!taskQueue.isEmpty()) {
+                                logger.warn(
+                                        "An event executor terminated with " +
+                                        "non-empty task queue (" + taskQueue.size() + ')');
+                            }
+
+                            terminationFuture.setSuccess(null);
+                        }
+                    }
+                }
+            }
+        });
+        threadProperties = new DefaultThreadProperties(thread);
+        this.maxPendingTasks = Math.max(16, maxPendingTasks);
+        taskQueue = newTaskQueue();
+        rejectedExecutionHandler = ObjectUtil.checkNotNull(rejectedHandler, "rejectedHandler");
+    }
+}
+
+public class io.netty.util.concurrent.DefaultThreadFactory implements ThreadFactory {
+        public Thread newThread(Runnable r) {
+        Thread t = newThread(FastThreadLocalRunnable.wrap(r), prefix + nextId.incrementAndGet());
+        try {
+            if (t.isDaemon() != daemon) {
+                t.setDaemon(daemon);
+            }
+
+            if (t.getPriority() != priority) {
+                t.setPriority(priority);
+            }
+        } catch (Exception ignored) {
+            // Doesn't matter even if failed to set.
+        }
+        return t;
+    }
+    protected Thread newThread(Runnable r, String name) {
+        return new FastThreadLocalThread(threadGroup, r, name);
+    }
+}

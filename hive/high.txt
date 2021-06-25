@@ -16,6 +16,7 @@ select *,f.* from tab2 lateral view explode(split(name,"")) f;
 	-- 在 group by sum 的基础上开开窗, 2 个 job, 所以搞出来 sum(sum)
 	--没有 partition by 则 sum 前面所有值, 通过这个现象我也理解 BETWEEN ... AND ... 用法了, 说白了 BETWEEN ... AND 是个窗口, 在组内开窗
 	--说白了, 开窗是对前面的输出结果开窗
+  --ROWS ... 已经研究明白了
 --------
 create table testaa (id int ,month string ,num int)row format delimited fields terminated by ',';
 insert into testaa 

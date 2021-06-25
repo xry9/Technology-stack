@@ -12,3 +12,491 @@ git clone -b 6.0 https://github.com/elastic/elasticsearch.git
 ./gradlew idea
 
 v6.3.0, v6.4.2, jdk 用 10.0.2, 亦可
+----
+安装 lucene: 在源码 ivy-versions.properties 中找到ivy 版本, 到 maven 中下载一下放入 ${HOME}/.ant/lib, 执行 ant 即可
+apache mirror(https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz) 上下载的 lucene 与 github 上的不一样, 居然还有 join 模块
+
+
+============================================
+bindServerBootstrap===429|bindAddress===281
+
+sendResponse===77|messageReceived===58
+
+sendResponse===83|messageReceived===69
+
+getFromSearcher===236
+java api 会到 MessageChannelHandler#messageReceived 中, 不走 http 
+
+grep -E "STATE===STATE" 
+clientBootstrap===
+
+org.elasticsearch.action.search.type.TransportSearchTypeAction.BaseAsyncAction#performFirstPhase 方法的 
+  sendExecuteFirstPhase(node, internalSearchRequest(shard, shardsIts.size(), request, filteringAliases, startTime()), new ActionListener<FirstResult>() {}); 调用很重要
+
+org.elasticsearch.action.support.master.TransportMasterNodeAction#innerExecute
+
+
+
+
+public final class org.elasticsearch.bootstrap.Elasticsearch {
+    public static void main(String[] args) throws StartupError {
+        Bootstrap.init(args);
+    }
+}
+
+final class org.elasticsearch.bootstrap.Bootstrap {
+
+static void init(String[] args) throws Throwable {
+        BootstrapCLIParser bootstrapCLIParser = new BootstrapCLIParser();
+        CliTool.ExitStatus status = bootstrapCLIParser.execute(args);
+        INSTANCE = new Bootstrap();
+        Environment environment = initialSettings(foreground);
+        Settings settings = environment.settings();
+        if (JvmInfo.jvmInfo().getVmName().toLowerCase(Locale.ROOT).contains("client")) {
+            ESLogger logger = Loggers.getLogger(Bootstrap.class);
+            logger.warn("jvm uses the client vm, make sure to run `java` with the server vm for best performance by adding `-server` to the command line");
+        }
+        JVMCheck.check();
+        INSTANCE.setup(true, settings, environment);
+        INSTANCE.start();
+    }
+    private void setup(boolean addShutdownHook, Settings settings, Environment environment) throws Exception {
+        initializeNatives(settings.getAsBoolean("bootstrap.mlockall", false), settings.getAsBoolean("bootstrap.ctrlhandler", true));
+        initializeProbes();
+        JarHell.checkJarHell();
+        setupSecurity(settings, environment);
+        Settings nodeSettings = Settings.settingsBuilder().put(settings).put(InternalSettingsPreparer.IGNORE_SYSTEM_PROPERTIES_SETTING, true).build();
+        NodeBuilder nodeBuilder = NodeBuilder.nodeBuilder().settings(nodeSettings);
+        node = nodeBuilder.build();
+    }
+    private void start() {
+        node.start();
+        keepAliveThread.start();
+    }
+}
+public class org.elasticsearch.node.Node implements Releasable {
+
+    public Node(Settings preparedSettings) {
+        final Settings pSettings = settingsBuilder().put(preparedSettings).put(Client.CLIENT_TYPE_SETTING, CLIENT_TYPE).build();
+        Environment tmpEnv = InternalSettingsPreparer.prepareEnvironment(pSettings, null);
+        Settings tmpSettings = TribeService.processSettings(tmpEnv.settings());
+        Version version = pSettings.getAsVersion("tests.mock.version", Version.CURRENT);
+        ESLogger logger = Loggers.getLogger(Node.class, tmpSettings.get("name"));
+
+        logger.info("version[{}], pid[{}], build[{}/{}]", version, JvmInfo.jvmInfo().pid(), Build.CURRENT.hashShort(), Build.CURRENT.timestamp());
+        this.pluginsService = new PluginsService(tmpSettings, tmpEnv.pluginsFile());
+        this.settings = pluginsService.updatedSettings();
+        this.environment = new Environment(this.settings());
+        final NodeEnvironment nodeEnvironment;
+        nodeEnvironment = new NodeEnvironment(this.settings, this.environment);
+        final ThreadPool threadPool = new ThreadPool(settings);
+        boolean success = false;
+        ModulesBuilder modules = new ModulesBuilder();
+        modules.add(new Version.Module(version));
+        modules.add(new CircuitBreakerModule(settings));
+        for (Module pluginModule : pluginsService.nodeModules()) {
+            modules.add(pluginModule);
+        }
+        modules.add(new PluginsModule(pluginsService));
+        modules.add(new SettingsModule(this.settings));
+        modules.add(new NodeModule(this));
+        modules.add(new NetworkModule());
+        modules.add(new ScriptModule(this.settings));
+        modules.add(new EnvironmentModule(environment));
+        modules.add(new NodeEnvironmentModule(nodeEnvironment));
+        modules.add(new ClusterNameModule(this.settings));
+        modules.add(new ThreadPoolModule(threadPool));
+        modules.add(new DiscoveryModule(this.settings));
+        modules.add(new ClusterModule(this.settings));
+        modules.add(new RestModule(this.settings));
+        modules.add(new TransportModule(settings));
+        if (settings.getAsBoolean(HTTP_ENABLED, true)) {
+            modules.add(new HttpServerModule(settings));
+        }
+        modules.add(new IndicesModule(settings));
+        modules.add(new SearchModule(settings));
+        modules.add(new ActionModule(false));
+        modules.add(new MonitorModule(settings));
+        modules.add(new GatewayModule(settings));
+        modules.add(new NodeClientModule());
+        modules.add(new ShapeModule());
+        modules.add(new PercolatorModule());
+        modules.add(new ResourceWatcherModule());
+        modules.add(new RepositoriesModule());
+        modules.add(new TribeModule());
+        pluginsService.processModules(modules);
+        injector = modules.createInjector();
+        client = injector.getInstance(Client.class);
+        threadPool.setNodeSettingsService(injector.getInstance(NodeSettingsService.class));
+    }
+    public Node start() {
+        if (!lifecycle.moveToStarted()) {
+            return this;
+        }
+        ESLogger logger = Loggers.getLogger(Node.class, settings.get("name"));
+        injector.getInstance(Discovery.class).setRoutingService(injector.getInstance(RoutingService.class));
+        for (Class<? extends LifecycleComponent> plugin : pluginsService.nodeServices()) {
+            injector.getInstance(plugin).start();
+        }
+        injector.getInstance(MappingUpdatedAction.class).setClient(client);
+        injector.getInstance(IndicesService.class).start();// 好像没起动一个线程
+        injector.getInstance(IndexingMemoryController.class).start();// 实时监控 shard 状态, 
+        injector.getInstance(IndicesClusterStateService.class).start();// 做为一个 Listion 加到了 ClusterService 中
+        injector.getInstance(IndicesTTLService.class).start();// 大概是个插件功能
+        injector.getInstance(SnapshotsService.class).start();// 做为 TransportCreateSnapshotAction 的工具对象
+        injector.getInstance(SnapshotShardsService.class).start();// 工具对象
+        injector.getInstance(TransportService.class).start();// 启动了 NettyTransport
+        injector.getInstance(ClusterService.class).start();
+        injector.getInstance(RoutingService.class).start();
+        injector.getInstance(SearchService.class).start();
+        injector.getInstance(MonitorService.class).start();
+        injector.getInstance(RestController.class).start();
+        injector.getInstance(GatewayAllocator.class).setReallocation(injector.getInstance(ClusterService.class), injector.getInstance(RoutingService.class));
+        DiscoveryService discoService = injector.getInstance(DiscoveryService.class).start();
+        discoService.waitForInitialState();
+        injector.getInstance(GatewayService.class).start();
+        if (settings.getAsBoolean("http.enabled", true)) {
+            injector.getInstance(HttpServer.class).start();
+        }
+        injector.getInstance(ResourceWatcherService.class).start();
+        injector.getInstance(TribeService.class).start();
+        return this;
+    }
+}
+
+
+
+
+
+===registerHandler===116===GET===/===org.elasticsearch.rest.action.main.RestMainAction
+===registerHandler===116===GET===/_cat/allocation===org.elasticsearch.rest.action.cat.RestAllocationAction
+===registerHandler===116===GET===/_cat/allocation/{nodes}===org.elasticsearch.rest.action.cat.RestAllocationAction
+===registerHandler===116===GET===/_cat/shards===org.elasticsearch.rest.action.cat.RestShardsAction
+===registerHandler===116===GET===/_cat/shards/{index}===org.elasticsearch.rest.action.cat.RestShardsAction
+===registerHandler===116===GET===/_cat/master===org.elasticsearch.rest.action.cat.RestMasterAction
+===registerHandler===116===GET===/_cat/nodes===org.elasticsearch.rest.action.cat.RestNodesAction
+===registerHandler===116===GET===/_cat/indices===org.elasticsearch.rest.action.cat.RestIndicesAction
+===registerHandler===116===GET===/_cat/indices/{index}===org.elasticsearch.rest.action.cat.RestIndicesAction
+===registerHandler===116===GET===/_cat/segments===org.elasticsearch.rest.action.cat.RestSegmentsAction
+===registerHandler===116===GET===/_cat/segments/{index}===org.elasticsearch.rest.action.cat.RestSegmentsAction
+===registerHandler===116===GET===/_cat/count===org.elasticsearch.rest.action.cat.RestCountAction
+===registerHandler===116===GET===/_cat/count/{index}===org.elasticsearch.rest.action.cat.RestCountAction
+===registerHandler===116===GET===/_cat/recovery===org.elasticsearch.rest.action.cat.RestRecoveryAction
+===registerHandler===116===GET===/_cat/recovery/{index}===org.elasticsearch.rest.action.cat.RestRecoveryAction
+===registerHandler===116===GET===/_cat/health===org.elasticsearch.rest.action.cat.RestHealthAction
+===registerHandler===116===GET===/_cat/pending_tasks===org.elasticsearch.rest.action.cat.RestPendingClusterTasksAction
+===registerHandler===116===GET===/_cat/aliases===org.elasticsearch.rest.action.cat.RestAliasAction
+===registerHandler===116===GET===/_cat/aliases/{alias}===org.elasticsearch.rest.action.cat.RestAliasAction
+===registerHandler===116===GET===/_cat/thread_pool===org.elasticsearch.rest.action.cat.RestThreadPoolAction
+===registerHandler===116===GET===/_cat/plugins===org.elasticsearch.rest.action.cat.RestPluginsAction
+===registerHandler===116===GET===/_cat/fielddata===org.elasticsearch.rest.action.cat.RestFielddataAction
+===registerHandler===116===GET===/_cat/fielddata/{fields}===org.elasticsearch.rest.action.cat.RestFielddataAction
+===registerHandler===116===GET===/_cat/nodeattrs===org.elasticsearch.rest.action.cat.RestNodeAttrsAction
+===registerHandler===116===GET===/_cat===org.elasticsearch.rest.action.cat.RestCatAction
+===registerHandler===116===GET===/_cluster/stats===org.elasticsearch.rest.action.admin.cluster.stats.RestClusterStatsAction
+===registerHandler===116===GET===/_cluster/stats/nodes/{nodeId}===org.elasticsearch.rest.action.admin.cluster.stats.RestClusterStatsAction
+===registerHandler===116===GET===/_cluster/state===org.elasticsearch.rest.action.admin.cluster.state.RestClusterStateAction
+===registerHandler===116===GET===/_cluster/state/{metric}===org.elasticsearch.rest.action.admin.cluster.state.RestClusterStateAction
+===registerHandler===116===GET===/_cluster/state/{metric}/{indices}===org.elasticsearch.rest.action.admin.cluster.state.RestClusterStateAction
+===registerHandler===116===GET===/_cluster/health===org.elasticsearch.rest.action.admin.cluster.health.RestClusterHealthAction
+===registerHandler===116===GET===/_cluster/health/{index}===org.elasticsearch.rest.action.admin.cluster.health.RestClusterHealthAction
+===registerHandler===116===GET===/_cluster/settings===org.elasticsearch.rest.action.admin.cluster.settings.RestClusterGetSettingsAction
+===registerHandler===116===GET===/_cluster/pending_tasks===org.elasticsearch.rest.action.admin.cluster.tasks.RestPendingClusterTasksAction
+===registerHandler===116===GET===/_cluster/nodes/hotthreads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_cluster/nodes/hot_threads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_cluster/nodes/{nodeId}/hotthreads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_cluster/nodes/{nodeId}/hot_threads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_search===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===GET===/_search/template===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===GET===/_search/exists===org.elasticsearch.rest.action.exists.RestExistsAction
+===registerHandler===116===GET===/_search/scroll===org.elasticsearch.rest.action.search.RestSearchScrollAction
+===registerHandler===116===GET===/_search/scroll/{scroll_id}===org.elasticsearch.rest.action.search.RestSearchScrollAction
+===registerHandler===116===GET===/_search/template/{id}===org.elasticsearch.rest.action.template.RestGetSearchTemplateAction
+===registerHandler===116===GET===/_nodes===org.elasticsearch.rest.action.admin.cluster.node.info.RestNodesInfoAction
+===registerHandler===116===GET===/_nodes/{nodeId}===org.elasticsearch.rest.action.admin.cluster.node.info.RestNodesInfoAction
+===registerHandler===116===GET===/_nodes/{nodeId}/{metrics}===org.elasticsearch.rest.action.admin.cluster.node.info.RestNodesInfoAction
+===registerHandler===116===GET===/_nodes/{nodeId}/info/{metrics}===org.elasticsearch.rest.action.admin.cluster.node.info.RestNodesInfoAction
+===registerHandler===116===GET===/_nodes/stats===org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction
+===registerHandler===116===GET===/_nodes/{nodeId}/stats===org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction
+===registerHandler===116===GET===/_nodes/stats/{metric}===org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction
+===registerHandler===116===GET===/_nodes/{nodeId}/stats/{metric}===org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction
+===registerHandler===116===GET===/_nodes/stats/{metric}/{indexMetric}===org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction
+===registerHandler===116===GET===/_nodes/{nodeId}/stats/{metric}/{indexMetric}===org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction
+===registerHandler===116===GET===/_nodes/hotthreads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_nodes/hot_threads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_nodes/{nodeId}/hotthreads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_nodes/{nodeId}/hot_threads===org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction
+===registerHandler===116===GET===/_search_shards===org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction
+===registerHandler===116===GET===/{index}/_search_shards===org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction
+===registerHandler===116===GET===/{index}/{type}/_search_shards===org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction
+===registerHandler===116===GET===/{index}===org.elasticsearch.rest.action.admin.indices.get.RestGetIndicesAction
+===registerHandler===116===GET===/{index}/{type}===org.elasticsearch.rest.action.admin.indices.get.RestGetIndicesAction
+===registerHandler===116===GET===/{index}/_stats===org.elasticsearch.rest.action.admin.indices.stats.RestIndicesStatsAction
+===registerHandler===116===GET===/{index}/_stats/{metric}===org.elasticsearch.rest.action.admin.indices.stats.RestIndicesStatsAction
+===registerHandler===116===GET===/{index}/_segments===org.elasticsearch.rest.action.admin.indices.segments.RestIndicesSegmentsAction
+===registerHandler===116===GET===/{index}/_shard_stores===org.elasticsearch.rest.action.admin.indices.shards.RestIndicesShardStoresAction
+===registerHandler===116===GET===/{index}/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.get.RestGetAliasesAction
+===registerHandler===116===GET===/{index}/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.get.RestGetIndicesAliasesAction
+===registerHandler===116===GET===/{index}/_settings/{name}===org.elasticsearch.rest.action.admin.indices.settings.RestGetSettingsAction
+===registerHandler===116===GET===/{index}/_setting/{name}===org.elasticsearch.rest.action.admin.indices.settings.RestGetSettingsAction
+===registerHandler===116===GET===/{index}/_analyze===org.elasticsearch.rest.action.admin.indices.analyze.RestAnalyzeAction
+===registerHandler===116===GET===/{index}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.get.RestGetWarmerAction
+===registerHandler===116===GET===/{index}/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.get.RestGetWarmerAction
+===registerHandler===116===GET===/{index}/{type}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.get.RestGetWarmerAction
+===registerHandler===116===GET===/{index}/{type}/_mapping===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetMappingAction
+===registerHandler===116===GET===/{index}/_mappings/{type}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetMappingAction
+===registerHandler===116===GET===/{index}/_mapping/{type}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetMappingAction
+===registerHandler===116===GET===/{index}/_mapping/field/{fields}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetFieldMappingAction
+===registerHandler===116===GET===/{index}/{type}/_mapping/field/{fields}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetFieldMappingAction
+===registerHandler===116===GET===/{index}/_mapping/{type}/field/{fields}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetFieldMappingAction
+===registerHandler===116===GET===/{index}/_refresh===org.elasticsearch.rest.action.admin.indices.refresh.RestRefreshAction
+===registerHandler===116===GET===/{index}/_flush===org.elasticsearch.rest.action.admin.indices.flush.RestFlushAction
+===registerHandler===116===GET===/{index}/_flush/synced===org.elasticsearch.rest.action.admin.indices.flush.RestSyncedFlushAction
+===registerHandler===116===GET===/{index}/_optimize===org.elasticsearch.rest.action.admin.indices.optimize.RestOptimizeAction
+===registerHandler===116===GET===/{index}/_upgrade===org.elasticsearch.rest.action.admin.indices.upgrade.RestUpgradeAction
+===registerHandler===116===GET===/{index}/_cache/clear===org.elasticsearch.rest.action.admin.indices.cache.clear.RestClearIndicesCacheAction
+===registerHandler===116===GET===/{index}/{type}/{id}===org.elasticsearch.rest.action.get.RestGetAction
+===registerHandler===116===GET===/{index}/{type}/{id}/_source===org.elasticsearch.rest.action.get.RestGetSourceAction
+===registerHandler===116===GET===/{index}/_mget===org.elasticsearch.rest.action.get.RestMultiGetAction
+===registerHandler===116===GET===/{index}/{type}/_mget===org.elasticsearch.rest.action.get.RestMultiGetAction
+===registerHandler===116===GET===/{index}/_count===org.elasticsearch.rest.action.count.RestCountAction
+===registerHandler===116===GET===/{index}/{type}/_count===org.elasticsearch.rest.action.count.RestCountAction
+===registerHandler===116===GET===/{index}/_suggest===org.elasticsearch.rest.action.suggest.RestSuggestAction
+===registerHandler===116===GET===/{index}/{type}/_termvectors===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===GET===/{index}/{type}/{id}/_termvectors===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===GET===/{index}/{type}/_termvector===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===GET===/{index}/{type}/{id}/_termvector===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===GET===/{index}/_mtermvectors===org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction
+===registerHandler===116===GET===/{index}/{type}/_mtermvectors===org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction
+===registerHandler===116===GET===/{index}/{type}/_percolate===org.elasticsearch.rest.action.percolate.RestPercolateAction
+===registerHandler===116===GET===/{index}/{type}/{id}/_percolate===org.elasticsearch.rest.action.percolate.RestPercolateAction$RestPercolateExistingDocHandler
+===registerHandler===116===GET===/{index}/{type}/_percolate/count===org.elasticsearch.rest.action.percolate.RestPercolateAction$RestCountPercolateDocHandler
+===registerHandler===116===GET===/{index}/{type}/{id}/_percolate/count===org.elasticsearch.rest.action.percolate.RestPercolateAction$RestCountPercolateExistingDocHandler
+===registerHandler===116===GET===/{index}/_mpercolate===org.elasticsearch.rest.action.percolate.RestMultiPercolateAction
+===registerHandler===116===GET===/{index}/{type}/_mpercolate===org.elasticsearch.rest.action.percolate.RestMultiPercolateAction
+===registerHandler===116===GET===/{index}/_search===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===GET===/{index}/{type}/_search===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===GET===/{index}/_search/template===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===GET===/{index}/{type}/_search/template===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===GET===/{index}/_search/exists===org.elasticsearch.rest.action.exists.RestExistsAction
+===registerHandler===116===GET===/{index}/{type}/_search/exists===org.elasticsearch.rest.action.exists.RestExistsAction
+===registerHandler===116===GET===/{index}/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
+===registerHandler===116===GET===/{index}/{type}/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
+===registerHandler===116===GET===/{index}/_validate/query===org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction
+===registerHandler===116===GET===/{index}/{type}/_validate/query===org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction
+===registerHandler===116===GET===/{index}/{type}/{id}/_explain===org.elasticsearch.rest.action.explain.RestExplainAction
+===registerHandler===116===GET===/{index}/_recovery===org.elasticsearch.rest.action.admin.indices.recovery.RestRecoveryAction
+===registerHandler===116===GET===/{index}/_field_stats===org.elasticsearch.rest.action.fieldstats.RestFieldStatsAction
+===registerHandler===116===GET===/_snapshot===org.elasticsearch.rest.action.admin.cluster.repositories.get.RestGetRepositoriesAction
+===registerHandler===116===GET===/_snapshot/{repository}===org.elasticsearch.rest.action.admin.cluster.repositories.get.RestGetRepositoriesAction
+===registerHandler===116===GET===/_snapshot/{repository}/{snapshot}===org.elasticsearch.rest.action.admin.cluster.snapshots.get.RestGetSnapshotsAction
+===registerHandler===116===GET===/_snapshot/{repository}/{snapshot}/_status===org.elasticsearch.rest.action.admin.cluster.snapshots.status.RestSnapshotsStatusAction
+===registerHandler===116===GET===/_snapshot/{repository}/_status===org.elasticsearch.rest.action.admin.cluster.snapshots.status.RestSnapshotsStatusAction
+===registerHandler===116===GET===/_snapshot/_status===org.elasticsearch.rest.action.admin.cluster.snapshots.status.RestSnapshotsStatusAction
+===registerHandler===116===GET===/_stats===org.elasticsearch.rest.action.admin.indices.stats.RestIndicesStatsAction
+===registerHandler===116===GET===/_stats/{metric}===org.elasticsearch.rest.action.admin.indices.stats.RestIndicesStatsAction
+===registerHandler===116===GET===/_stats/{metric}/{indexMetric}===org.elasticsearch.rest.action.admin.indices.stats.RestIndicesStatsAction
+===registerHandler===116===GET===/_segments===org.elasticsearch.rest.action.admin.indices.segments.RestIndicesSegmentsAction
+===registerHandler===116===GET===/_shard_stores===org.elasticsearch.rest.action.admin.indices.shards.RestIndicesShardStoresAction
+===registerHandler===116===GET===/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.get.RestGetAliasesAction
+===registerHandler===116===GET===/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.get.RestGetIndicesAliasesAction
+===registerHandler===116===GET===/_settings/{name}===org.elasticsearch.rest.action.admin.indices.settings.RestGetSettingsAction
+===registerHandler===116===GET===/_analyze===org.elasticsearch.rest.action.admin.indices.analyze.RestAnalyzeAction
+===registerHandler===116===GET===/_template===org.elasticsearch.rest.action.admin.indices.template.get.RestGetIndexTemplateAction
+===registerHandler===116===GET===/_template/{name}===org.elasticsearch.rest.action.admin.indices.template.get.RestGetIndexTemplateAction
+===registerHandler===116===GET===/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.get.RestGetWarmerAction
+===registerHandler===116===GET===/_mapping/{type}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetMappingAction
+===registerHandler===116===GET===/_mapping/field/{fields}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetFieldMappingAction
+===registerHandler===116===GET===/_mapping/{type}/field/{fields}===org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetFieldMappingAction
+===registerHandler===116===GET===/_refresh===org.elasticsearch.rest.action.admin.indices.refresh.RestRefreshAction
+===registerHandler===116===GET===/_flush===org.elasticsearch.rest.action.admin.indices.flush.RestFlushAction
+===registerHandler===116===GET===/_flush/synced===org.elasticsearch.rest.action.admin.indices.flush.RestSyncedFlushAction
+===registerHandler===116===GET===/_optimize===org.elasticsearch.rest.action.admin.indices.optimize.RestOptimizeAction
+===registerHandler===116===GET===/_upgrade===org.elasticsearch.rest.action.admin.indices.upgrade.RestUpgradeAction
+===registerHandler===116===GET===/_cache/clear===org.elasticsearch.rest.action.admin.indices.cache.clear.RestClearIndicesCacheAction
+===registerHandler===116===GET===/_mget===org.elasticsearch.rest.action.get.RestMultiGetAction
+===registerHandler===116===GET===/_count===org.elasticsearch.rest.action.count.RestCountAction
+===registerHandler===116===GET===/_suggest===org.elasticsearch.rest.action.suggest.RestSuggestAction
+===registerHandler===116===GET===/_mtermvectors===org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction
+===registerHandler===116===GET===/_mpercolate===org.elasticsearch.rest.action.percolate.RestMultiPercolateAction
+===registerHandler===116===GET===/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
+===registerHandler===116===GET===/_render/template===org.elasticsearch.rest.action.admin.indices.validate.template.RestRenderSearchTemplateAction
+===registerHandler===116===GET===/_render/template/{id}===org.elasticsearch.rest.action.admin.indices.validate.template.RestRenderSearchTemplateAction
+===registerHandler===116===GET===/_validate/query===org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction
+===registerHandler===116===GET===/_recovery===org.elasticsearch.rest.action.admin.indices.recovery.RestRecoveryAction
+===registerHandler===116===GET===/_scripts/{lang}/{id}===org.elasticsearch.rest.action.script.RestGetIndexedScriptAction
+===registerHandler===116===GET===/_field_stats===org.elasticsearch.rest.action.fieldstats.RestFieldStatsAction
+
+
+===registerHandler===116===HEAD===/{index}===org.elasticsearch.rest.action.admin.indices.exists.indices.RestIndicesExistsAction
+===registerHandler===116===HEAD===/{index}/{type}===org.elasticsearch.rest.action.admin.indices.exists.types.RestTypesExistsAction
+===registerHandler===116===HEAD===/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.head.RestAliasesExistAction
+===registerHandler===116===HEAD===/{index}/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.head.RestAliasesExistAction
+===registerHandler===116===HEAD===/{index}/_alias===org.elasticsearch.rest.action.admin.indices.alias.head.RestAliasesExistAction
+===registerHandler===116===HEAD===/===org.elasticsearch.rest.action.main.RestMainAction
+===registerHandler===116===HEAD===/{index}/{type}/{id}===org.elasticsearch.rest.action.get.RestHeadAction
+===registerHandler===116===HEAD===/{index}/{type}/{id}/_source===org.elasticsearch.rest.action.get.RestHeadAction
+===registerHandler===116===HEAD===/_template/{name}===org.elasticsearch.rest.action.admin.indices.template.head.RestHeadIndexTemplateAction
+
+
+
+===registerHandler===116===DELETE===/_search/template/{id}===org.elasticsearch.rest.action.template.RestDeleteSearchTemplateAction
+===registerHandler===116===DELETE===/_scripts/{lang}/{id}===org.elasticsearch.rest.action.script.RestDeleteIndexedScriptAction
+===registerHandler===116===DELETE===/_snapshot/{repository}===org.elasticsearch.rest.action.admin.cluster.repositories.delete.RestDeleteRepositoryAction
+===registerHandler===116===DELETE===/_snapshot/{repository}/{snapshot}===org.elasticsearch.rest.action.admin.cluster.snapshots.delete.RestDeleteSnapshotAction
+===registerHandler===116===DELETE===/{index}/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.delete.RestIndexDeleteAliasesAction
+===registerHandler===116===DELETE===/{index}/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.delete.RestIndexDeleteAliasesAction
+===registerHandler===116===DELETE===/===org.elasticsearch.rest.action.admin.indices.delete.RestDeleteIndexAction
+===registerHandler===116===DELETE===/{index}===org.elasticsearch.rest.action.admin.indices.delete.RestDeleteIndexAction
+===registerHandler===116===DELETE===/_template/{name}===org.elasticsearch.rest.action.admin.indices.template.delete.RestDeleteIndexTemplateAction
+===registerHandler===116===DELETE===/{index}/_warmer===org.elasticsearch.rest.action.admin.indices.warmer.delete.RestDeleteWarmerAction
+===registerHandler===116===DELETE===/{index}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.delete.RestDeleteWarmerAction
+===registerHandler===116===DELETE===/{index}/_warmers===org.elasticsearch.rest.action.admin.indices.warmer.delete.RestDeleteWarmerAction
+===registerHandler===116===DELETE===/{index}/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.delete.RestDeleteWarmerAction
+===registerHandler===116===DELETE===/{index}/{type}/{id}===org.elasticsearch.rest.action.delete.RestDeleteAction
+===registerHandler===116===DELETE===/_search/scroll===org.elasticsearch.rest.action.search.RestClearScrollAction
+===registerHandler===116===DELETE===/_search/scroll/{scroll_id}===org.elasticsearch.rest.action.search.RestClearScrollAction
+
+===registerHandler===116===PUT===/_snapshot/{repository}/{snapshot}===org.elasticsearch.rest.action.admin.cluster.snapshots.create.RestCreateSnapshotAction
+===registerHandler===116===PUT===/{index}/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/{index}/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/{index}/_alias===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/_alias===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/{index}/_aliases===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===PUT===/{index}===org.elasticsearch.rest.action.admin.indices.create.RestCreateIndexAction
+===registerHandler===116===PUT===/{index}/_settings===org.elasticsearch.rest.action.admin.indices.settings.RestUpdateSettingsAction
+===registerHandler===116===PUT===/_settings===org.elasticsearch.rest.action.admin.indices.settings.RestUpdateSettingsAction
+===registerHandler===116===PUT===/_template/{name}===org.elasticsearch.rest.action.admin.indices.template.put.RestPutIndexTemplateAction
+===registerHandler===116===PUT===/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===PUT===/{index}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===PUT===/{index}/{type}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===PUT===/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===PUT===/{index}/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===PUT===/{index}/{type}/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===PUT===/{index}/_mapping/===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/{index}/{type}/_mapping===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/{index}/_mapping/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/_mapping/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/{index}/_mappings/===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/{index}/{type}/_mappings===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/{index}/_mappings/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/_mappings/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===PUT===/{index}/{type}/{id}===org.elasticsearch.rest.action.index.RestIndexAction
+===registerHandler===116===PUT===/{index}/{type}/_bulk===org.elasticsearch.rest.action.bulk.RestBulkAction
+===registerHandler===116===PUT===/_search/template/{id}===org.elasticsearch.rest.action.template.RestPutSearchTemplateAction
+===registerHandler===116===PUT===/_search/template/{id}/_create===org.elasticsearch.rest.action.template.RestPutSearchTemplateAction$CreateHandler
+===registerHandler===116===PUT===/_scripts/{lang}/{id}===org.elasticsearch.rest.action.script.RestPutIndexedScriptAction
+===registerHandler===116===PUT===/_scripts/{lang}/{id}/_create===org.elasticsearch.rest.action.script.RestPutIndexedScriptAction$CreateHandler
+===registerHandler===116===PUT===/_bulk===org.elasticsearch.rest.action.bulk.RestBulkAction
+===registerHandler===116===PUT===/{index}/{type}/{id}/_create===org.elasticsearch.rest.action.index.RestIndexAction$CreateHandler
+===registerHandler===116===PUT===/{index}/_bulk===org.elasticsearch.rest.action.bulk.RestBulkAction
+===registerHandler===116===PUT===/_snapshot/{repository}===org.elasticsearch.rest.action.admin.cluster.repositories.put.RestPutRepositoryAction
+===registerHandler===116===PUT===/_cluster/settings===org.elasticsearch.rest.action.admin.cluster.settings.RestClusterUpdateSettingsAction
+
+===registerHandler===116===POST===/{index}/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===POST===/_alias/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===POST===/{index}/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===POST===/_aliases/{name}===org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction
+===registerHandler===116===POST===/_aliases===org.elasticsearch.rest.action.admin.indices.alias.RestIndicesAliasesAction
+===registerHandler===116===POST===/_analyze===org.elasticsearch.rest.action.admin.indices.analyze.RestAnalyzeAction
+===registerHandler===116===POST===/{index}/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
+===registerHandler===116===POST===/{index}/{type}/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
+===registerHandler===116===POST===/_render/template===org.elasticsearch.rest.action.admin.indices.validate.template.RestRenderSearchTemplateAction
+===registerHandler===116===POST===/_render/template/{id}===org.elasticsearch.rest.action.admin.indices.validate.template.RestRenderSearchTemplateAction
+===registerHandler===116===POST===/_validate/query===org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction
+===registerHandler===116===POST===/{index}/_validate/query===org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction
+===registerHandler===116===POST===/{index}/{type}/_validate/query===org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction
+===registerHandler===116===POST===/{index}/{type}/{id}/_explain===org.elasticsearch.rest.action.explain.RestExplainAction
+===registerHandler===116===POST===/_search/template/{id}===org.elasticsearch.rest.action.template.RestPutSearchTemplateAction
+===registerHandler===116===POST===/_search/template/{id}/_create===org.elasticsearch.rest.action.template.RestPutSearchTemplateAction$CreateHandler
+===registerHandler===116===POST===/_scripts/{lang}/{id}/_create===org.elasticsearch.rest.action.script.RestPutIndexedScriptAction$CreateHandler
+===registerHandler===116===POST===/{index}/_analyze===org.elasticsearch.rest.action.admin.indices.analyze.RestAnalyzeAction
+===registerHandler===116===POST===/_template/{name}===org.elasticsearch.rest.action.admin.indices.template.put.RestPutIndexTemplateAction
+===registerHandler===116===POST===/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===POST===/{index}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===POST===/{index}/{type}/_warmer/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===POST===/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===POST===/{index}/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===POST===/{index}/{type}/_warmers/{name}===org.elasticsearch.rest.action.admin.indices.warmer.put.RestPutWarmerAction
+===registerHandler===116===POST===/{index}/_mapping/===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/{index}/{type}/_mapping===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/{index}/_mapping/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/_mapping/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/{index}/_mappings/===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/{index}/{type}/_mappings===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/{index}/_mappings/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/_mappings/{type}===org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction
+===registerHandler===116===POST===/_refresh===org.elasticsearch.rest.action.admin.indices.refresh.RestRefreshAction
+===registerHandler===116===POST===/{index}/_refresh===org.elasticsearch.rest.action.admin.indices.refresh.RestRefreshAction
+===registerHandler===116===POST===/_flush===org.elasticsearch.rest.action.admin.indices.flush.RestFlushAction
+===registerHandler===116===POST===/{index}/_flush===org.elasticsearch.rest.action.admin.indices.flush.RestFlushAction
+===registerHandler===116===POST===/_flush/synced===org.elasticsearch.rest.action.admin.indices.flush.RestSyncedFlushAction
+===registerHandler===116===POST===/{index}/_flush/synced===org.elasticsearch.rest.action.admin.indices.flush.RestSyncedFlushAction
+===registerHandler===116===POST===/_optimize===org.elasticsearch.rest.action.admin.indices.optimize.RestOptimizeAction
+===registerHandler===116===POST===/{index}/_optimize===org.elasticsearch.rest.action.admin.indices.optimize.RestOptimizeAction
+===registerHandler===116===POST===/_upgrade===org.elasticsearch.rest.action.admin.indices.upgrade.RestUpgradeAction
+===registerHandler===116===POST===/{index}/_upgrade===org.elasticsearch.rest.action.admin.indices.upgrade.RestUpgradeAction
+===registerHandler===116===POST===/_cache/clear===org.elasticsearch.rest.action.admin.indices.cache.clear.RestClearIndicesCacheAction
+===registerHandler===116===POST===/{index}/_cache/clear===org.elasticsearch.rest.action.admin.indices.cache.clear.RestClearIndicesCacheAction
+===registerHandler===116===POST===/{index}/{type}===org.elasticsearch.rest.action.index.RestIndexAction
+===registerHandler===116===POST===/{index}/{type}/{id}===org.elasticsearch.rest.action.index.RestIndexAction
+===registerHandler===116===POST===/{index}/{type}/{id}/_create===org.elasticsearch.rest.action.index.RestIndexAction$CreateHandler
+===registerHandler===116===POST===/_mget===org.elasticsearch.rest.action.get.RestMultiGetAction
+===registerHandler===116===POST===/{index}/_mget===org.elasticsearch.rest.action.get.RestMultiGetAction
+===registerHandler===116===POST===/{index}/{type}/_mget===org.elasticsearch.rest.action.get.RestMultiGetAction
+===registerHandler===116===POST===/_count===org.elasticsearch.rest.action.count.RestCountAction
+===registerHandler===116===POST===/{index}/_count===org.elasticsearch.rest.action.count.RestCountAction
+===registerHandler===116===POST===/{index}/{type}/_count===org.elasticsearch.rest.action.count.RestCountAction
+===registerHandler===116===POST===/_suggest===org.elasticsearch.rest.action.suggest.RestSuggestAction
+===registerHandler===116===POST===/{index}/_suggest===org.elasticsearch.rest.action.suggest.RestSuggestAction
+===registerHandler===116===POST===/{index}/{type}/_termvectors===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===POST===/{index}/{type}/{id}/_termvectors===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===POST===/{index}/{type}/_termvector===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===POST===/{index}/{type}/{id}/_termvector===org.elasticsearch.rest.action.termvectors.RestTermVectorsAction
+===registerHandler===116===POST===/_mtermvectors===org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction
+===registerHandler===116===POST===/_scripts/{lang}/{id}===org.elasticsearch.rest.action.script.RestPutIndexedScriptAction
+===registerHandler===116===POST===/_field_stats===org.elasticsearch.rest.action.fieldstats.RestFieldStatsAction
+===registerHandler===116===POST===/{index}/_field_stats===org.elasticsearch.rest.action.fieldstats.RestFieldStatsAction
+===registerHandler===116===POST===/_cluster/reroute===org.elasticsearch.rest.action.admin.cluster.reroute.RestClusterRerouteAction
+===registerHandler===116===POST===/_search_shards===org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction
+===registerHandler===116===POST===/{index}/_search_shards===org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction
+===registerHandler===116===POST===/{index}/{type}/_search_shards===org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction
+===registerHandler===116===POST===/_snapshot/{repository}===org.elasticsearch.rest.action.admin.cluster.repositories.put.RestPutRepositoryAction
+===registerHandler===116===POST===/_snapshot/{repository}/_verify===org.elasticsearch.rest.action.admin.cluster.repositories.verify.RestVerifyRepositoryAction
+===registerHandler===116===POST===/_snapshot/{repository}/{snapshot}===org.elasticsearch.rest.action.admin.cluster.snapshots.create.RestCreateSnapshotAction
+===registerHandler===116===POST===/_snapshot/{repository}/{snapshot}/_restore===org.elasticsearch.rest.action.admin.cluster.snapshots.restore.RestRestoreSnapshotAction
+===registerHandler===116===POST===/_close===org.elasticsearch.rest.action.admin.indices.close.RestCloseIndexAction
+===registerHandler===116===POST===/{index}/_close===org.elasticsearch.rest.action.admin.indices.close.RestCloseIndexAction
+===registerHandler===116===POST===/_open===org.elasticsearch.rest.action.admin.indices.open.RestOpenIndexAction
+===registerHandler===116===POST===/{index}/_open===org.elasticsearch.rest.action.admin.indices.open.RestOpenIndexAction
+===registerHandler===116===POST===/{index}===org.elasticsearch.rest.action.admin.indices.create.RestCreateIndexAction
+===registerHandler===116===POST===/{index}/_mtermvectors===org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction
+===registerHandler===116===POST===/{index}/{type}/_mtermvectors===org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction
+===registerHandler===116===POST===/_bulk===org.elasticsearch.rest.action.bulk.RestBulkAction
+===registerHandler===116===POST===/{index}/_bulk===org.elasticsearch.rest.action.bulk.RestBulkAction
+===registerHandler===116===POST===/{index}/{type}/_bulk===org.elasticsearch.rest.action.bulk.RestBulkAction
+===registerHandler===116===POST===/{index}/{type}/{id}/_update===org.elasticsearch.rest.action.update.RestUpdateAction
+===registerHandler===116===POST===/{index}/{type}/_percolate===org.elasticsearch.rest.action.percolate.RestPercolateAction
+===registerHandler===116===POST===/{index}/{type}/{id}/_percolate===org.elasticsearch.rest.action.percolate.RestPercolateAction$RestPercolateExistingDocHandler
+===registerHandler===116===POST===/{index}/{type}/_percolate/count===org.elasticsearch.rest.action.percolate.RestPercolateAction$RestCountPercolateDocHandler
+===registerHandler===116===POST===/{index}/{type}/{id}/_percolate/count===org.elasticsearch.rest.action.percolate.RestPercolateAction$RestCountPercolateExistingDocHandler
+===registerHandler===116===POST===/_mpercolate===org.elasticsearch.rest.action.percolate.RestMultiPercolateAction
+===registerHandler===116===POST===/{index}/_mpercolate===org.elasticsearch.rest.action.percolate.RestMultiPercolateAction
+===registerHandler===116===POST===/{index}/{type}/_mpercolate===org.elasticsearch.rest.action.percolate.RestMultiPercolateAction
+===registerHandler===116===POST===/_search===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===POST===/{index}/_search===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===POST===/{index}/{type}/_search===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===POST===/_search/template===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===POST===/{index}/_search/template===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===POST===/{index}/{type}/_search/template===org.elasticsearch.rest.action.search.RestSearchAction
+===registerHandler===116===POST===/_search/exists===org.elasticsearch.rest.action.exists.RestExistsAction
+===registerHandler===116===POST===/{index}/_search/exists===org.elasticsearch.rest.action.exists.RestExistsAction
+===registerHandler===116===POST===/{index}/{type}/_search/exists===org.elasticsearch.rest.action.exists.RestExistsAction
+===registerHandler===116===POST===/_search/scroll===org.elasticsearch.rest.action.search.RestSearchScrollAction
+===registerHandler===116===POST===/_search/scroll/{scroll_id}===org.elasticsearch.rest.action.search.RestSearchScrollAction
+===registerHandler===116===POST===/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
+
+
+
