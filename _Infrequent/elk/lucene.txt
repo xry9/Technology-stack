@@ -1,0 +1,4 @@
+1、从 https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz 下载的包, 用 ant(1.9.8) 编译
+2、idea 执行 HelloWord 时, Groovy 报错, 去了就行   https://blog.csdn.net/u013361668/article/details/79568685
+3、去掉  test-framework 工程和各种 test 包
+4、expressions 工程基本都被注释了, 其它还有各别类

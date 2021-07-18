@@ -1,4 +1,5 @@
 https://github.com/elastic/elasticsearch/
+mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-2.0.0-1/lib/elasticsearch-2.0.0.jar&& cp target/elasticsearch-2.0.3-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-2.0.0-2/lib/elasticsearch-2.0.0.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-2.0.0-3/lib/elasticsearch-2.0.0.jar
 
 git clone -b 1.2 https://github.com/elastic/elasticsearch.git
 mvn clean package -DskipTests
@@ -16,27 +17,46 @@ v6.3.0, v6.4.2, jdk 用 10.0.2, 亦可
 安装 lucene: 在源码 ivy-versions.properties 中找到ivy 版本, 到 maven 中下载一下放入 ${HOME}/.ant/lib, 执行 ant 即可
 apache mirror(https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz) 上下载的 lucene 与 github 上的不一样, 居然还有 join 模块
 
+http.port: 9600
+transport.tcp.port: 9700
+path.data: /Users/fintopia/app/elasticsearch-6.4.2-3/data
+path.logs: /Users/fintopia/app/elasticsearch-6.4.2-3/logs
+discovery.zen.ping.unicast.hosts: ["127.0.0.1:9300", "127.0.0.1:9500", "127.0.0.1:9700"]
 
 ============================================
 bindServerBootstrap===429|bindAddress===281
 
 sendResponse===77|messageReceived===58
 
-sendResponse===83|messageReceived===69
+sendRequest===756, messageReceived===115
+sendResponse===97, messageReceived===132
+
+
+集群的 ClusterState 是关键, put===635(三行数据的是 master), execute===3 是 ClusterState 的关键
+Create===766, allocateUnassigned===97(选举出 primary shard)
+org.elasticsearch.action.support.replication.TransportReplicationAction.PrimaryPhase#finishAndMoveToReplication, primary shard 写完后会执行
+-- master 在 3, 但是 primary shard 只有一个在 3, 其它在 1
+allocateUnassigned===97
 
 getFromSearcher===236
 java api 会到 MessageChannelHandler#messageReceived 中, 不走 http 
 
-grep -E "STATE===STATE" 
+grep -E "STATE===STATE"
 clientBootstrap===
+
+
+
+这行代码: this.nodeId = nodeId.intern();
+curl -XPUT 'http://localhost:9200/usermanage/_settings' -H 'Content-Type: application/json' -d '
+{
+"index" : {
+"number_of_replicas" : 3
+}
+}'
+
 
 org.elasticsearch.action.search.type.TransportSearchTypeAction.BaseAsyncAction#performFirstPhase 方法的 
   sendExecuteFirstPhase(node, internalSearchRequest(shard, shardsIts.size(), request, filteringAliases, startTime()), new ActionListener<FirstResult>() {}); 调用很重要
-
-org.elasticsearch.action.support.master.TransportMasterNodeAction#innerExecute
-
-
-
 
 public final class org.elasticsearch.bootstrap.Elasticsearch {
     public static void main(String[] args) throws StartupError {
@@ -45,8 +65,7 @@ public final class org.elasticsearch.bootstrap.Elasticsearch {
 }
 
 final class org.elasticsearch.bootstrap.Bootstrap {
-
-static void init(String[] args) throws Throwable {
+    static void init(String[] args) throws Throwable {
         BootstrapCLIParser bootstrapCLIParser = new BootstrapCLIParser();
         CliTool.ExitStatus status = bootstrapCLIParser.execute(args);
         INSTANCE = new Bootstrap();
@@ -146,15 +165,15 @@ public class org.elasticsearch.node.Node implements Releasable {
         injector.getInstance(SnapshotsService.class).start();// 做为 TransportCreateSnapshotAction 的工具对象
         injector.getInstance(SnapshotShardsService.class).start();// 工具对象
         injector.getInstance(TransportService.class).start();// 启动了 NettyTransport
-        injector.getInstance(ClusterService.class).start();
-        injector.getInstance(RoutingService.class).start();
-        injector.getInstance(SearchService.class).start();
-        injector.getInstance(MonitorService.class).start();
-        injector.getInstance(RestController.class).start();
+        injector.getInstance(ClusterService.class).start();// 内容太多
+        injector.getInstance(RoutingService.class).start();//
+        injector.getInstance(SearchService.class).start();//被调用, 分了多个阶段
+        injector.getInstance(MonitorService.class).start();// jvmMonitorService
+        injector.getInstance(RestController.class).start();//
         injector.getInstance(GatewayAllocator.class).setReallocation(injector.getInstance(ClusterService.class), injector.getInstance(RoutingService.class));
         DiscoveryService discoService = injector.getInstance(DiscoveryService.class).start();
         discoService.waitForInitialState();
-        injector.getInstance(GatewayService.class).start();
+        injector.getInstance(GatewayService.class).start();// 自身做为 clusterService 的插件
         if (settings.getAsBoolean("http.enabled", true)) {
             injector.getInstance(HttpServer.class).start();
         }
@@ -164,9 +183,386 @@ public class org.elasticsearch.node.Node implements Releasable {
     }
 }
 
+ public class com.xry9.elasticsearch.EsClient {
+    private void buildClient() {
+        Settings settings = Settings.settingsBuilder().put("cluster.name", esEnv.getClusterName()).put("transport.tcp.compress", true).build();
+        client = TransportClient.builder().settings(settings).build().addTransportAddresses(addressArr);
+    }
+}
+public class com.xry9.elasticsearch.EsUserImpl extends AbstractEntityService<User>implements EsUserService {
+    public void singleInsert(User user) {
+        flag = esclient.getIndexRequestBuilder().setIndex(indexName).setType(typeName).setSource(this.buildEntity(user)).execute().actionGet().isCreated();
+        esclient.esRefresh();
+    }
+}
+public class org.elasticsearch.client.transport.TransportClient extends AbstractClient {
+    public TransportClient addTransportAddresses(TransportAddress... transportAddress) {
+        nodesService.addTransportAddresses(transportAddress);
+        return this;
+    }
+    protected <Request extends ActionRequest, Response extends ActionResponse, RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>> void doExecute(Action<Request, Response, RequestBuilder> action, Request request, ActionListener<Response> listener) {
+        proxy.execute(action, request, listener);
+    }
+}
+
+public class org.elasticsearch.client.transport.TransportClientNodesService extends AbstractComponent {
+    public TransportClientNodesService addTransportAddresses(TransportAddress... transportAddresses) {
+        synchronized (mutex) {
+            List<TransportAddress> filtered = Lists.newArrayListWithExpectedSize(transportAddresses.length);
+            for (TransportAddress transportAddress : transportAddresses) {
+                boolean found = false;
+                for (DiscoveryNode otherNode : listedNodes) {
+                    if (otherNode.address().equals(transportAddress)) {
+                        found = true;
+                        logger.debug("address [{}] already exists with [{}], ignoring...", transportAddress, otherNode);
+                        break;
+                    }
+                }
+                if (!found) {
+                    filtered.add(transportAddress);
+                }
+            }
+            ImmutableList.Builder<DiscoveryNode> builder = ImmutableList.builder();
+            builder.addAll(listedNodes());
+            for (TransportAddress transportAddress : filtered) {
+                DiscoveryNode node = new DiscoveryNode("#transport#-" + tempNodeIdGenerator.incrementAndGet(), transportAddress, minCompatibilityVersion);
+                builder.add(node);
+            }
+            listedNodes = builder.build();
+            nodesSampler.sample();
+        }
+        return this;
+    }
+    abstract class NodeSampler {
+        public void sample() {
+            synchronized (mutex) {
+                if (closed) {
+                    return;
+                }
+                doSample();
+            }
+        }
+    }
+    class SimpleNodeSampler extends NodeSampler {
+        @Override
+        protected void doSample() {
+            HashSet<DiscoveryNode> newNodes = new HashSet<>();
+            HashSet<DiscoveryNode> newFilteredNodes = new HashSet<>();
+            for (DiscoveryNode listedNode : listedNodes) {
+                LivenessResponse livenessResponse = transportService.submitRequest(listedNode, TransportLivenessAction.NAME,
+                        headers.applyTo(new LivenessRequest()),
+                        TransportRequestOptions.options().withType(TransportRequestOptions.Type.STATE).withTimeout(pingTimeout),
+                        new FutureTransportResponseHandler<LivenessResponse>() {
+                            public LivenessResponse newInstance() {
+                                return new LivenessResponse();
+                            }
+                        }).txGet();
+                if (!ignoreClusterName && !clusterName.equals(livenessResponse.getClusterName())) {
+                    newFilteredNodes.add(listedNode);
+                } else if (livenessResponse.getDiscoveryNode() != null) {
+                    DiscoveryNode nodeWithInfo = livenessResponse.getDiscoveryNode();
+                    newNodes.add(new DiscoveryNode(nodeWithInfo.name(), nodeWithInfo.id(), nodeWithInfo.getHostName(), nodeWithInfo.getHostAddress(), listedNode.address(), nodeWithInfo.attributes(), nodeWithInfo.version()));
+                } else {
+                    newNodes.add(listedNode);
+                }
+            }
+            nodes = validateNewNodes(newNodes);
+            filteredNodes = ImmutableList.copyOf(newFilteredNodes);
+        }
+    }
+    public <Response> void execute(NodeListenerCallback<Response> callback, ActionListener<Response> listener) {
+        List<DiscoveryNode> nodes = this.nodes;
+        ensureNodesAreAvailable(nodes);
+        int index = getNodeNumber();
+        RetryListener<Response> retryListener = new RetryListener<>(callback, listener, nodes, index);
+        DiscoveryNode node = nodes.get((index) % nodes.size());
+        try {
+            callback.doWithNode(node, retryListener);
+        } catch (Throwable t) {
+            //this exception can't come from the TransportService as it doesn't throw exception at all
+            listener.onFailure(t);
+        }
+    }
+
+}
+public class org.elasticsearch.transport.TransportService extends AbstractLifecycleComponent<TransportService> {
+    public <T extends TransportResponse> TransportFuture<T> submitRequest(DiscoveryNode node, String action, TransportRequest request, TransportRequestOptions options, TransportResponseHandler<T> handler) throws TransportException {
+        PlainTransportFuture<T> futureHandler = new PlainTransportFuture<>(handler);
+        sendRequest(node, action, request, options, futureHandler);
+        return futureHandler;
+    }
+    public <T extends TransportResponse> void sendRequest(final DiscoveryNode node, final String action, final TransportRequest request, final TransportRequestOptions options, TransportResponseHandler<T> handler) {
+        final long requestId = newRequestId();
+        final TimeoutHandler timeoutHandler;
+        clientHandlers.put(requestId, new RequestHolder<>(handler, node, action, timeoutHandler));
+        if (timeoutHandler != null) {
+            assert options.timeout() != null;
+            timeoutHandler.future = threadPool.schedule(options.timeout(), ThreadPool.Names.GENERIC, timeoutHandler);
+        }
+        if (node.equals(localNode)) {
+            sendLocalRequest(requestId, action, request);
+        } else {
+            transport.sendRequest(node, requestId, action, request, options);
+        }
+    }
+}
+public class org.elasticsearch.transport.netty.NettyTransport extends AbstractLifecycleComponent<Transport> implements Transport {
+    public void sendRequest(final DiscoveryNode node, final long requestId, final String action, final TransportRequest request, TransportRequestOptions options) throws IOException, TransportException {
+        Channel targetChannel = nodeChannel(node, options);
+        byte status = 0;// 这个很重要, server receive 通过这个确定是 sendRequest/sendResponse  
+        status = TransportStatus.setRequest(status);
+        ReleasableBytesStreamOutput bStream = new ReleasableBytesStreamOutput(bigArrays);
+        boolean addedReleaseListener = false;
+        try {
+            bStream.skip(NettyHeader.HEADER_SIZE);
+            StreamOutput stream = bStream;
+            if (options.compress() && (!(request instanceof BytesTransportRequest))) {
+                status = TransportStatus.setCompress(status);
+                stream = CompressorFactory.defaultCompressor().streamOutput(stream);
+            }
+            Version version = Version.smallest(this.version, node.version());
+            stream.setVersion(version);
+            stream.writeString(action);
+            ReleasablePagedBytesReference bytes;
+            ChannelBuffer buffer;
+            if (request instanceof BytesTransportRequest) {
+                BytesTransportRequest bRequest = (BytesTransportRequest) request;
+                assert node.version().equals(bRequest.version());
+                bRequest.writeThin(stream);
+                stream.close();
+                bytes = bStream.bytes();
+                ChannelBuffer headerBuffer = bytes.toChannelBuffer();
+                ChannelBuffer contentBuffer = bRequest.bytes().toChannelBuffer();
+                buffer = ChannelBuffers.wrappedBuffer(NettyUtils.DEFAULT_GATHERING, headerBuffer, contentBuffer);
+            } else {
+                request.writeTo(stream);
+                stream.close();
+                bytes = bStream.bytes();
+                buffer = bytes.toChannelBuffer();
+            }
+            NettyHeader.writeHeader(buffer, requestId, status, version);
+            ChannelFuture future = targetChannel.write(buffer);
+            ReleaseChannelFutureListener listener = new ReleaseChannelFutureListener(bytes);
+            future.addListener(listener);
+            addedReleaseListener = true;
+            transportServiceAdapter.onRequestSent(node, requestId, action, request, options);
+        } finally {
+            if (!addedReleaseListener) {
+                Releasables.close(bStream.bytes());
+            }
+        }
+    }
+}
+
+public abstract class org.elasticsearch.action.ActionRequestBuilder<Request extends ActionRequest, Response extends ActionResponse, RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>> {
+    public ListenableActionFuture<Response> execute() {
+        PlainListenableActionFuture<Response> future = new PlainListenableActionFuture<>(threadPool);
+        execute(future);
+        return future;
+    }
+    public void execute(ActionListener<Response> listener) {
+        client.execute(action, beforeExecute(request), listener);
+    }
+}
+public abstract class org.elasticsearch.client.support.AbstractClient extends AbstractComponent implements Client {
+    public final <Request extends ActionRequest, Response extends ActionResponse, RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>> void execute(Action<Request, Response, RequestBuilder> action, Request request, ActionListener<Response> listener) {
+        headers.applyTo(request);
+        listener = threadedWrapper.wrap(listener);
+        doExecute(action, request, listener);
+    }
+    static class IndicesAdmin implements IndicesAdminClient {
+        public <Request extends ActionRequest, Response extends ActionResponse, RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>> void execute(Action<Request, Response, RequestBuilder> action, Request request, ActionListener<Response> listener) {
+            client.execute(action, request, listener);
+        }
+    }
+}
 
 
+public class org.elasticsearch.client.transport.support.TransportProxyClient {
+    public <Request extends ActionRequest, Response extends ActionResponse, RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>> void execute(final Action<Request, Response, RequestBuilder> action, final Request request, ActionListener<Response> listener) {
+        final TransportActionNodeProxy<Request, Response> proxy = proxies.get(action);
+        nodesService.execute(new TransportClientNodesService.NodeListenerCallback<Response>() {
+            public void doWithNode(DiscoveryNode node, ActionListener<Response> listener) {
+                proxy.execute(node, request, listener);
+            }
+        }, listener);
+    }
+}
 
+public class TransportActionNodeProxy<Request extends ActionRequest, Response extends ActionResponse> extends AbstractComponent {
+    public void execute(final DiscoveryNode node, final Request request, final ActionListener<Response> listener) {
+        ActionRequestValidationException validationException = request.validate();
+        if (validationException != null) {
+            listener.onFailure(validationException);
+            return;
+        }
+        transportService.sendRequest(node, action.name(), request, transportOptions, new ActionListenerResponseHandler<Response>(listener) {
+            public Response newInstance() {
+                return action.newResponse();
+            }
+        });
+    }
+}
+
+public class org.elasticsearch.transport.netty.MessageChannelHandler extends SimpleChannelUpstreamHandler {
+    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
+        Object m = e.getMessage();
+        ChannelBuffer buffer = (ChannelBuffer) m;
+        int size = buffer.getInt(buffer.readerIndex() - 4);
+        StreamInput streamIn = ChannelBufferStreamInputFactory.create(buffer, size);
+        boolean success = false;
+        long requestId = streamIn.readLong();
+        byte status = streamIn.readByte();
+        streamIn.setVersion(version);
+        if (TransportStatus.isRequest(status)) {
+            String action = handleRequest(ctx.getChannel(), streamIn, requestId, version);
+            final int nextByte = streamIn.read();
+        } else {
+            TransportResponseHandler<?> handler = transportServiceAdapter.onResponseReceived(requestId);
+            if (handler != null) {
+                handleResponse(ctx.getChannel(), streamIn, handler);
+            }
+        }
+    }
+}
+
+public class org.elasticsearch.transport.netty.MessageChannelHandler extends SimpleChannelUpstreamHandler {
+    protected String handleRequest(Channel channel, StreamInput buffer, long requestId, Version version) throws IOException {
+        buffer = new NamedWriteableAwareStreamInput(buffer, transport.namedWriteableRegistry);
+        final String action = buffer.readString();
+        transportServiceAdapter.onRequestReceived(requestId, action);
+        final NettyTransportChannel transportChannel = new NettyTransportChannel(transport, transportServiceAdapter, action, channel, requestId, version, profileName);
+        final RequestHandlerRegistry reg = transportServiceAdapter.getRequestHandler(action);
+        final TransportRequest request = reg.newRequest();
+        request.remoteAddress(new InetSocketTransportAddress((InetSocketAddress) channel.getRemoteAddress()));
+        request.readFrom(buffer);
+        if (ThreadPool.Names.SAME.equals(reg.getExecutor())) {
+            reg.getHandler().messageReceived(request, transportChannel);
+        } else {
+            threadPool.executor(reg.getExecutor()).execute(new RequestHandler(reg, request, transportChannel));
+        }
+        return action;
+    }
+}
+
+public abstract class org.elasticsearch.action.support.replication.TransportReplicationAction<Request extends ReplicationRequest, ReplicaRequest extends ReplicationRequest, Response extends ActionWriteResponse> extends TransportAction<Request, Response> {
+    class ReplicaOperationTransportHandler implements TransportRequestHandler<ReplicaRequest> {
+        @Override
+        public void messageReceived(final ReplicaRequest request, final TransportChannel channel) throws Exception {
+            new AsyncReplicaAction(request, channel).run();
+        }
+    }
+    private final class AsyncReplicaAction extends AbstractRunnable {
+        private final ClusterStateObserver observer = new ClusterStateObserver(clusterService, null, logger);
+        protected void doRun() throws Exception {
+            shardOperationOnReplica(request.internalShardId, request);
+            channel.sendResponse(TransportResponse.Empty.INSTANCE);
+        }
+    }
+}
+
+public class org.elasticsearch.action.index.TransportIndexAction extends TransportReplicationAction<IndexRequest, IndexRequest, IndexResponse> {
+    protected void shardOperationOnReplica(ShardId shardId, IndexRequest request) {
+        IndexService indexService = indicesService.indexServiceSafe(shardId.getIndex());
+        IndexShard indexShard = indexService.shardSafe(shardId.id());
+        SourceToParse sourceToParse = SourceToParse.source(SourceToParse.Origin.REPLICA, request.source()).index(shardId.getIndex()).type(request.type()).id(request.id())
+                .routing(request.routing()).parent(request.parent()).timestamp(request.timestamp()).ttl(request.ttl());
+        final Engine.IndexingOperation operation;
+        if (request.opType() == IndexRequest.OpType.INDEX) {
+            operation = indexShard.prepareIndex(sourceToParse, request.version(), request.versionType(), Engine.Operation.Origin.REPLICA, request.canHaveDuplicates());
+        } else {
+            assert request.opType() == IndexRequest.OpType.CREATE : request.opType();
+            operation = indexShard.prepareCreate(sourceToParse, request.version(), request.versionType(), Engine.Operation.Origin.REPLICA, request.canHaveDuplicates(), request.autoGeneratedId());
+        }
+        logger.info("===shardOperationOnReplica===189==="+operation.getClass().getName());
+        Mapping update = operation.parsedDoc().dynamicMappingsUpdate();
+        if (update != null) {
+            throw new RetryOnReplicaException(shardId, "Mappings are not available on the replica yet, triggered update: " + update);
+        }
+        operation.execute(indexShard);
+        processAfter(request, indexShard, operation.getTranslogLocation());
+    }
+    protected Tuple<IndexResponse, IndexRequest> shardOperationOnPrimary(ClusterState clusterState, PrimaryOperationRequest shardRequest) throws Throwable {
+        final IndexRequest request = shardRequest.request;
+
+        // validate, if routing is required, that we got routing
+        IndexMetaData indexMetaData = clusterState.metaData().index(shardRequest.shardId.getIndex());
+        MappingMetaData mappingMd = indexMetaData.mappingOrDefault(request.type());
+        if (mappingMd != null && mappingMd.routing().required()) {
+            if (request.routing() == null) {
+                throw new RoutingMissingException(shardRequest.shardId.getIndex(), request.type(), request.id());
+            }
+        }
+
+        IndexService indexService = indicesService.indexServiceSafe(shardRequest.shardId.getIndex());
+        IndexShard indexShard = indexService.shardSafe(shardRequest.shardId.id());
+        //loggerx.info("===shardOperationOnPrimary===169==="+shardRequest.shardId.id());
+        final WriteResult<IndexResponse> result = executeIndexRequestOnPrimary(null, request, indexShard);
+        final IndexResponse response = result.response;
+        final Translog.Location location = result.location;
+        processAfter(request, indexShard, location);
+        return new Tuple<>(response, shardRequest.request);
+    }
+
+}
+public abstract class org.elasticsearch.index.engine.Engine implements Closeable {
+
+    public static final class Create extends IndexingOperation {
+        private final boolean autoGeneratedId;
+
+        public Create(Term uid, ParsedDocument doc, long version, VersionType versionType, Origin origin, long startTime, boolean canHaveDuplicates, boolean autoGeneratedId) {
+            super(uid, doc, version, versionType, origin, startTime, canHaveDuplicates);
+            this.autoGeneratedId = autoGeneratedId;
+        }
+        public boolean execute(IndexShard shard) {
+            shard.create(this);
+            return true;
+        }
+    }
+}
+public class org.elasticsearch.index.shard.IndexShard extends AbstractIndexShardComponent {
+    public void create(Engine.Create create) {
+        writeAllowed(create.origin());
+        create = indexingService.preCreate(create);
+        engine().create(create);
+        indexingService.postCreate(create);
+    }
+}
+public class org.elasticsearch.index.engine.InternalEngine extends Engine {
+    public void create(Create create) throws EngineException {
+        ensureOpen();
+        innerCreate(create);
+    }
+    private void innerCreate(Create create) throws IOException {
+        innerCreateNoLock(create, currentVersion, versionValue);
+    }
+    private void innerCreateNoLock(Create create, long currentVersion, VersionValue versionValue) throws IOException {
+        indexWriter.addDocument(create.docs().get(0));//org.apache.lucene.index.IndexWriter
+    }
+}
+public abstract class org.elasticsearch.action.support.replication.TransportReplicationAction<Request extends ReplicationRequest, ReplicaRequest extends ReplicationRequest, Response extends ActionWriteResponse> extends TransportAction<Request, Response> {
+    protected void routeRequestOrPerformLocally(final ShardRouting primary, final ShardIterator shardsIt) {
+        if (primary.currentNodeId().equals(observer.observedState().nodes().localNodeId())) {
+            threadPool.executor(executor).execute(new AbstractRunnable() {
+                protected void doRun() throws Exception {
+                    performOnPrimary(primary, shardsIt);
+                }
+            });
+        }
+    }
+    void performOnPrimary(final ShardRouting primary, final ShardIterator shardsIt) {
+        indexShardReference = getIndexShardOperationsCounter(primary.shardId());
+        PrimaryOperationRequest por = new PrimaryOperationRequest(primary.id(), internalRequest.concreteIndex(), internalRequest.request());
+        Tuple<Response, ReplicaRequest> primaryResponse = shardOperationOnPrimary(observer.observedState(), por);
+        replicationPhase = new ReplicationPhase(shardsIt, primaryResponse.v2(), primaryResponse.v1(), observer, primary, internalRequest, listener, indexShardReference);
+        finishAndMoveToReplication(replicationPhase);
+    }
+    protected final WriteResult<IndexResponse> executeIndexRequestOnPrimary(BulkShardRequest shardRequest, IndexRequest request, IndexShard indexShard) throws Throwable {
+        Engine.IndexingOperation operation = prepareIndexOperationOnPrimary(shardRequest, request, indexShard);
+        final boolean created = operation.execute(indexShard);
+        return new WriteResult(new IndexResponse(shardId.getIndex(), request.type(), request.id(), request.version(), created), operation.getTranslogLocation());
+    }
+}
 
 ===registerHandler===116===GET===/===org.elasticsearch.rest.action.main.RestMainAction
 ===registerHandler===116===GET===/_cat/allocation===org.elasticsearch.rest.action.cat.RestAllocationAction
@@ -499,4 +895,32 @@ public class org.elasticsearch.node.Node implements Releasable {
 ===registerHandler===116===POST===/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
 
 
+
+[2021-07-06 10:08:46,197][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][1] [1]
+[2021-07-06 10:08:46,711][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][1] [1]
+[2021-07-06 10:08:46,957][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][2] [6]
+[2021-07-06 10:08:47,463][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][2] [6]
+[2021-07-06 10:08:46,383][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][2] [4]
+[2021-07-06 10:08:46,810][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][0] [5]
+[2021-07-06 10:08:46,284][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][0] [3]
+[2021-07-06 10:08:47,323][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][0] [5]
+[2021-07-06 10:08:47,405][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][3] [7]
+[2021-07-06 10:08:46,221][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][4] [2]
+[2021-07-06 10:08:47,474][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][4] [8]
+
+
+
+[2021-07-06 10:08:47,435][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][0] [6]
+[2021-07-06 10:08:46,922][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][0] [6]
+[2021-07-06 10:08:46,171][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][1] [1]
+[2021-07-06 10:08:46,690][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][1] [1]
+[2021-07-06 10:08:46,185][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][2] [2]
+[2021-07-06 10:08:46,975][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][2] [7]
+[2021-07-06 10:08:46,294][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][2] [3]
+[2021-07-06 10:08:46,857][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][3] [4]
+[2021-07-06 10:08:47,165][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][3] [10]
+[2021-07-06 10:08:46,346][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][3] [4]
+[2021-07-06 10:08:46,810][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][4] [5]
+[2021-07-06 10:08:47,046][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][4] [8]
+[2021-07-06 10:08:47,108][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][4] [9]
 
