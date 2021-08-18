@@ -1,4 +1,6 @@
 
+mvn clean package -DskipTests
+
 less log/flink-fintopia-* |grep -E "startActorSystem===25|BlobServer===201|start===236|init===166"
 onReceive===139|handleRpcMessage===183|handleRunAsync===388|handleRpcInvocation===2
 

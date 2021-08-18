@@ -1,14 +1,99 @@
-1¡¢bin/start-cluster.sh
-2¡¢web¶Ë¿Ú8081
-----·Ö²¿Ê½----
+1ã€bin/start-cluster.sh
+2ã€webç«¯å£8081
+----åˆ†éƒ¨å¼----
 vim flink-conf.yaml
 jobmanager.rpc.address: cloud01
 vim slaves
 bin/start-cluster.sh
 
 flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target/FlinkSimple-1.0-SNAPSHOT.jar -p 2	--xx 
-	-p ´óÓÚ 1 µÄ»°ÐèÒªµ÷´ó taskmanager.numberOfTaskSlots
+	-p å¤§äºŽ 1 çš„è¯éœ€è¦è°ƒå¤§ taskmanager.numberOfTaskSlots
 flink list
 flink cancel f7e146f55594c9fe97e9a8ee3c6e9bd3
 flink list --all
 https://www.jianshu.com/p/1b05202c4fb6
+
+
+https://github.com/flink-china/flink-training-course
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/concepts/programming-model.html
+The number of operator subtasks is the parallelism of that particular operator. The parallelism of a stream is always that of its producing operator. Different operators of the same program may have different levels of parallelism.
+Windows can be time driven (example: every 30 seconds) or data driven (example: every 100 elements). One typically distinguishes different types of windows, such as tumbling windows (no overlap), sliding windows (with overlap), and session windows (punctuated by a gap of inactivity).
+More window examples can be found in this blog post. 
+Stateful Operations
+Flink implements fault tolerance using a combination of stream replay and checkpointing
+	https://ci.apache.org/projects/flink/flink-docs-release-1.7/internals/stream_checkpointing.html
+Batch on Streaming
+	 A DataSet is treated internally as a stream of data. The concepts above thus apply to batch programs in the same way as well as they apply to streaming programs
+
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/concepts/runtime.html
+Tasks and Operator Chains
+Task Slots and Resources
+	 Slotting the resources means that a subtask will not compete with subtasks from other jobs for managed memory, but instead has a certain amount of reserved managed memory. Note that no CPU isolation happens here; currently slots only separate the managed memory of tasks.
+	 Tasks in the same JVM share TCP connections (via multiplexing) and heartbeat messages. They may also share data sets and data structures, thus reducing the per-task overhead.
+Savepoints
+**** Note that no CPU isolation happens here; currently slots only separate the managed memory of tasks.
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/tutorials/datastream_api.html
+mvn exec:java -Dexec.mainClass=wikiedits.WikipediaAnalysis
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/batch/examples.html#running-an-example
+Page Rank
+Connected Components
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/projectsetup/scala_api_quickstart.html
+	mvn archetype:generate -DarchetypeGroupId=org.apache.flink -DarchetypeArtifactId=flink-quickstart-scala -DarchetypeVersion=1.7.1
+	Run the quickstart script
+Inspect Project
+Build Project
+mvn archetype:generate -DarchetypeGroupId=org.apache.flink -DarchetypeArtifactId=flink-quickstart-scala -DarchetypeVersion=1.7.1
+For Eclipse, you need the following plugins, which you can install from the provided Eclipse Update Sites:
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/projectsetup/dependencies.html
+Note on IntelliJ: To make the applications run within IntelliJ IDEA, the Flink dependencies need to be declared in scope compile rather than provided. Otherwise IntelliJ will not add them to the classpath and the in-IDE execution will fail with a NoClassDefFountError. To avoid having to declare the dependency scope as compile (which is not recommended, see above), the above linked Java- and Scala project templates use a trick: They add a profile that selectively activates when the application is run in IntelliJ and only then promotes the dependencies to scope compile, without affecting the packaging of the JAR files.
+Hadoop Dependencies
+Appendix: Template for building a Jar with Dependencies
+
+It is highly recommended to keep the dependencies in scope provided. If they are not set to provided, the best case is that the resulting JAR becomes excessively large, because it also contains all Flink core dependencies. The worst case is that the Flink core dependencies that are added to the applicationï¿½ï¿½s jar file clash with some of your own dependency versions (which is normally avoided through inverted classloading).
+Note on IntelliJ: To make the applications run within IntelliJ IDEA, the Flink dependencies need to be declared in scope compile rather than provided. Otherwise IntelliJ will not add them to the classpath and the in-IDE execution will fail with a NoClassDefFountError. To avoid having to declare the dependency scope as compile (which is not recommended, see above), the above linked Java- and Scala project templates use a trick: They add a profile that selectively activates when the application is run in IntelliJ and only then promotes the dependencies to scope compile, without affecting the packaging of the JAR files.
+Adding Connector and Library Dependencies
+If you need Hadoop dependencies during testing or development inside the IDE (for example for HDFS access), please configure these dependencies similar to the scope of the dependencies to test or to provided.
+To build an application JAR that contains all dependencies required for declared connectors and libraries, you can use the following shade plugin definition:
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/api_concepts.html
+Define keys for Tuples
+General Class Types
+Values
+Type Erasure & Type Inference
+Accumulators & Counters
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/datastream_api.html
+you can always write your own custom sources by implementing the SourceFunction for non-parallel sources, or by implementing the ParallelSourceFunction interface or extending the RichParallelSourceFunction for parallel sources.
+IMPLEMENTATION:
+IMPORTANT NOTES:
+Execution Parameters
+Note that the write*() methods on DataStream are mainly intended for debugging purposes. They are not participating in Flinkï¿½ï¿½s checkpointing, this means these functions usually have at-least-once semantics. The data flushing to the target system depends on the implementation of the OutputFormat. This means that not all elements send to the OutputFormat are immediately showing up in the target system. Also, in failure cases, those records might be lost.
+
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/projectsetup/java_api_quickstart.html
+mvn archetype:generate  -DarchetypeGroupId=org.apache.flink -DarchetypeArtifactId=flink-quickstart-java -DarchetypeVersion=1.7.1
+We recommend you import this project into your IDE to develop and test it. IntelliJ IDEA supports Maven projects out of the box. If you use Eclipse, the m2e plugin allows to import Maven projects. Some Eclipse bundles include that plugin by default, others require you to install it manually.
+A note to Mac OS X users: The default JVM heapsize for Java may be too small for Flink. You have to manually increase it. In Eclipse, choose Run Configurations -> Arguments and write into the VM Arguments box: -Xmx800m. In IntelliJ IDEA recommended way to change JVM options is from the Help | Edit Custom VM Options menu. See this article for details.
+
+https://ci.apache.org/projects/flink/flink-docs-release-1.7/dev/event_timestamps_watermarks.html
+Stream sources can directly assign timestamps to the elements they produce, and they can also emit watermarks. When this is done, no timestamp assigner is needed. Note that if a timestamp assigner is used, any timestamps and watermarks provided by the source will be overwritten.
+https://ci.apache.org/projects/flink/flink-docs-release-1.8/dev/stream/state/state.html
+
+================================================================
+val text = benv.fromElements("To be, or not to be,--that is the question:--","Whether 'tis nobler in the mind to suffer","The slings and arrows of outrageous fortune","Or to take arms against a sea of troubles,")
+val counts = text.flatMap { _.toLowerCase.split("\\W+") }.map { (_, 1) }.groupBy(0).sum(1)
+counts.print()
+----
+val textStreaming = senv.fromElements("To be, or not to be,--that is the question:--","Whether 'tis nobler in the mind to suffer","The slings and arrows of outrageous fortune","Or to take arms against a sea of troubles,")
+val countsStreaming = textStreaming.flatMap { _.toLowerCase.split("\\W+") }.map { (_, 1) }.keyBy(0).sum(1)
+countsStreaming.print()
+senv.execute("Streaming Wordcount")
+
+bin/start-scala-shell.sh remote pseudo 8081
+bin/flink run ./examples/batch/WordCount.jar --input file:///home/tyx/data.txt --output file:///home/tyx/wordcount_out1
+

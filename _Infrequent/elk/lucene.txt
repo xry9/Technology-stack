@@ -7,3 +7,221 @@
 
 org.apache.lucene.store.DataOutput#writeBytes
 	writeBytes===52
+
+
+
+
+
+===FSIndexOutput===415===_0.nvm===92
+===FSIndexOutput===415===_0.nvd===53
+===FSIndexOutput===415===_0.nvd===8
+===FSIndexOutput===415===_0.nvm===8
+===FSIndexOutput===415===_0.dim===119
+===FSIndexOutput===415===_0.dii===61
+===FSIndexOutput===415===_0.dii===8
+===FSIndexOutput===415===_0.dim===8
+===FSIndexOutput===415===_0.fdx===75
+===FSIndexOutput===415===_0.fdt===134
+===FSIndexOutput===415===_0.fdt===8
+===FSIndexOutput===415===_0.fdx===8
+
+===FSIndexOutput===415===_0_Lucene50_0.tim===8144
+===FSIndexOutput===415===_0_Lucene50_0.tim===8182
+===FSIndexOutput===415===_0_Lucene50_0.tim===5955
+
+===FSIndexOutput===415===_0_Lucene50_0.tip===587
+===FSIndexOutput===415===_0_Lucene50_0.tim===8
+===FSIndexOutput===415===_0_Lucene50_0.tip===8
+===FSIndexOutput===415===_0_Lucene50_0.doc===323
+===FSIndexOutput===415===_0_Lucene50_0.pos===7483
+===FSIndexOutput===415===_0_Lucene50_0.doc===8
+===FSIndexOutput===415===_0_Lucene50_0.pos===8
+===FSIndexOutput===415===_0.fnm===261
+===FSIndexOutput===415===_0.fnm===8
+===FSIndexOutput===415===_0.cfs===500
+
+===FSIndexOutput===415===_0.cfs===8192
+===FSIndexOutput===415===_0.cfs===8192
+===FSIndexOutput===415===_0.cfs===5912
+===FSIndexOutput===415===_0.cfs===7756
+===FSIndexOutput===415===_0.cfs===1059
+===FSIndexOutput===415===_0.cfe===333
+===FSIndexOutput===415===_0.cfe===8
+===FSIndexOutput===415===_0.cfs===8
+===FSIndexOutput===415===_0.si===360
+===FSIndexOutput===415===_0.si===8
+===FSIndexOutput===415===pending_segments_1===129
+===FSIndexOutput===415===pending_segments_1===8
+
+
+
+
+
+
+
+
+===FSIndexOutput===413===_0_Lucene50_0.tim===8144
+java.lang.NumberFormatException: For input string: "FSIndexOutput"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.base/java.lang.Integer.parseInt(Integer.java:652)
+	at java.base/java.lang.Integer.parseInt(Integer.java:770)
+	at org.apache.lucene.store.FSDirectory$FSIndexOutput$1.write(FSDirectory.java:413)
+	at java.base/java.util.zip.CheckedOutputStream.write(CheckedOutputStream.java:74)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
+	at org.apache.lucene.store.OutputStreamIndexOutput.writeBytes(OutputStreamIndexOutput.java:53)
+	at org.apache.lucene.store.DataOutput.writeBytes(DataOutput.java:53)
+	at org.apache.lucene.store.RAMOutputStream.writeTo(RAMOutputStream.java:86)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.writeBlock(BlockTreeTermsWriter.java:825)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.writeBlocks(BlockTreeTermsWriter.java:624)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.pushTerm(BlockTreeTermsWriter.java:905)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.write(BlockTreeTermsWriter.java:869)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter.write(BlockTreeTermsWriter.java:343)
+	at org.apache.lucene.codecs.perfield.PerFieldPostingsFormat$FieldsWriter.write(PerFieldPostingsFormat.java:140)
+	at org.apache.lucene.index.FreqProxTermsWriter.flush(FreqProxTermsWriter.java:110)
+	at org.apache.lucene.index.DefaultIndexingChain.flush(DefaultIndexingChain.java:164)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:470)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:121)
+
+===FSIndexOutput===413===_0_Lucene50_0.tim===8182
+java.lang.NumberFormatException: For input string: "FSIndexOutput"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.base/java.lang.Integer.parseInt(Integer.java:652)
+	at java.base/java.lang.Integer.parseInt(Integer.java:770)
+	at org.apache.lucene.store.FSDirectory$FSIndexOutput$1.write(FSDirectory.java:413)
+	at java.base/java.util.zip.CheckedOutputStream.write(CheckedOutputStream.java:74)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
+	at org.apache.lucene.store.OutputStreamIndexOutput.writeBytes(OutputStreamIndexOutput.java:53)
+	at org.apache.lucene.store.DataOutput.writeBytes(DataOutput.java:53)
+	at org.apache.lucene.store.RAMOutputStream.writeTo(RAMOutputStream.java:86)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.writeBlock(BlockTreeTermsWriter.java:830)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.writeBlocks(BlockTreeTermsWriter.java:602)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.pushTerm(BlockTreeTermsWriter.java:905)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.write(BlockTreeTermsWriter.java:869)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter.write(BlockTreeTermsWriter.java:343)
+	at org.apache.lucene.codecs.perfield.PerFieldPostingsFormat$FieldsWriter.write(PerFieldPostingsFormat.java:140)
+	at org.apache.lucene.index.FreqProxTermsWriter.flush(FreqProxTermsWriter.java:110)
+	at org.apache.lucene.index.DefaultIndexingChain.flush(DefaultIndexingChain.java:164)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:470)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:121)
+
+
+===FSIndexOutput===413===_0_Lucene50_0.tim===5955
+===FSIndexOutput===413===_0_Lucene50_0.pos===7483
+java.lang.NumberFormatException: For input string: "FSIndexOutput"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.base/java.lang.Integer.parseInt(Integer.java:652)
+	at java.base/java.lang.Integer.parseInt(Integer.java:770)
+	at org.apache.lucene.store.FSDirectory$FSIndexOutput$1.write(FSDirectory.java:413)
+	at java.base/java.util.zip.CheckedOutputStream.write(CheckedOutputStream.java:74)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.flush(BufferedOutputStream.java:142)
+	at org.apache.lucene.store.OutputStreamIndexOutput.getChecksum(OutputStreamIndexOutput.java:80)
+	at org.apache.lucene.codecs.CodecUtil.writeCRC(CodecUtil.java:548)
+	at org.apache.lucene.codecs.CodecUtil.writeFooter(CodecUtil.java:393)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter.close(BlockTreeTermsWriter.java:1020)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:88)
+	at org.apache.lucene.codecs.perfield.PerFieldPostingsFormat$FieldsWriter.close(PerFieldPostingsFormat.java:241)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:88)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:76)
+	at org.apache.lucene.index.FreqProxTermsWriter.flush(FreqProxTermsWriter.java:114)
+	at org.apache.lucene.index.DefaultIndexingChain.flush(DefaultIndexingChain.java:164)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:470)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:121)
+java.lang.NumberFormatException: For input string: "FSIndexOutput"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.base/java.lang.Integer.parseInt(Integer.java:652)
+	at java.base/java.lang.Integer.parseInt(Integer.java:770)
+	at org.apache.lucene.store.FSDirectory$FSIndexOutput$1.write(FSDirectory.java:413)
+	at java.base/java.util.zip.CheckedOutputStream.write(CheckedOutputStream.java:74)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.flush(BufferedOutputStream.java:142)
+	at org.apache.lucene.store.OutputStreamIndexOutput.getChecksum(OutputStreamIndexOutput.java:80)
+	at org.apache.lucene.codecs.CodecUtil.writeCRC(CodecUtil.java:548)
+	at org.apache.lucene.codecs.CodecUtil.writeFooter(CodecUtil.java:393)
+	at org.apache.lucene.codecs.lucene50.Lucene50PostingsWriter.close(Lucene50PostingsWriter.java:472)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:88)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:76)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter.close(BlockTreeTermsWriter.java:1026)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:88)
+	at org.apache.lucene.codecs.perfield.PerFieldPostingsFormat$FieldsWriter.close(PerFieldPostingsFormat.java:241)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:88)
+	at org.apache.lucene.util.IOUtils.close(IOUtils.java:76)
+	at org.apache.lucene.index.FreqProxTermsWriter.flush(FreqProxTermsWriter.java:114)
+	at org.apache.lucene.index.DefaultIndexingChain.flush(DefaultIndexingChain.java:164)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:470)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:121)
+
+===FSIndexOutput===413===_0.cfs===16384
+===FSIndexOutput===413===_0.cfs===5912
+===FSIndexOutput===413===_0.cfs===7756
+java.lang.NumberFormatException: For input string: "FSIndexOutput"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.base/java.lang.Integer.parseInt(Integer.java:652)
+	at java.base/java.lang.Integer.parseInt(Integer.java:770)
+	at org.apache.lucene.store.FSDirectory$FSIndexOutput$1.write(FSDirectory.java:413)
+	at java.base/java.util.zip.CheckedOutputStream.write(CheckedOutputStream.java:74)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:123)
+	at org.apache.lucene.store.OutputStreamIndexOutput.writeBytes(OutputStreamIndexOutput.java:53)
+	at org.apache.lucene.store.DataOutput.copyBytes(DataOutput.java:278)
+	at org.apache.lucene.codecs.lucene50.Lucene50CompoundFormat.write(Lucene50CompoundFormat.java:96)
+	at org.apache.lucene.index.IndexWriter.createCompoundFile(IndexWriter.java:4963)
+	at org.apache.lucene.index.DocumentsWriterPerThread.sealFlushedSegment(DocumentsWriterPerThread.java:576)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:515)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:121)
+
+===FSIndexOutput===413===_0.cfs===1059
+java.lang.NumberFormatException: For input string: "FSIndexOutput"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.base/java.lang.Integer.parseInt(Integer.java:652)
+	at java.base/java.lang.Integer.parseInt(Integer.java:770)
+	at org.apache.lucene.store.FSDirectory$FSIndexOutput$1.write(FSDirectory.java:413)
+	at java.base/java.util.zip.CheckedOutputStream.write(CheckedOutputStream.java:74)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.flush(BufferedOutputStream.java:142)
+	at org.apache.lucene.store.OutputStreamIndexOutput.getChecksum(OutputStreamIndexOutput.java:80)
+	at org.apache.lucene.codecs.CodecUtil.writeCRC(CodecUtil.java:548)
+	at org.apache.lucene.codecs.CodecUtil.writeFooter(CodecUtil.java:393)
+	at org.apache.lucene.codecs.lucene50.Lucene50CompoundFormat.write(Lucene50CompoundFormat.java:117)
+	at org.apache.lucene.index.IndexWriter.createCompoundFile(IndexWriter.java:4963)
+	at org.apache.lucene.index.DocumentsWriterPerThread.sealFlushedSegment(DocumentsWriterPerThread.java:576)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:515)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:121)
+

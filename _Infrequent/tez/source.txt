@@ -9,3 +9,18 @@ mvn clean package -DskipTests=true -Dmaven.javadoc.skip=true
 0.9.2 同样
 --------------------
 解压 tmp_tez.tar.gz 是在 org.apache.hadoop.fs.FileUtil#unTar 
+hadoop jar apache-tez-0.9.2-bin/tez-examples-0.9.2.jar orderedwordcount /data/words.txt /result/tez8
+
+yarn-daemon.sh stop timelineserver && yarn-daemon.sh start timelineserver
+org.apache.tez.dag.history.utils.DAGUtils#convertDAGPlanToATSMap(org.apache.tez.dag.api.records.DAGProtos.DAGPlan, java.util.zip.Inflater)
+
+
+
+less /System/Volumes/Data/private/var/folders/m2/vl_gk1257w54r__z_qbtmdx00000gn/T/fintopia/hive.log|grep -E -A 10 "DAG===110|addVertex===141|addEdge==="
+initializeDAG===1549
+createDag===964
+
+org.apache.tez.dag.app.rm.TaskSchedulerContextImplWrapper.TaskAllocatedCallable#TaskAllocatedCallable
+org.apache.tez.runtime.task.TezChild#run
+org.apache.tez.dag.app.rm.YarnTaskSchedulerService#assignContainer
+
