@@ -6,6 +6,9 @@ onReceive===139|handleRpcMessage===183|handleRunAsync===388|handleRpcInvocation=
 
 invoke===120===false===false, handleRpcInvocation===261
 
+8081 相关服务: org.apache.flink.runtime.rest.RestServerEndpoint#start. uri 与 handler 的绑定是在 handlers = initializeHandlers(restAddressFuture);
+
+
 flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target
 ----
 HADOOP_CONF_DIR=/Users/fintopia/app/hadoop-2.7.2/etc/hadoop
