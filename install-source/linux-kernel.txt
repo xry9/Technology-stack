@@ -27,6 +27,7 @@ https://mirrors.edge.kernel.org/pub/linux/kernel/
 https://mirrors.aliyun.com/centos-vault/4.4/isos/x86_64/
 http://mirrors.163.com/centos/7/os/x86_64/Packages/
 --------
+https://www.cnblogs.com/linkchen/p/13926846.html
 ubuntu20, 8g: 
 
 apt-get install libncurses5-dev openssl libssl-dev -y
