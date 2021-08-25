@@ -30,6 +30,9 @@ export PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin
 1.5、
 mvn clean package -DskipTests -Pdist,native -Dtar -Dmaven.javadoc.skip=true
 centos7 上编译 hadoop-3.2.2 需要装 cmake-3.10.2, ./configure && make -j8 && make install
+centos8 上编译 hadoop-3.0.0 装了 cmake-3.10.2 后需要注释掉 hadoop-pipes 工程, 不知道不装行不行
+centos8 上编译 hadoop-3.2.2 装了 cmake-3.10.2 后需要注释掉 hadoop-hdfs-native-client 工程
+
 
 2、hbase:
 mvn clean package -DskipTests

@@ -2,12 +2,15 @@
 mvn clean package -DskipTests
 
 less log/flink-fintopia-* |grep -E "startActorSystem===25|BlobServer===201|start===236|init===166"
+startServer===227
 onReceive===139|handleRpcMessage===183|handleRunAsync===388|handleRpcInvocation===2
-
 invoke===120===false===false, handleRpcInvocation===261
 
 8081 相关服务: org.apache.flink.runtime.rest.RestServerEndpoint#start. uri 与 handler 的绑定是在 handlers = initializeHandlers(restAddressFuture);
 
+
+handleRunAsync===388 的来源有: schedule===361,
+提交任务 handleRequest===112
 
 flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target
 ----

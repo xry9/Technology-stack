@@ -12,7 +12,48 @@ flink list
 flink cancel f7e146f55594c9fe97e9a8ee3c6e9bd3
 flink list --all
 https://www.jianshu.com/p/1b05202c4fb6
+===============================
+cp flink-dist/target/flink-dist_2.11-1.8.2.jar /usr/local/app/flink-1.8.2/lib
+cp flink-core/target/flink-core-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-java/target/flink-java-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-scala/target/flink-scala_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-runtime/target/flink-runtime_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-runtime-web/target/flink-runtime-web_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-optimizer/target/flink-optimizer_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-clients/target/flink-clients_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-streaming-java/target/flink-streaming-java_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-streaming-scala/target/flink-streaming-scala_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-container/target/flink-container_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-yarn/target/flink-yarn_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
 
+cp ~/.m2/repository/org/apache/flink/flink-mesos_2.11/1.8.2/flink-mesos_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp ~/.m2/repository/org/apache/flink/flink-mapr-fs/1.8.2/flink-mapr-fs-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+
+cp flink-metrics/flink-metrics-core/target/flink-metrics-core-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-jmx/target/flink-metrics-jmx_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-dropwizard/target/flink-metrics-dropwizard-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-graphite/target/flink-metrics-graphite-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-influxdb/target/flink-metrics-influxdb_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-prometheus/target/flink-metrics-prometheus_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-statsd/target/flink-metrics-statsd-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-datadog/target/flink-metrics-datadog-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-metrics/flink-metrics-slf4j/target/flink-metrics-slf4j-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-libraries/flink-streaming-python/target/flink-streaming-python_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-libraries/flink-python/target/flink-python_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-libraries/flink-cep/target/flink-cep_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-libraries/flink-cep-scala/target/flink-cep-scala_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-libraries/flink-gelly/target/flink-gelly_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-libraries/flink-gelly-scala/target/flink-gelly-scala_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-filesystems/flink-hadoop-fs/target/flink-hadoop-fs-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-state-backends/flink-statebackend-rocksdb/target/flink-statebackend-rocksdb_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-table/flink-table-uber/target/flink-table-uber_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-table/flink-sql-client/target/flink-sql-client_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+cp flink-queryable-state/flink-queryable-state-runtime/target/flink-queryable-state-runtime_2.11-1.8.2.jar /home/tyx/app/flink-1.8.2/lib
+
+本想注释掉 flink-dist 中的 dependency, 但是还有 flink 的那些 jar
+1、vim bin/config.sh  .*flink-dist.*.jar --> .*flink-.*.jar
+2、vim bin/flink-daemon.sh "$FLINK_TM_CLASSPATH:$INTERNAL_HADOOP_CLASSPATHS"`:/usr/local/app/flink-1.8.2/flink-dist_2.11-1.8.2.jar"。 同样 flink 脚本也要加上
+=====================================
 
 https://github.com/flink-china/flink-training-course
 https://ci.apache.org/projects/flink/flink-docs-release-1.7/concepts/programming-model.html
