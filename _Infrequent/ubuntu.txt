@@ -6,6 +6,9 @@ sudo passwd root
 	nameserver 223.6.6.6
 apt-get update
 apt-get install vim
+ufw status
+ufw enable
+ufw disable
 ----
 apt-get install openssh-server -y	(openssh-client 会默认安装)
 ps -e |grep ssh

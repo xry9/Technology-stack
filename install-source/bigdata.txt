@@ -50,7 +50,10 @@ apache-hive-3.1.2-src:
 ./build/mvn -DskipTests clean package	--github 上给出的编译方式
 
 5、flink
-mvn clean package -DskipTests
+1.8: mvn clean package -DskipTests
+flink-1.13.2:
+  JAVA_HOME=/usr/local/app/jdk-11.0.5
+  注释掉 flink-runtime-web, flink-end-to-end-tests
 
 6、tez
 https://blog.csdn.net/xiefu5hh/article/details/78577545
@@ -61,12 +64,18 @@ https://www.jianshu.com/p/46d89a05d7bd
 <module>tez-ui2</module-->
 
 mvn clean package -DskipTests=true
-
 https://blog.csdn.net/zhoudetiankong/article/details/73089225
-
-
 https://blog.csdn.net/qingzhenli/article/details/72688539
 Slider
 确定pom.xml中hadoop版本和集群的一致
 mvn clean site:site site:stage package -DskipTests
 https://blog.csdn.net/qingzhenli/article/details/72688539
+
+7、
+centos8:
+  git clone -b 4.0.8 git@github.com:redis/redis.git
+  make
+centos7:
+  git clone -b 2.4.0 git@github.com:redis/redis.git
+  make
+  

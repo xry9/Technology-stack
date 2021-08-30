@@ -1,1 +1,0 @@
-安装maven 在kafka源目录gradle eclipse（gradle-4.5.1-all）
