@@ -1,4 +1,4 @@
-动态分区，小文件处理，压缩格式，存贮格式，集群资源划分，kudu，kylin，impala
+动态分区，小文件处理，集群资源划分，
 1、单个超市在任意连续7天内，下相同订单数（相同商品相同商品价格）≥10个视为异常
 orderid,sid,gid,time
 select sid,gid,time,count(orderid) from sid,gid,time

@@ -1,5 +1,6 @@
 
-mvn clean package -DskipTests
+mvn clean package -DskipTests -Dskip.npm
+高版本的 flink-runtime-web 依赖 npm, 可加 -Dskip.npm
 
 less log/flink-fintopia-* |grep -E "startActorSystem===25|BlobServer===201|start===236|init===166"
 startServer===227

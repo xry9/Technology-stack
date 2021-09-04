@@ -12,6 +12,9 @@ flink list
 flink cancel f7e146f55594c9fe97e9a8ee3c6e9bd3
 flink list --all
 https://www.jianshu.com/p/1b05202c4fb6
+
+
+
 ===============================
 flink-1.8.2:
 注释掉 flink-dist 中的 dependency, 会少一些 flink 的那些 jar
@@ -19,58 +22,54 @@ flink-1.8.2:
 2、vim bin/flink-daemon.sh "$FLINK_TM_CLASSPATH:$INTERNAL_HADOOP_CLASSPATHS"`:/usr/local/app/flink-1.8.2/flink-dist_2.11-1.8.2.jar"。 同样 flink 脚本也要加上
 
 flink-1.13.2:
+三个 jar 特别处理: flink-dist_2.11-1.13.2.jar flink-table_2.11-1.13.2.jar flink-table-blink_2.11-1.13.2.jar。删除 org/apache/flink, dist 下的 mesos shade 不要删
 cp */target/flink*jar /usr/local/app/flink-1.13.2/lib/lib1
 cp */*/target/flink*jar /usr/local/app/flink-1.13.2/lib/lib2/
 删除 flink-fs-hadoop-shaded-1.13.2.jar, example, test 等, 加入 flink-runtime-web_2.11-1.13.2.jar 因为本地无法编译
 包含除 org/apache/flink 包外其它包的工程: flink-fs-hadoop-shaded flink-s3-fs-base flink-s3-fs-presto flink-runtime flink-table-planner flink-table-blink
+flink-sql 连接 kafka 
+flink-sql-connector-kafka_2.11-1.13.2.jar
+kafka-clients-2.8.0.jar
+mysql-connector-java-5.1.37-bin.jar
+flink-connector-jdbc_2.11-1.13.2.jar
+flink-connector-kafka_2.11-1.13.2.jar
+calcite-core-1.26.0.jar
+guava-29.0-jre.jar
 
 
 =====================================
-mvn archetype:generate -DarchetypeGroupId=org.apache.flink -DarchetypeArtifactId=flink-walkthrough-datastream-java -DarchetypeVersion=1.13.0 -DgroupId=frauddetection -DartifactId=frauddetection -Dversion=0.1 -Dpackage=spendreport -DinteractiveMode=false
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/try-flink/table_api/
 https://www.cnblogs.com/moonlight-lin/p/12873594.html
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/try-flink/flink-operations-playground/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/learn-flink/event_driven/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/learn-flink/fault_tolerance/
-	Queryable state allows you to access state from outside of Flink during runtime
+
+
+State Backends: heap-based, RocksDB
+Checkpoint Storage:  one that persists its state snapshots to a distributed file system, and another that users the JobManager’s heap
+State Snapshots: 
+Snapshot – a generic term referring to a global, consistent image of the state of a Flink job. A snapshot includes a pointer into each of the data sources (e.g., an offset into a file or Kafka partition), as well as a copy of the state from each of the job’s stateful operators that resulted from having processed all of the events up to those positions in the sources.
+Checkpoint – a snapshot taken automatically by Flink for the purpose of being able to recover from faults. Checkpoints can be incremental, and are optimized for being restored quickly.
+Externalized Checkpoint – normally checkpoints are not intended to be manipulated by users. Flink retains only the n-most-recent checkpoints (n being configurable) while a job is running, and deletes them when a job is cancelled. But you can configure them to be retained instead, in which case you can manually resume from them.
+Savepoint – a snapshot triggered manually by a user (or an API call) for some operational purpose, such as a stateful redeploy/upgrade/rescaling operation. Savepoints are always complete, and are optimized for operational flexibility.
+
+Queryable state allows you to access state from outside of Flink during runtime
 ***https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/concepts/stateful-stream-processing/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/concepts/time/
-https://flink.apache.org/news/2015/12/04/Introducing-windows.html
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/concepts/flink-architecture/
+The jobs of a Flink Application can either be submitted to a long-running Flink Session Cluster, a dedicated Flink Job Cluster, or a Flink Application Cluster. The difference between these options is mainly related to the cluster’s lifecycle and to resource isolation guarantees.
+
 The execution mode can be configured via the execution.runtime-mode setting. There are three possible values: STREAMING, Batch, AUTOMATIC
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/event-time/generating_watermarks/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/fault-tolerance/state/
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/fault-tolerance/broadcast_state/
 externalized checkpoints: You can configure periodic checkpoints to be persisted externally. Externalized checkpoints write their meta data out to persistent storage and are not automatically cleaned up when the job fails. This way, you will have a checkpoint around to resume from if your job fails
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/fault-tolerance/checkpointing/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/fault-tolerance/queryable_state/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/fault-tolerance/schema_evolution/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/fault-tolerance/custom_serialization/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/operators/overview/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/operators/windows/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/operators/joining/
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/operators/process_function/
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/operators/asyncio/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/sources/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/experimental/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/scala_api_extensions/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/datastream/java_lambdas/
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/dataset/overview/	--dataset api 部分没有看
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/table/common/
-https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/table/data_stream_api/
 https://ci.apache.org/projects/flink/flink-docs-release-1.13/docs/dev/table/concepts/dynamic_tables/
 
-	
-val text = benv.fromElements("To be, or not to be,--that is the question:--","Whether 'tis nobler in the mind to suffer","The slings and arrows of outrageous fortune","Or to take arms against a sea of troubles,")
-val counts = text.flatMap { _.toLowerCase.split("\\W+") }.map { (_, 1) }.groupBy(0).sum(1)
-counts.print()
 ----
+bin/start-scala-shell.sh remote pseudo 8081
 val textStreaming = senv.fromElements("To be, or not to be,--that is the question:--","Whether 'tis nobler in the mind to suffer","The slings and arrows of outrageous fortune","Or to take arms against a sea of troubles,")
 val countsStreaming = textStreaming.flatMap { _.toLowerCase.split("\\W+") }.map { (_, 1) }.keyBy(0).sum(1)
 countsStreaming.print()
 senv.execute("Streaming Wordcount")
 
-bin/start-scala-shell.sh remote pseudo 8081
 bin/flink run ./examples/batch/WordCount.jar --input file:///home/tyx/data.txt --output file:///home/tyx/wordcount_out1
 
 

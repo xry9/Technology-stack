@@ -48,7 +48,7 @@ apache-hive-3.1.2-src:
 4、spark
 ./dev/make-distribution.sh --name without-hive --tgz -Phadoop-2.7 -Dhadoop.version=2.7.2 -Pyarn
 ./build/mvn -DskipTests clean package	--github 上给出的编译方式
-
+install -g -registry=https://registry.npm.taobao.org --cache-max=0 --no-save
 5、flink
 1.8: mvn clean package -DskipTests
 flink-1.13.2:
@@ -58,11 +58,12 @@ flink-1.13.2:
 6、tez
 https://blog.csdn.net/xiefu5hh/article/details/78577545
 https://www.jianshu.com/p/46d89a05d7bd
+https://blog.csdn.net/qq_25702189/article/details/103491761
 
 用以上两篇文章都没搞定，是tez-ui的问题，干脆不编译这两个子工程就可以了，即：
 <!--module>tez-ui</module>
 <module>tez-ui2</module-->
-
+或者注释掉 wro4j-maven-plugin, maven-war-plugin 这两个 plugin
 mvn clean package -DskipTests=true
 https://blog.csdn.net/zhoudetiankong/article/details/73089225
 https://blog.csdn.net/qingzhenli/article/details/72688539
