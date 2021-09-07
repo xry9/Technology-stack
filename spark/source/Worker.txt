@@ -1,24 +1,84 @@
-private[deploy] class org.apache.spark.deploy.worker.Worker(override val rpcEnv: RpcEnv, webUiPort: Int, cores: Int, memory: Int, masterRpcAddresses: Array[RpcAddress], endpointName: String, workDirPath: String = null, val conf: SparkConf, val securityMgr: SecurityManager) extends ThreadSafeRpcEndpoint with Logging {
+
+
+
+private[deploy] class org.apache.spark.deploy.worker.Worker(override val rpcEnv: RpcEnv, webUiPort: Int, cores: Int, memory: Int, masterRpcAddresses: Array[RpcAddress], endpointName: String, workDirPath: String = null, val conf: SparkConf, val securityMgr: SecurityManager, resourceFileOpt: Option[String] = None, externalShuffleServiceSupplier: Supplier[ExternalShuffleService] = null) extends ThreadSafeRpcEndpoint with Logging {
 	override def receive: PartialFunction[Any, Unit] = synchronized {
-		case LaunchExecutor(masterUrl, appId, execId, appDesc, cores_, memory_) =>
-			val manager = new ExecutorRunner(appId, execId, appDesc.copy(command = Worker.maybeUpdateSSLSettings(appDesc.command, conf)), cores_, memory_, self, workerId, host, webUi.boundPort, publicAddress, sparkHome, executorDir, workerUri, conf, appLocalDirs, ExecutorState.RUNNING)
+		case LaunchExecutor(masterUrl, appId, execId, appDesc, cores_, memory_, resources_) =>
+			val executorDir = new File(workDir, appId + "/" + execId)
+			val appLocalDirs = appDirectories.getOrElse(appId, {
+				val localRootDirs = Utils.getOrCreateLocalRootDirs(conf)
+				val dirs = localRootDirs.flatMap { dir => val appDir = Utils.createDirectory(dir, namePrefix = "executor") }.toSeq
+				dirs
+			})
+			appDirectories(appId) = appLocalDirs
+			val manager = new ExecutorRunner(appId, execId, appDesc.copy(command = Worker.maybeUpdateSSLSettings(appDesc.command, conf)), cores_, memory_, self, workerId, webUi.scheme, host, webUi.boundPort, publicAddress, sparkHome, executorDir, workerUri, conf, appLocalDirs, ExecutorState.LAUNCHING, resources_)
 			executors(appId + "/" + execId) = manager
 			manager.start()
-			sendToMaster(ExecutorStateChanged(appId, execId, manager.state, None, None))
+			coresUsed += cores_
+			memoryUsed += memory_
+			addResourcesUsed(resources_)
 	}
 }
-private[deploy] class ExecutorRunner(val appId: String, val execId: Int, val appDesc: ApplicationDescription, val cores: Int, val memory: Int, val worker: RpcEndpointRef, val workerId: String, val host: String, val webUiPort: Int, val publicAddress: String, val sparkHome: File, val executorDir: File, val workerUrl: String, conf: SparkConf, val appLocalDirs: Seq[String], @volatile var state: ExecutorState.Value) extends Logging {
-	private[worker] def start() {
+private[deploy] class org.apache.spark.deploy.worker.ExecutorRunner(val appId: String, val execId: Int, val appDesc: ApplicationDescription, val cores: Int, val memory: Int, val worker: RpcEndpointRef, val workerId: String, val webUiScheme: String, val host: String, val webUiPort: Int, val publicAddress: String, val sparkHome: File, val executorDir: File, val workerUrl: String, conf: SparkConf, val appLocalDirs: Seq[String], @volatile var state: ExecutorState.Value, val resources: Map[String, ResourceInformation] = Map.empty) extends Logging {
+	private[worker] def start(): Unit = {
 		workerThread = new Thread("ExecutorRunner for " + fullId) {
-			override def run() { fetchAndRunExecutor() }
+			override def run(): Unit = { fetchAndRunExecutor() }
 		}
 		workerThread.start()
 	}
-	private def fetchAndRunExecutor() {
-		val builder = CommandUtils.buildProcessBuilder(appDesc.command, new SecurityManager(conf), memory, sparkHome.getAbsolutePath, substituteVariables)
-		val command = builder.command()// "/usr/local/app/jdk1.8.0_77/bin/java" "-cp" "/usr/local/app/spark-2.2.0-bin-hadoop2.7/conf/:/usr/local/app/spark-2.2.0-bin-hadoop2.7/jars/*:/usr/local/app/hadoop-2.7.2/etc/hadoop/" "-Xmx1024M" "-Dspark.driver.port=53463" "org.apache.spark.executor.CoarseGrainedExecutorBackend" "--driver-url" "spark://CoarseGrainedScheduler@192.168.58.140:53463" "--executor-id" "0" "--hostname" "192.168.58.140" "--cores" "4" "--app-id" "app-20200512021608-0000" "--worker-url" "spark://Worker@192.168.58.140:49097"
+	private def fetchAndRunExecutor(): Unit = {
+		val subsCommand = appDesc.command.copy(arguments = arguments, javaOpts = subsOpts)
+		val builder = CommandUtils.buildProcessBuilder(subsCommand, new SecurityManager(conf), memory, sparkHome.getAbsolutePath, substituteVariables)
+		val command = builder.command()
+		val redactedCommand = Utils.redactCommandLineArgs(conf, command.asScala.toSeq).mkString("\"", "\" \"", "\"")
 		process = builder.start()
-		val exitCode = process.waitFor()
 		worker.send(ExecutorStateChanged(appId, execId, state, Some(message), Some(exitCode)))
+	}
+	def launchTask(context: ExecutorBackend, taskDescription: TaskDescription): Unit = {
+		val tr = new TaskRunner(context, taskDescription, plugins)
+		runningTasks.put(taskDescription.taskId, tr)
+		threadPool.execute(tr)
+	}
+}
+
+private[spark] class org.apache.spark.executor.Executor(executorId: String, executorHostname: String, env: SparkEnv, userClassPath: Seq[URL] = Nil, isLocal: Boolean = false, uncaughtExceptionHandler: UncaughtExceptionHandler = new SparkUncaughtExceptionHandler, resources: immutable.Map[String, ResourceInformation]) extends Logging {
+	class TaskRunner(execBackend: ExecutorBackend, private val taskDescription: TaskDescription, private val plugins: Option[PluginContainer]) extends Runnable {
+		override def run(): Unit = {
+			val ser = env.closureSerializer.newInstance()
+			task = ser.deserialize[Task[Any]](taskDescription.serializedTask, Thread.currentThread.getContextClassLoader)
+			val res = task.run(taskAttemptId = taskId, attemptNumber = taskDescription.attemptNumber, metricsSystem = env.metricsSystem, resources = taskDescription.resources, plugins = plugins)
+		}
+	}
+}
+
+private[spark] abstract class org.apache.spark.scheduler.Task[T](val stageId: Int, val stageAttemptId: Int, val partitionId: Int, @transient var localProperties: Properties = new Properties, serializedTaskMetrics: Array[Byte] = SparkEnv.get.closureSerializer.newInstance().serialize(TaskMetrics.registered).array(), val jobId: Option[Int] = None, val appId: Option[String] = None, val appAttemptId: Option[String] = None, val isBarrier: Boolean = false) extends Serializable {
+	final def run(taskAttemptId: Long, attemptNumber: Int, metricsSystem: MetricsSystem, resources: Map[String, ResourceInformation], plugins: Option[PluginContainer]): T = {
+		SparkEnv.get.blockManager.registerTask(taskAttemptId)
+		val taskContext = new TaskContextImpl(stageId, stageAttemptId, partitionId, taskAttemptId, attemptNumber, taskMemoryManager, localProperties, metricsSystem, metrics, resources)
+		context = if (isBarrier) { new BarrierTaskContext(taskContext) } else { taskContext }
+		runTask(context)
+	}
+}
+
+private[spark] class org.apache.spark.scheduler.ShuffleMapTask(stageId: Int, stageAttemptId: Int, taskBinary: Broadcast[Array[Byte]], partition: Partition, @transient private var locs: Seq[TaskLocation], localProperties: Properties, serializedTaskMetrics: Array[Byte], jobId: Option[Int] = None, appId: Option[String] = None, appAttemptId: Option[String] = None, isBarrier: Boolean = false) extends Task[MapStatus](stageId, stageAttemptId, partition.index, localProperties, serializedTaskMetrics, jobId, appId, appAttemptId, isBarrier) with Logging {
+	override def runTask(context: TaskContext): MapStatus = {
+		val ser = SparkEnv.get.closureSerializer.newInstance()
+		val rddAndDep = ser.deserialize[(RDD[_], ShuffleDependency[_, _, _])](ByteBuffer.wrap(taskBinary.value), Thread.currentThread.getContextClassLoader)
+		val rdd = rddAndDep._1
+		val dep = rddAndDep._2
+		dep.shuffleWriterProcessor.write(rdd, dep, mapId, context, partition)
+	}
+}
+
+private[spark] class org.apache.spark.executor.CoarseGrainedExecutorBackend(override val rpcEnv: RpcEnv, driverUrl: String, executorId: String, bindAddress: String, hostname: String, cores: Int, userClassPath: Seq[URL], env: SparkEnv, resourcesFileOpt: Option[String], resourceProfile: ResourceProfile) extends IsolatedRpcEndpoint with ExecutorBackend with Logging {
+	override def receive: PartialFunction[Any, Unit] = {
+		case LaunchTask(data) =>
+		if (executor == null) {
+			exitExecutor(1, "Received LaunchTask command but executor was null")
+		} else {
+			val taskDesc = TaskDescription.decode(data.value)
+			taskResources(taskDesc.taskId) = taskDesc.resources
+			executor.launchTask(this, taskDesc)
+		}
 	}
 }

@@ -22,7 +22,7 @@ flink-1.8.2:
 2、vim bin/flink-daemon.sh "$FLINK_TM_CLASSPATH:$INTERNAL_HADOOP_CLASSPATHS"`:/usr/local/app/flink-1.8.2/flink-dist_2.11-1.8.2.jar"。 同样 flink 脚本也要加上
 
 flink-1.13.2:
-三个 jar 特别处理: flink-dist_2.11-1.13.2.jar flink-table_2.11-1.13.2.jar flink-table-blink_2.11-1.13.2.jar。删除 org/apache/flink, dist 下的 mesos shade 不要删
+三个 jar 特别处理: flink-dist_2.11-1.13.2.jar flink-table_2.11-1.13.2.jar flink-table-blink_2.11-1.13.2.jar。删除 org/apache/flink, dist 下的 shade 不要删
 cp */target/flink*jar /usr/local/app/flink-1.13.2/lib/lib1
 cp */*/target/flink*jar /usr/local/app/flink-1.13.2/lib/lib2/
 删除 flink-fs-hadoop-shaded-1.13.2.jar, example, test 等, 加入 flink-runtime-web_2.11-1.13.2.jar 因为本地无法编译

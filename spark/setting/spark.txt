@@ -30,7 +30,7 @@ A)用spaek-shell客户端连接集群时：
 		不需要做任何配置，只要写是active的namenode就可以访问文件
 	方式2、无论集群外节点在主节点还是从节点或是集群外机器，只要把Hadoop集群的core-site.xml和hdfs-site.xml拷到本机SPARK_HOME/conf下即可
 	方式3、无论集群外节点在主节点还是从节点，只要在spark-env.sh中加入 HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
-B)spark-submit任务时
+B)spark-submit 任务时
 	同spaek-shell，还要在代码中sc.hadoopConfiguration.addResource("core-site.xml");sc.hadoopConfiguration.addResource("hdfs-site.xml");(core-site.xml,hdfs-site.xml加入classpath)
 	（core-site.xml,hdfs-site.xml不加入jar包的classpath也可，只要 SPARK_HOME/conf 或配置了 HADOOP_CONF_DIR，没有严格验证）
 ====================================
@@ -50,11 +50,7 @@ sparkStremaing:
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.StreamingContext._
 val ssc = new StreamingContext(sc, Seconds(10))
-val dstream = ssc.socketTextStream("localhost", 9999)
-.flatMap(_.split(" "))
-.map((_, 1))
-.reduceByKey(_ + _)
-.print()// dstream.print()
+val dstream = ssc.socketTextStream("localhost", 9999).flatMap(_.split(" ")).map((_, 1)).reduceByKey(_ + _).print() // dstream.print()
 ssc.start()
 
 3、
