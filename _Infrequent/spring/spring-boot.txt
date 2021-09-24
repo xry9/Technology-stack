@@ -1,0 +1,12 @@
+https://github.com/spring-projects/spring-boot/tree/2.1.x/spring-boot-samples
+
+jar 包的依赖 jar 在 BOOT-INF/lib 下面
+
+org.springframework.boot.context.config.ConfigFileApplicationListener.Loader#load 加载配置文件
+SimpleCacheConfiguration 是默认的, pom 中引用 spring-boot-starter-data-redis, 则用 redis 缓存
+
+
+如果想自行指定一个 mysql 版本, 由于 spring-boot-starter-parent-1.5.12.RELEASE.pom --> spring-boot-dependencies-1.5.12.RELEASE.pom 
+中已有 <mysql.version>5.1.46</mysql.version>, 需要在当前项目中重写 <properties><mysql.version>5.1.46</mysql.version></properties>
+
+Starters are a set of convenient dependency descriptors that you can include in your application

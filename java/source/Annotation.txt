@@ -1,0 +1,148 @@
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.SOURCE)
+public @interface java.lang.Override {
+}
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(value={CONSTRUCTOR, FIELD, LOCAL_VARIABLE, METHOD, PACKAGE, PARAMETER, TYPE})
+public @interface java.lang.Deprecated {
+}
+
+@Target({TYPE, FIELD, METHOD, PARAMETER, CONSTRUCTOR, LOCAL_VARIABLE})
+@Retention(RetentionPolicy.SOURCE)
+public @interface java.lang.SuppressWarnings {
+    String[] value();
+}
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.CONSTRUCTOR, ElementType.METHOD})
+public @interface java.lang.SafeVarargs {}
+
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface java.lang.FunctionalInterface {}
+
+
+----------------------------
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.ANNOTATION_TYPE)
+public @interface java.lang.annotation.Retention {
+    RetentionPolicy value();
+}
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.ANNOTATION_TYPE)
+public @interface java.lang.annotation.Documented {
+}
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.ANNOTATION_TYPE)
+public @interface java.lang.annotation.Target {
+    ElementType[] value();
+}
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.ANNOTATION_TYPE)
+public @interface java.lang.annotation.Inherited {
+}
+
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.ANNOTATION_TYPE)
+public @interface java.lang.annotation.Repeatable {
+    Class<? extends Annotation> value();
+}
+----------------------------
+public enum java.lang.annotation.RetentionPolicy {
+    SOURCE, // Annotations are to be discarded by the compiler.
+    CLASS, // Annotations are to be recorded in the class file by the compiler but need not be retained by the VM at run time.  This is the default behavior.
+    // @see java.lang.reflect.AnnotatedElement
+    RUNTIME // Annotations are to be recorded in the class file by the compiler and retained by the VM at run time, so they may be read reflectively.
+}
+public enum java.lang.annotation.ElementType {
+    TYPE,
+    FIELD,
+    METHOD,
+    PARAMETER,
+    CONSTRUCTOR,
+    LOCAL_VARIABLE,
+    ANNOTATION_TYPE,
+    PACKAGE,
+    TYPE_PARAMETER,
+    TYPE_USE
+}
+public interface java.lang.annotation.Annotation {
+    boolean equals(Object obj);
+    int hashCode();
+    String toString();
+    Class<? extends Annotation> annotationType();
+}
+----------------------------
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+//@Inherited
+@interface Inheritable { }
+@Inheritable
+class InheritableFather {
+    public InheritableFather() {
+        System.out.println("InheritableFather:"+InheritableFather.class.isAnnotationPresent(Inheritable.class));
+    }
+}
+public class InheritableSon extends InheritableFather {
+    public InheritableSon() {
+        super();
+        System.out.println("InheritableSon:"+InheritableSon.class.isAnnotationPresent(Inheritable.class));
+    }
+    public static void main(String[] args) {
+        InheritableSon is = new InheritableSon();
+    }
+}
+--------
+@Retention(RetentionPolicy.RUNTIME)
+@interface MyAnnotation {
+    String[] value() default "unknown";
+}
+class Person {
+    @MyAnnotation
+    @Deprecated
+    public void empty(){
+        System.out.println("\nempty");
+    }
+    @MyAnnotation(value={"girl","boy"})
+    public void somebody(String name, int age){
+        System.out.println("\nsomebody: "+name+", "+age);
+    }
+}
+public class AnnotationTest {
+    public static void main(String[] args) throws Exception {
+        Person person = new Person();
+        Class<Person> c = Person.class;
+        Method mSomebody = c.getMethod("somebody", new Class[]{String.class, int.class});
+        mSomebody.invoke(person, new Object[]{"lily", 18});
+        iteratorAnnotations(mSomebody);
+        Method mEmpty = c.getMethod("empty", new Class[]{});
+        mEmpty.invoke(person, new Object[]{});        
+        iteratorAnnotations(mEmpty);
+    }
+    public static void iteratorAnnotations(Method method) {
+        if(method.isAnnotationPresent(MyAnnotation.class)){
+            MyAnnotation myAnnotation = method.getAnnotation(MyAnnotation.class);
+            String[] values = myAnnotation.value();
+            for (String str:values)
+                System.out.println(str+", ");
+        }
+        Annotation[] annotations = method.getAnnotations();
+        for(Annotation annotation : annotations){
+            System.out.println(annotation);
+        }
+    }
+}

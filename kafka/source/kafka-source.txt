@@ -1,10 +1,14 @@
 git clone -b 1.0 git@github.com:apache/kafka.git
 ./gradlew releaseTarGz -x signArchives	--> core/build/distributions/
+./gradlew clean build
 在 core 中 ../gradlew clean srcJar/jar, 可单独打 jar 
 
 2.0 版本同样可以编译成功
-
 可如果从 apache mirror 下载的源码需要先执行一下 gradle 命令生成 gradlew 
+
+3.0 版本
+./gradlew releaseTarGz
+
 =========================================================================
 org.apache.kafka.common.record.FileRecords#searchForTimestamp
 org.apache.kafka.common.internals.PartitionStates#moveToEnd

@@ -1,0 +1,33 @@
+git clone -b 3.2.x git@github.com:spring-projects/spring-framework.git
+./gradlew clean build -x test -x javadoc
+vim build.gradle
+	maven { url "https://repo.spring.io/plugins-release" }
+	maven { url "https://repo.spring.io/libs-release" }
+	这两个上面加入
+	maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+	maven { url 'https://maven.aliyun.com/repository/spring-plugin'}
+	maven { url "https://maven.aliyun.com/repository/public" }
+	maven { url "https://maven.aliyun.com/repository/central" }
+
+vim spring-aspects/aspects.gradle
+注释掉 doLast, 第一个就行
+
+git clone -b v4.3.14.RELEASE git@github.com:spring-projects/spring-framework.git
+build.gradle 需要加 maven { url "http://maven.aliyun.com/nexus/content/groups/public" }
+
+--------
+git clone -b 2.0.8.RELEASE git@github.com:spring-projects/spring-security.git
+再加入
+	maven { url 'https://maven.aliyun.com/repository/spring-plugin' }
+	maven { url 'https://maven.aliyun.com/nexus/content/repositories/spring-plugin' }
+vim gradle/war-sample.gradle
+	//apply from: TOMCAT_GRADLE
+
+-----------------------------------------------------
+org.springframework.beans.factory.xml.BeanDefinitionParserDelegate#parseBeanDefinitionElement 这个方法很重要
+org.springframework.beans.factory.support.AbstractBeanFactory#mergedBeanDefinitions 是一个全局的 Map 
+org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider#findCandidateComponents
+org.springframework.core.type.classreading.SimpleMetadataReader#SimpleMetadataReader 关于注解的解析, 用到了 spring-asm
+org.springframework.aop.framework.ObjenesisCglibAopProxy#createProxyClassAndInstance aop cglib 对象在这里创建
+  cglib 用法好像挺简单啊, enhancer.setSuperclass, enhancer.setCallback, 而且设置父类单纯就是个父类而已
+

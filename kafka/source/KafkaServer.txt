@@ -1,41 +1,145 @@
+less k2.log |grep -E -A 15 "doSend===420===LEADER_AND_ISR"
+less logs/* |grep -E "doWork===239"
+
+两个维度要探讨: pull/push, 发布订阅/peer to peer
 
 object kafka.server.KafkaServer {
-  def startup() {
-      val canStartup = isStartingUp.compareAndSet(false, true)
-      if (canStartup) {
-        socketServer = new SocketServer(config, metrics, time, credentialProvider)
-        socketServer.startup(startupProcessors = false)
-        kafkaController = new KafkaController(config, zkClient, time, metrics, brokerInfo, tokenManager, threadNamePrefix)
-        kafkaController.startup()
-        val fetchManager = new FetchManager(Time.SYSTEM, new FetchSessionCache(config.maxIncrementalFetchSessionCacheSlots, KafkaServer.MIN_INCREMENTAL_FETCH_SESSION_EVICTION_MS))
-        apis = new KafkaApis(socketServer.requestChannel, replicaManager, adminManager, groupCoordinator, transactionCoordinator, kafkaController, zkClient, config.brokerId, config, metadataCache, metrics, authorizer, quotaManagers, fetchManager, brokerTopicStats, clusterId, time, tokenManager)
-        requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, time, config.numIoThreads)
-      }
-  }
+	def startup() {
+		val canStartup = isStartingUp.compareAndSet(false, true)
+		if (canStartup) {
+			socketServer = new SocketServer(config, metrics, time, credentialProvider)
+			socketServer.startup(startupProcessors = false)
+			kafkaController = new KafkaController(config, zkClient, time, metrics, brokerInfo, tokenManager, threadNamePrefix)
+			kafkaController.startup()
+			val fetchManager = new FetchManager(Time.SYSTEM, new FetchSessionCache(config.maxIncrementalFetchSessionCacheSlots, KafkaServer.MIN_INCREMENTAL_FETCH_SESSION_EVICTION_MS))
+			apis = new KafkaApis(socketServer.requestChannel, replicaManager, adminManager, groupCoordinator, transactionCoordinator, kafkaController, zkClient, config.brokerId, config, metadataCache, metrics, authorizer, quotaManagers, fetchManager, brokerTopicStats, clusterId, time, tokenManager)
+			requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, time, config.numIoThreads)
+		}
+	}
 }
 
 
 
 class kafka.network.SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time, val credentialProvider: CredentialProvider) extends Logging with KafkaMetricsGroup {
-  def startup(startupProcessors: Boolean = true) {
-      createAcceptorAndProcessors(config.numNetworkThreads, config.listeners)
-  }
-  private def createAcceptorAndProcessors(processorsPerListener: Int, endpoints: Seq[EndPoint]): Unit = synchronized {
-    endpoints.foreach { endpoint =>
-      val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId, connectionQuotas)
-      acceptors.put(endpoint, acceptor)
-    }
-  }
-  private[kafka] class Acceptor(val endPoint: EndPoint, val sendBufferSize: Int, val recvBufferSize: Int, brokerId: Int, connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
-    private val nioSelector = NSelector.open()
-    val serverChannel = openServerSocket(endPoint.host, endPoint.port)
-  }
-  private def openServerSocket(host: String, port: Int): ServerSocketChannel = {
-    val socketAddress = new InetSocketAddress(host, port)
-    val serverChannel = ServerSocketChannel.open()
-    serverChannel.socket.bind(socketAddress)
-    serverChannel
-  }
+	def startup(startupProcessors: Boolean = true) {
+		createAcceptorAndProcessors(config.numNetworkThreads, config.listeners)
+	}
+	private def createAcceptorAndProcessors(processorsPerListener: Int, endpoints: Seq[EndPoint]): Unit = synchronized {
+		endpoints.foreach { endpoint =>
+			val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId, connectionQuotas)
+			acceptors.put(endpoint, acceptor)
+		}
+	}
+	private[kafka] class Acceptor(val endPoint: EndPoint, val sendBufferSize: Int, val recvBufferSize: Int, brokerId: Int, connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
+		private val nioSelector = NSelector.open()
+		val serverChannel = openServerSocket(endPoint.host, endPoint.port)
+	}
+	private def openServerSocket(host: String, port: Int): ServerSocketChannel = {
+		val socketAddress = new InetSocketAddress(host, port)
+		val serverChannel = ServerSocketChannel.open()
+		serverChannel.socket.bind(socketAddress)
+		serverChannel
+	}
+	private def processCompletedReceives() {
+		selector.completedReceives.asScala.foreach { receive =>
+			openOrClosingChannel(receive.source) match {
+				case Some(channel) =>
+					val req = new RequestChannel.Request(processor = id, context = context, startTimeNanos = time.nanoseconds, memoryPool, receive.payload, requestChannel.metrics)
+					requestChannel.sendRequest(req)
+					handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)
+			}
+		}
+	}
+	private def processCompletedSends() {
+		selector.completedSends.asScala.foreach { send =>
+			val response = inflightResponses.remove(send.destination).getOrElse { }
+			response.onComplete.foreach(onComplete => onComplete(send))
+		}
+	}
+	private[kafka] class Processor(val id: Int, time: Time, maxRequestSize: Int, requestChannel: RequestChannel, connectionQuotas: ConnectionQuotas, connectionsMaxIdleMs: Long, listenerName: ListenerName, securityProtocol: SecurityProtocol, config: KafkaConfig, metrics: Metrics, credentialProvider: CredentialProvider, memoryPool: MemoryPool, logContext: LogContext) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
+		protected[network] def sendResponse(response: RequestChannel.Response, responseSend: Send) {
+			val connectionId = response.request.context.connectionId
+			if (channel(connectionId).isEmpty) {
+				response.request.updateRequestMetrics(0L, response)
+			}
+			if (openOrClosingChannel(connectionId).isDefined) {
+				selector.send(responseSend)
+				inflightResponses += (connectionId -> response)
+			}
+		}
+		override def run() {
+			startupComplete()
+			while (isRunning) {
+				configureNewConnections()
+				processNewResponses()
+				poll()
+				processCompletedReceives()
+				processCompletedSends()
+				processDisconnected()
+			}
+		}
+		private def processNewResponses() {
+			var currentResponse: RequestChannel.Response = null
+			while ({currentResponse = dequeueResponse(); currentResponse != null}) {
+				val channelId = currentResponse.request.context.connectionId
+				currentResponse match {
+					case response: SendResponse =>
+					sendResponse(response, response.responseSend)
+				}
+			}
+		}
+		private def dequeueResponse(): RequestChannel.Response = {
+			val response = responseQueue.poll()
+			response
+		}
+		private[network] def enqueueResponse(response: RequestChannel.Response): Unit = {
+			responseQueue.put(response)
+			wakeup()
+		}
+		def accept(socketChannel: SocketChannel) {
+			newConnections.add(socketChannel)
+			wakeup()
+		}
+		private def configureNewConnections() {
+			while (!newConnections.isEmpty) {
+				val channel = newConnections.poll()
+				selector.register(connectionId(channel.socket), channel)
+			}
+		}
+		private def poll() {
+			selector.poll(300)
+		}
+
+	}
+	private[kafka] class Acceptor(val endPoint: EndPoint, val sendBufferSize: Int, val recvBufferSize: Int, brokerId: Int, connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
+		def run() {
+			while (isRunning) {
+				val ready = nioSelector.select(500)
+				if (ready > 0) {
+					val keys = nioSelector.selectedKeys()
+					val iter = keys.iterator()
+					while (iter.hasNext && isRunning) {
+						val key = iter.next
+						iter.remove()
+						if (key.isAcceptable) {
+							val processor = synchronized {
+								currentProcessor = currentProcessor % processors.size
+								processors(currentProcessor)
+							}
+							accept(key, processor)
+						}
+						currentProcessor = currentProcessor + 1
+					}
+				}
+			}
+		}
+		def accept(key: SelectionKey, processor: Processor) {
+			val serverSocketChannel = key.channel().asInstanceOf[ServerSocketChannel]
+			val socketChannel = serverSocketChannel.accept()
+			processor.accept(socketChannel)
+		}
+
+	}
 }
 
 class kafka.server.KafkaRequestHandler(id: Int, brokerId: Int, val aggregateIdleMeter: Meter, val totalHandlerThreads: AtomicInteger, val requestChannel: RequestChannel, apis: KafkaApis, time: Time) extends Runnable with Logging {
@@ -61,71 +165,488 @@ class KafkaRequestHandlerPool(val brokerId: Int, val requestChannel: RequestChan
 }
 
 class kafka.server.KafkaApis(val requestChannel: RequestChannel, val replicaManager: ReplicaManager, val adminManager: AdminManager, val groupCoordinator: GroupCoordinator, val txnCoordinator: TransactionCoordinator, val controller: KafkaController, val zkClient: KafkaZkClient, val brokerId: Int, val config: KafkaConfig, val metadataCache: MetadataCache, val metrics: Metrics, val authorizer: Option[Authorizer], val quotas: QuotaManagers, val fetchManager: FetchManager, brokerTopicStats: BrokerTopicStats, val clusterId: String, time: Time, val tokenManager: DelegationTokenManager) extends Logging {
-  def handle(request: RequestChannel.Request) {
-    request.header.apiKey match {
-      case ApiKeys.LEADER_AND_ISR => handleLeaderAndIsrRequest(request)
+	def handle(request: RequestChannel.Request) {
+		request.header.apiKey match {
+			case ApiKeys.PRODUCE => handleProduceRequest(request)
+			case ApiKeys.FETCH => handleFetchRequest(request)
+			case ApiKeys.OFFSET_COMMIT => handleOffsetCommitRequest(request)
+			case ApiKeys.HEARTBEAT => handleHeartbeatRequest(request)
+			case ApiKeys.LEADER_AND_ISR => handleLeaderAndIsrRequest(request)
+			case ApiKeys.OFFSET_FETCH => handleOffsetFetchRequest(request)
+		}
+	}
+	def handleLeaderAndIsrRequest(request: RequestChannel.Request) {
+		val correlationId = request.header.correlationId
+		val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
+		def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]) {...}
+		val response = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, onLeadershipChange)
+	}
+	def handleOffsetFetchRequest(request: RequestChannel.Request) {
+		def createResponse(requestThrottleMs: Int): AbstractResponse = {
+			val offsetFetchResponse =
+			if (!authorize(request.session, Describe, Resource(Group, offsetFetchRequest.groupId, LITERAL))){
+			} else {
+				val (authorizedPartitions, unauthorizedPartitions) = offsetFetchRequest.partitions.asScala.partition(authorizeTopicDescribe)
+				val (error, authorizedPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId, Some(authorizedPartitions))
+				new OffsetFetchResponse(requestThrottleMs, Errors.NONE, (authorizedPartitionData ++ unauthorizedPartitionData).asJava)
+			}
+			offsetFetchResponse
+		}
+	}
+	def handleOffsetCommitRequest(request: RequestChannel.Request) {
+		val offsetCommitRequest = request.body[OffsetCommitRequest]
+		def sendResponseCallback(commitStatus: immutable.Map[TopicPartition, Errors]) {
+			sendResponseMaybeThrottle(request, requestThrottleMs => new OffsetCommitResponse(requestThrottleMs, combinedCommitStatus.asJava))
+		}
+		groupCoordinator.handleCommitOffsets(offsetCommitRequest.groupId, offsetCommitRequest.memberId, offsetCommitRequest.generationId, partitionData, sendResponseCallback)
+	}
+	def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]) {
+		updatedLeaders.foreach { partition =>
+			groupCoordinator.handleGroupImmigration(partition.partitionId)
+		}
+	}
+	def handleFetchRequest(request: RequestChannel.Request) {
+		val fetchRequest = request.body[FetchRequest]
+		val fetchContext = fetchManager.newContext(fetchRequest.metadata(), fetchRequest.fetchData(), fetchRequest.toForget(), fetchRequest.isFromFollower())
+		def processResponseCallback(responsePartitionData: Seq[(TopicPartition, FetchPartitionData)]): Unit = {
+			def createResponse(throttleTimeMs: Int): FetchResponse[BaseRecords] = {
+				val response = new FetchResponse(unconvertedFetchResponse.error(), convertedData, throttleTimeMs, unconvertedFetchResponse.sessionId())
+				response
+			}
+			sendResponse(request, Some(createResponse(maxThrottleTimeMs)), Some(updateConversionStats))
+		}
+	}
+	private def sendResponse(request: RequestChannel.Request, responseOpt: Option[AbstractResponse], onComplete: Option[Send => Unit]): Unit = {
+		responseOpt.foreach(response => requestChannel.updateErrorMetrics(request.header.apiKey, response.errorCounts.asScala))
+		val response = responseOpt match {
+			new RequestChannel.SendResponse(request, responseSend, responseString, onComplete)
+		}
+		sendResponse(response)
+	}
+	private def sendResponse(response: RequestChannel.Response): Unit = {
+		requestChannel.sendResponse(response)
+	}
+
+	private def sendResponseMaybeThrottle(request: RequestChannel.Request, createResponse: Int => AbstractResponse, onComplete: Option[Send => Unit] = None): Unit = {
+		val throttleTimeMs = quotas.request.maybeRecordAndGetThrottleTimeMs(request)
+		quotas.request.throttle(request, throttleTimeMs, sendResponse)
+		sendResponse(request, Some(createResponse(throttleTimeMs)), onComplete)
+	}
+	def handleProduceRequest(request: RequestChannel.Request) {
+		def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]) {
+			sendResponse(request, Some(new ProduceResponse(mergedResponseStatus.asJava, maxThrottleTimeMs)), None)
+		}
+		replicaManager.appendRecords(timeout = produceRequest.timeout.toLong, requiredAcks = produceRequest.acks, internalTopicsAllowed = internalTopicsAllowed, isFromClient = true, entriesPerPartition = authorizedRequestInfo, responseCallback = sendResponseCallback, recordConversionStatsCallback = processingStatsCallback)
+	}
+}
+class kafka.coordinator.group.GroupCoordinator(val brokerId: Int, val groupConfig: GroupConfig, val offsetConfig: OffsetConfig, val groupManager: GroupMetadataManager, val heartbeatPurgatory: DelayedOperationPurgatory[DelayedHeartbeat], val joinPurgatory: DelayedOperationPurgatory[DelayedJoin], time: Time) extends Logging {
+	def handleFetchOffsets(groupId: String, partitions: Option[Seq[TopicPartition]] = None): (Errors, Map[TopicPartition, OffsetFetchResponse.PartitionData]) = {
+		validateGroupStatus(groupId, ApiKeys.OFFSET_FETCH) match {
+			case Some(error) => error -> Map.empty
+			case None => (Errors.NONE, groupManager.getOffsets(groupId, partitions))
+		}
+	}
+	def handleGroupImmigration(offsetTopicPartitionId: Int) {
+		groupManager.scheduleLoadGroupAndOffsets(offsetTopicPartitionId, onGroupLoaded)
+	}
+	def handleCommitOffsets(groupId: String, memberId: String, generationId: Int, offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata], responseCallback: immutable.Map[TopicPartition, Errors] => Unit) {
+		validateGroupStatus(groupId, ApiKeys.OFFSET_COMMIT) match {
+			case None =>
+				groupManager.getGroup(groupId) match {
+					case Some(group) =>
+						doCommitOffsets(group, memberId, generationId, NO_PRODUCER_ID, NO_PRODUCER_EPOCH, offsetMetadata, responseCallback)
+				}
+		}
+	}
+	private def doCommitOffsets(group: GroupMetadata, memberId: String, generationId: Int, producerId: Long, producerEpoch: Short, offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata], responseCallback: immutable.Map[TopicPartition, Errors] => Unit) {
+        groupManager.storeOffsets(group, memberId, offsetMetadata, responseCallback)
     }
-  }
-  def handleLeaderAndIsrRequest(request: RequestChannel.Request) {
-    val correlationId = request.header.correlationId
-    val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
-    def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]) {...}
-    val response = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, onLeadershipChange)
-  }
 }
 
+class kafka.coordinator.group.GroupMetadataManager(brokerId: Int, interBrokerProtocolVersion: ApiVersion, config: OffsetConfig, replicaManager: ReplicaManager, zkClient: KafkaZkClient, time: Time) extends Logging with KafkaMetricsGroup {
+	def getOffsets(groupId: String, topicPartitionsOpt: Option[Seq[TopicPartition]]): Map[TopicPartition, OffsetFetchResponse.PartitionData] = {
+		val group = groupMetadataCache.get(groupId)
+		topicPartitionsOpt match {
+			case Some(topicPartitions) =>
+				topicPartitions.map {
+					topicPartition =>
+						val partitionData = group.offset(topicPartition) match {
+							case Some(offsetAndMetadata) =>
+								new OffsetFetchResponse.PartitionData(offsetAndMetadata.offset, offsetAndMetadata.metadata, Errors.NONE)
+						}
+					topicPartition -> partitionData
+				}.toMap
+		}
+	}
+	def scheduleLoadGroupAndOffsets(offsetsPartition: Int, onGroupLoaded: GroupMetadata => Unit) {
+		val topicPartition = new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, offsetsPartition)
+		scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded))
+	}
+	private[group] def loadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit) {
+		doLoadGroupsAndOffsets(topicPartition, onGroupLoaded)
+	}
+	private def doLoadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit) {
+		def highWaterMark = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
+		replicaManager.getLog(topicPartition) match {
+			case Some(log) =>
+				var currOffset = log.logStartOffset
+				while (currOffset < highWaterMark && !shuttingDown.get()) {
+					val fetchDataInfo = log.read(currOffset, config.loadBufferSize, maxOffset = None, minOneMessage = true, isolationLevel = IsolationLevel.READ_UNCOMMITTED)
+					val memRecords = fetchDataInfo.records match {
+					case records: MemoryRecords => records
+					case fileRecords: FileRecords =>
+						buffer.clear()
+						fileRecords.readInto(buffer, 0)
+						MemoryRecords.readableRecords(buffer)
+					}
+					memRecords.batches.asScala.foreach { batch =>
+						val isTxnOffsetCommit = batch.isTransactional
+						if (batch.isControlBatch) {} else {
+							for (record <- batch.asScala) {
+								if (batchBaseOffset.isEmpty) batchBaseOffset = Some(record.offset)
+								GroupMetadataManager.readMessageKey(record.key) match {
+									case groupMetadataKey: GroupMetadataKey =>
+									val groupId = groupMetadataKey.key
+									val groupMetadata = GroupMetadataManager.readGroupMessageValue(groupId, record.value)
+									if (groupMetadata != null) {
+										loadedGroups.put(groupId, groupMetadata)
+									} else {}
+								}
+							}
+						}
+						currOffset = batch.nextOffset
+					}
+				}
+				loadedGroups.values.foreach { group =>
+					val offsets = groupOffsets.getOrElse(group.groupId, Map.empty[TopicPartition, CommitRecordMetadataAndOffset])
+					val pendingOffsets = pendingGroupOffsets.getOrElse(group.groupId, Map.empty[Long, mutable.Map[TopicPartition, CommitRecordMetadataAndOffset]])
+					loadGroup(group, offsets, pendingOffsets)
+					onGroupLoaded(group)
+				}
+		}
+	}
+	private def loadGroup(group: GroupMetadata, offsets: Map[TopicPartition, CommitRecordMetadataAndOffset], pendingTransactionalOffsets: Map[Long, mutable.Map[TopicPartition, CommitRecordMetadataAndOffset]]): Unit = {
+		val loadedOffsets = offsets.mapValues {}
+		group.initializeOffsets(loadedOffsets, pendingTransactionalOffsets.toMap)
+	}
+	def storeOffsets(group: GroupMetadata, consumerId: String, offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata], responseCallback: immutable.Map[TopicPartition, Errors] => Unit, producerId: Long = RecordBatch.NO_PRODUCER_ID, producerEpoch: Short = RecordBatch.NO_PRODUCER_EPOCH): Unit = {
+		val filteredOffsetMetadata = offsetMetadata.filter { case (_, offsetAndMetadata) =>
+		}
+		getMagic(partitionFor(group.groupId)) match {
+			case Some(magicValue) =>
+				val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) =>
+				}
+				group.onOffsetCommitAppend(topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata))
+		}
+	}
+}
+private object kafka.coordinator.group.GroupMetadata {
+	def initializeOffsets(offsets: collection.Map[TopicPartition, CommitRecordMetadataAndOffset], pendingTxnOffsets: Map[Long, mutable.Map[TopicPartition, CommitRecordMetadataAndOffset]]) {
+		this.offsets ++= offsets
+		this.pendingTransactionalOffsetCommits ++= pendingTxnOffsets
+	}
+	private val offsets = new mutable.HashMap[TopicPartition, CommitRecordMetadataAndOffset]
+	def offset(topicPartition: TopicPartition): Option[OffsetAndMetadata] = offsets.get(topicPartition).map(_.offsetAndMetadata)	
+	def onOffsetCommitAppend(topicPartition: TopicPartition, offsetWithCommitRecordMetadata: CommitRecordMetadataAndOffset) {
+		offsets.put(topicPartition, offsetWithCommitRecordMetadata)
+	}
+
+}
 class ReplicaManager(val config: KafkaConfig, metrics: Metrics, time: Time, val zkClient: KafkaZkClient, scheduler: Scheduler, val logManager: LogManager, val isShuttingDown: AtomicBoolean, quotaManagers: QuotaManagers, val brokerTopicStats: BrokerTopicStats, val metadataCache: MetadataCache, logDirFailureChannel: LogDirFailureChannel, val delayedProducePurgatory: DelayedOperationPurgatory[DelayedProduce], val delayedFetchPurgatory: DelayedOperationPurgatory[DelayedFetch], val delayedDeleteRecordsPurgatory: DelayedOperationPurgatory[DelayedDeleteRecords], threadNamePrefix: Option[String]) extends Logging with KafkaMetricsGroup {
-  def becomeLeaderOrFollower(correlationId: Int, leaderAndIsrRequest: LeaderAndIsrRequest, onLeadershipChange: (Iterable[Partition], Iterable[Partition]) => Unit): LeaderAndIsrResponse = {
-    makeLeaders(controllerId, controllerEpoch, partitionsTobeLeader, correlationId, responseMap)
-  }
+	def becomeLeaderOrFollower(correlationId: Int, leaderAndIsrRequest: LeaderAndIsrRequest, onLeadershipChange: (Iterable[Partition], Iterable[Partition]) => Unit): LeaderAndIsrResponse = {
+		makeLeaders(controllerId, controllerEpoch, partitionsTobeLeader, correlationId, responseMap)
+	}
 }
-
 class kafka.server.ReplicaManager(val config: KafkaConfig, metrics: Metrics, time: Time, val zkClient: KafkaZkClient, scheduler: Scheduler, val logManager: LogManager, val isShuttingDown: AtomicBoolean, quotaManagers: QuotaManagers, val brokerTopicStats: BrokerTopicStats, val metadataCache: MetadataCache, logDirFailureChannel: LogDirFailureChannel, val delayedProducePurgatory: DelayedOperationPurgatory[DelayedProduce], val delayedFetchPurgatory: DelayedOperationPurgatory[DelayedFetch], val delayedDeleteRecordsPurgatory: DelayedOperationPurgatory[DelayedDeleteRecords], threadNamePrefix: Option[String]) extends Logging with KafkaMetricsGroup {
-  private def makeLeaders(controllerId: Int, epoch: Int, partitionState: Map[Partition, LeaderAndIsrRequest.PartitionState], correlationId: Int, responseMap: mutable.Map[TopicPartition, Errors]): Set[Partition] = {
-    replicaFetcherManager.removeFetcherForPartitions(partitionState.keySet.map(_.topicPartition))
-    partitionState.foreach{ case (partition, partitionStateInfo) =>
-      if (partition.makeLeader(controllerId, partitionStateInfo, correlationId)) {
-        partitionsToMakeLeaders += partition
-      }
-    }
-  }
+	private def makeLeaders(controllerId: Int, epoch: Int, partitionState: Map[Partition, LeaderAndIsrRequest.PartitionState], correlationId: Int, responseMap: mutable.Map[TopicPartition, Errors]): Set[Partition] = {
+		replicaFetcherManager.removeFetcherForPartitions(partitionState.keySet.map(_.topicPartition))
+		partitionState.foreach{ case (partition, partitionStateInfo) =>
+			if (partition.makeLeader(controllerId, partitionStateInfo, correlationId)) {
+				partitionsToMakeLeaders += partition
+			}
+		}
+	}
+}
 
 class kafka.cluster.Partition(val topic: String, val partitionId: Int, time: Time, replicaManager: ReplicaManager, val isOffline: Boolean = false) extends Logging with KafkaMetricsGroup {
-  def makeLeader(controllerId: Int, partitionStateInfo: LeaderAndIsrRequest.PartitionState, correlationId: Int): Boolean = {
-    val (leaderHWIncremented, isNewLeader) = inWriteLock(leaderIsrUpdateLock) {
-      val newInSyncReplicas = partitionStateInfo.basePartitionState.isr.asScala.map(r => getOrCreateReplica(r, partitionStateInfo.isNew)).toSet
-    }
-  }
-  def getOrCreateReplica(replicaId: Int = localBrokerId, isNew: Boolean = false): Replica = {
-    val adminZkClient = new AdminZkClient(zkClient)
-    val props = adminZkClient.fetchEntityConfig(ConfigType.Topic, topic)
-    val config = LogConfig.fromProps(logManager.currentDefaultConfig.originals, props)
-    val log = logManager.getOrCreateLog(topicPartition, config, isNew, replicaId == Request.FutureLocalReplicaId)
-    val checkpoint = replicaManager.highWatermarkCheckpoints(log.dir.getParent)
-    val offsetMap = checkpoint.read()
-    val offset = math.min(offsetMap.getOrElse(topicPartition, 0L), log.logEndOffset)
-    new Replica(replicaId, topicPartition, time, offset, Some(log))
-  }
+	def makeLeader(controllerId: Int, partitionStateInfo: LeaderAndIsrRequest.PartitionState, correlationId: Int): Boolean = {
+		val (leaderHWIncremented, isNewLeader) = inWriteLock(leaderIsrUpdateLock) {
+			val newInSyncReplicas = partitionStateInfo.basePartitionState.isr.asScala.map(r => getOrCreateReplica(r, partitionStateInfo.isNew)).toSet
+		}
+	}
+	def getOrCreateReplica(replicaId: Int = localBrokerId, isNew: Boolean = false): Replica = {
+		val adminZkClient = new AdminZkClient(zkClient)
+		val props = adminZkClient.fetchEntityConfig(ConfigType.Topic, topic)
+		val config = LogConfig.fromProps(logManager.currentDefaultConfig.originals, props)
+		val log = logManager.getOrCreateLog(topicPartition, config, isNew, replicaId == Request.FutureLocalReplicaId)
+		val checkpoint = replicaManager.highWatermarkCheckpoints(log.dir.getParent)
+		val offsetMap = checkpoint.read()
+		val offset = math.min(offsetMap.getOrElse(topicPartition, 0L), log.logEndOffset)
+		new Replica(replicaId, topicPartition, time, offset, Some(log))
+	}
 }
 class kafka.log.LogManager(logDirs: Seq[File], initialOfflineDirs: Seq[File], val topicConfigs: Map[String, LogConfig], val initialDefaultConfig: LogConfig, val cleanerConfig: CleanerConfig, recoveryThreadsPerDataDir: Int, val flushCheckMs: Long, val flushRecoveryOffsetCheckpointMs: Long, val flushStartOffsetCheckpointMs: Long, val retentionCheckMs: Long, val maxPidExpirationMs: Int, scheduler: Scheduler, val brokerState: BrokerState, brokerTopicStats: BrokerTopicStats, logDirFailureChannel: LogDirFailureChannel, time: Time) extends Logging with KafkaMetricsGroup {
-  def getOrCreateLog(topicPartition: TopicPartition, config: LogConfig, isNew: Boolean = false, isFuture: Boolean = false): Log = {
-    getLog(topicPartition, isFuture).getOrElse {
-      val logDir = { val preferredLogDir = preferredLogDirs.get(topicPartition) }       
-      val dir = { new File(logDir, Log.logDirName(topicPartition)) }
-      Files.createDirectories(dir.toPath)
-      val log = Log(dir = dir, config = config, logStartOffset = 0L, recoveryPoint = 0L, maxProducerIdExpirationMs = maxPidExpirationMs, producerIdExpirationCheckIntervalMs = LogManager.ProducerIdExpirationCheckIntervalMs, scheduler = scheduler, time = time, brokerTopicStats = brokerTopicStats, logDirFailureChannel = logDirFailureChannel)
-      currentLogs.put(topicPartition, log)
-      log
-    }
-  }
+	def getOrCreateLog(topicPartition: TopicPartition, config: LogConfig, isNew: Boolean = false, isFuture: Boolean = false): Log = {
+		getLog(topicPartition, isFuture).getOrElse {
+			val logDir = { val preferredLogDir = preferredLogDirs.get(topicPartition) }       
+			val dir = { new File(logDir, Log.logDirName(topicPartition)) }
+			Files.createDirectories(dir.toPath)
+			val log = Log(dir = dir, config = config, logStartOffset = 0L, recoveryPoint = 0L, maxProducerIdExpirationMs = maxPidExpirationMs, producerIdExpirationCheckIntervalMs = LogManager.ProducerIdExpirationCheckIntervalMs, scheduler = scheduler, time = time, brokerTopicStats = brokerTopicStats, logDirFailureChannel = logDirFailureChannel)
+			currentLogs.put(topicPartition, log)
+			log
+		}
+	}
 }
 
 
+public class org.apache.kafka.common.requests.FetchRequest extends AbstractRequest {
+    public FetchRequest(Struct struct, short version) {
+        fetchData = new LinkedHashMap<>();
+        for (Object topicResponseObj : struct.getArray(TOPICS_KEY_NAME)) {
+            Struct topicResponse = (Struct) topicResponseObj;
+            String topic = topicResponse.get(TOPIC_NAME);
+            for (Object partitionResponseObj : topicResponse.getArray(PARTITIONS_KEY_NAME)) {
+                Struct partitionResponse = (Struct) partitionResponseObj;
+                int partition = partitionResponse.get(PARTITION_ID);
+                long offset = partitionResponse.getLong(FETCH_OFFSET_KEY_NAME);
+                int maxBytes = partitionResponse.getInt(MAX_BYTES_KEY_NAME);
+                long logStartOffset = partitionResponse.hasField(LOG_START_OFFSET_KEY_NAME) ? partitionResponse.getLong(LOG_START_OFFSET_KEY_NAME) : INVALID_LOG_START_OFFSET;
+                PartitionData partitionData = new PartitionData(offset, logStartOffset, maxBytes);
+                fetchData.put(new TopicPartition(topic, partition), partitionData);
+            }
+        }
+    }
+	public FetchRequest(Struct struct, short version) {
+        fetchData = new LinkedHashMap<>();
+        for (Object topicResponseObj : struct.getArray(TOPICS_KEY_NAME)) {
+            Struct topicResponse = (Struct) topicResponseObj;
+            String topic = topicResponse.get(TOPIC_NAME);
+            for (Object partitionResponseObj : topicResponse.getArray(PARTITIONS_KEY_NAME)) {
+                Struct partitionResponse = (Struct) partitionResponseObj;
+                int partition = partitionResponse.get(PARTITION_ID);
+                long offset = partitionResponse.getLong(FETCH_OFFSET_KEY_NAME);
+                int maxBytes = partitionResponse.getInt(MAX_BYTES_KEY_NAME);
+                long logStartOffset = partitionResponse.hasField(LOG_START_OFFSET_KEY_NAME) ? partitionResponse.getLong(LOG_START_OFFSET_KEY_NAME) : INVALID_LOG_START_OFFSET;
+                PartitionData partitionData = new PartitionData(offset, logStartOffset, maxBytes);
+                fetchData.put(new TopicPartition(topic, partition), partitionData);
+            }
+        }
+    }
+	public Map<TopicPartition, PartitionData> fetchData() {
+        return fetchData;
+    }
+}
+public abstract class org.apache.kafka.common.requests.AbstractRequest extends AbstractRequestResponse {
+	public static AbstractRequest parseRequest(ApiKeys apiKey, short apiVersion, Struct struct) {
+        switch (apiKey) {
+            case PRODUCE:
+                return new ProduceRequest(struct, apiVersion);
+            case FETCH:
+                return new FetchRequest(struct, apiVersion);
+            case OFFSET_COMMIT:
+                return new OffsetCommitRequest(struct, apiVersion);
+            case OFFSET_FETCH:
+                return new OffsetFetchRequest(struct, apiVersion);
+        }
+    }
+}
+public class org.apache.kafka.common.requests.RequestContext {
+    public RequestAndSize parseRequest(ByteBuffer buffer) {
+		Struct struct = apiKey.parseRequest(apiVersion, buffer);
+		AbstractRequest body = AbstractRequest.parseRequest(apiKey, apiVersion, struct);
+		return new RequestAndSize(body, struct.sizeOf());
+    }
+}
+object kafka.network.RequestChannel extends Logging {
+	def receiveRequest(timeout: Long): RequestChannel.BaseRequest = requestQueue.poll(timeout, TimeUnit.MILLISECONDS)
+	class RequestChannel(val queueSize: Int) extends KafkaMetricsGroup {
+		def sendRequest(request: RequestChannel.Request) {
+			requestQueue.put(request)
+		}
+		def sendResponse(response: RequestChannel.Response) {
+			val processor = processors.get(response.processor)
+			processor.enqueueResponse(response)
+		}
+	}
+	class Request(val processor: Int, val context: RequestContext, val startTimeNanos: Long, memoryPool: MemoryPool, @volatile private var buffer: ByteBuffer, metrics: RequestChannel.Metrics) extends BaseRequest {
+		private val bodyAndSize: RequestAndSize = context.parseRequest(buffer)
+	}
+}
+
+public class org.apache.kafka.common.network.Selector implements Selectable, AutoCloseable {
+	public List<NetworkReceive> completedReceives() {
+        return this.completedReceives;
+    }
+	private void addToCompletedReceives(KafkaChannel channel, Deque<NetworkReceive> stagedDeque) {
+		NetworkReceive networkReceive = stagedDeque.poll();
+		this.completedReceives.add(networkReceive);
+		this.sensors.recordBytesReceived(channel.id(), networkReceive.payload().limit());
+	}
+	public void poll(long timeout) throws IOException {
+		if (numReadyKeys > 0 || !immediatelyConnectedKeys.isEmpty() || dataInBuffers) {
+            Set<SelectionKey> readyKeys = this.nioSelector.selectedKeys();
+            pollSelectionKeys(readyKeys, false, endSelect);
+            readyKeys.clear();
+            pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
+        }
+        addToCompletedReceives();
+    }
+	private void addToCompletedReceives() {
+        if (!this.stagedReceives.isEmpty()) {
+            Iterator<Map.Entry<KafkaChannel, Deque<NetworkReceive>>> iter = this.stagedReceives.entrySet().iterator();
+            while (iter.hasNext()) {
+                Map.Entry<KafkaChannel, Deque<NetworkReceive>> entry = iter.next();
+                KafkaChannel channel = entry.getKey();
+				Deque<NetworkReceive> deque = entry.getValue();
+				addToCompletedReceives(channel, deque);
+            }
+        }
+    }
+	void pollSelectionKeys(Set<SelectionKey> selectionKeys, boolean isImmediatelyConnected, long currentTimeNanos) {
+        for (SelectionKey key : determineHandlingOrder(selectionKeys)) {
+            KafkaChannel channel = channel(key);
+			attemptRead(key, channel);
+        }
+    }
+    private void attemptRead(SelectionKey key, KafkaChannel channel) throws IOException {
+        if (channel.ready() && (key.isReadable() || channel.hasBytesBuffered()) && !hasStagedReceive(channel) && !explicitlyMutedChannels.contains(channel)) {
+            while ((networkReceive = channel.read()) != null) {
+                addToStagedReceives(channel, networkReceive);
+            }
+        }
+    }
+
+	private void addToStagedReceives(KafkaChannel channel, NetworkReceive receive) {
+        if (!stagedReceives.containsKey(channel)) stagedReceives.put(channel, new ArrayDeque<NetworkReceive>());
+        Deque<NetworkReceive> deque = stagedReceives.get(channel);
+        deque.add(receive);
+    }
+}
 
 
+class kafka.log.LogManager(logDirs: Seq[File], initialOfflineDirs: Seq[File], val topicConfigs: Map[String, LogConfig], val initialDefaultConfig: LogConfig, val cleanerConfig: CleanerConfig, recoveryThreadsPerDataDir: Int, val flushCheckMs: Long, val flushRecoveryOffsetCheckpointMs: Long, val flushStartOffsetCheckpointMs: Long, val retentionCheckMs: Long, val maxPidExpirationMs: Int, scheduler: Scheduler, val brokerState: BrokerState, brokerTopicStats: BrokerTopicStats, logDirFailureChannel: LogDirFailureChannel, time: Time) extends Logging with KafkaMetricsGroup {
+	loadLogs()
+	def liveLogDirs: Seq[File] = {
+	if (_liveLogDirs.size == logDirs.size)
+		logDirs
+	private def loadLogs(): Unit = {
+		val startMs = time.milliseconds
+		val threadPools = ArrayBuffer.empty[ExecutorService]
+		val offlineDirs = mutable.Set.empty[(String, IOException)]
+		val jobs = mutable.Map.empty[File, Seq[Future[_]]]
+		for (dir <- liveLogDirs) {
+			val jobsForDir = for {
+				dirContent <- Option(dir.listFiles).toList
+				logDir <- dirContent if logDir.isDirectory
+			} yield {
+				loadLog(logDir, recoveryPoints, logStartOffsets)
+			}
+		}
+	}
+}
 
+object kafka.log.Log {
+  def apply(dir: File, config: LogConfig, logStartOffset: Long, recoveryPoint: Long, scheduler: Scheduler, brokerTopicStats: BrokerTopicStats, time: Time = Time.SYSTEM, maxProducerIdExpirationMs: Int, producerIdExpirationCheckIntervalMs: Int, logDirFailureChannel: LogDirFailureChannel): Log = {
+    val topicPartition = Log.parseTopicPartitionName(dir)
+    val producerStateManager = new ProducerStateManager(topicPartition, dir, maxProducerIdExpirationMs)
+    new Log(dir, config, logStartOffset, recoveryPoint, scheduler, brokerTopicStats, time, maxProducerIdExpirationMs, producerIdExpirationCheckIntervalMs, topicPartition, producerStateManager, logDirFailureChannel)
+  }
+}
 
+class kafka.log.Log(@volatile var dir: File, @volatile var config: LogConfig, @volatile var logStartOffset: Long, @volatile var recoveryPoint: Long, scheduler: Scheduler, brokerTopicStats: BrokerTopicStats, val time: Time, val maxProducerIdExpirationMs: Int, val producerIdExpirationCheckIntervalMs: Int, val topicPartition: TopicPartition, val producerStateManager: ProducerStateManager, logDirFailureChannel: LogDirFailureChannel) extends Logging with KafkaMetricsGroup {
+	def activeSegment = segments.lastEntry.getValue
+    val nextOffset = loadSegments()
+	private def loadSegments(): Long = {
+		val swapFiles = removeTempFilesAndCollectSwapFiles()
+		retryOnOffsetOverflow {
+			logSegments.foreach(_.close())
+			segments.clear()
+			loadSegmentFiles()
+		}
+	}
+	def appendAsLeader(records: MemoryRecords, leaderEpoch: Int, isFromClient: Boolean = true): LogAppendInfo = {
+		append(records, isFromClient, assignOffsets = true, leaderEpoch)
+	}
+	private def loadSegmentFiles(): Unit = {
+		for (file <- dir.listFiles.sortBy(_.getName) if file.isFile) {
+			if (isIndexFile(file)) {
+				val offset = offsetFromFile(file)
+				val logFile = Log.logFile(dir, offset)
+			} else if (isLogFile(file)) {
+				val baseOffset = offsetFromFile(file) // 文件名 offset __consumer_offsets-17/00000000000000008492.log
+				val timeIndexFileNewlyCreated = !Log.timeIndexFile(dir, baseOffset).exists()
+				val segment = LogSegment.open(dir = dir, baseOffset = baseOffset, config, time = time, fileAlreadyExists = true)
+				addSegment(segment)
+			}
+		}
+	}
+	private def append(records: MemoryRecords, isFromClient: Boolean, assignOffsets: Boolean, leaderEpoch: Int): LogAppendInfo = {
+		val appendInfo = analyzeAndValidateRecords(records, isFromClient = isFromClient)
+		var validRecords = trimInvalidBytes(records, appendInfo)
+		val segment = maybeRoll(validRecords.sizeInBytes, appendInfo)
+		segment.append(largestOffset = appendInfo.lastOffset, largestTimestamp = appendInfo.maxTimestamp, shallowOffsetOfMaxTimestamp = appendInfo.offsetOfMaxTimestamp, records = validRecords)
+	}
+	private def maybeRoll(messagesSize: Int, appendInfo: LogAppendInfo): LogSegment = {
+		val segment = activeSegment
+	}
+	def addSegment(segment: LogSegment): LogSegment = {
+		this.segments.put(segment.baseOffset, segment)
+	}
 
+}
 
-less k2.log |grep -E -A 15 "doSend===420===LEADER_AND_ISR"
-less logs/* |grep -E "doWork===239"
+class kafka.log.LogSegment private[log] (val log: FileRecords, val offsetIndex: OffsetIndex, val timeIndex: TimeIndex, val txnIndex: TransactionIndex, val baseOffset: Long, val indexIntervalBytes: Int, val rollJitterMs: Long, val maxSegmentMs: Long, val maxSegmentBytes: Int, val time: Time) extends Logging {
+	def append(largestOffset: Long, largestTimestamp: Long, shallowOffsetOfMaxTimestamp: Long, records: MemoryRecords): Unit = {
+		if (records.sizeInBytes > 0) {
+			val physicalPosition = log.sizeInBytes()
+			val appendedBytes = log.append(records)
+		}
+	}
+}
+object kafka.log.LogSegment extends Logging{
+  def open(dir: File, baseOffset: Long, config: LogConfig, time: Time, fileAlreadyExists: Boolean = false, initFileSize: Int = 0, preallocate: Boolean = false, fileSuffix: String = ""): LogSegment = {
+    new LogSegment(FileRecords.open(Log.logFile(dir, baseOffset, fileSuffix), fileAlreadyExists, initFileSize, preallocate), new OffsetIndex(Log.offsetIndexFile(dir, baseOffset, fileSuffix), baseOffset = baseOffset, maxIndexSize = maxIndexSize), new TimeIndex(Log.timeIndexFile(dir, baseOffset, fileSuffix), baseOffset = baseOffset, maxIndexSize = maxIndexSize), new TransactionIndex(baseOffset, Log.transactionIndexFile(dir, baseOffset, fileSuffix)), baseOffset, indexIntervalBytes = config.indexInterval, rollJitterMs = config.randomSegmentJitter, maxSegmentMs = config.segmentMs, maxSegmentBytes = config.segmentSize, time)
+  }
+}
+
+public class org.apache.kafka.common.record.FileRecords extends AbstractRecords implements Closeable {
+	public FileRecords(File file, FileChannel channel, int start, int end, boolean isSlice) throws IOException {
+        this.file = file;
+        this.channel = channel;
+    }
+    public int append(MemoryRecords records) throws IOException {
+        int written = records.writeFullyTo(channel);
+        return written;
+    }
+	public FileRecords slice(int position, int size) throws IOException {
+		return new FileRecords(file, channel, this.start + position, end, true);
+	}
+
+}
+
+class kafka.cluster.Partition(val topic: String, val partitionId: Int, time: Time, replicaManager: ReplicaManager, val isOffline: Boolean = false) extends Logging with KafkaMetricsGroup {
+	def appendRecordsToLeader(records: MemoryRecords, isFromClient: Boolean, requiredAcks: Int = 0): LogAppendInfo = {
+		val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock) {
+			leaderReplicaIfLocal match {
+				case Some(leaderReplica) =>
+				val log = leaderReplica.log.get
+				val info = log.appendAsLeader(records, leaderEpoch = this.leaderEpoch, isFromClient)
+			}
+		}
+	}
+}
+object kafka.server.ReplicaManager {
+	def appendRecords(timeout: Long, requiredAcks: Short, internalTopicsAllowed: Boolean, isFromClient: Boolean, entriesPerPartition: Map[TopicPartition, MemoryRecords], responseCallback: Map[TopicPartition, PartitionResponse] => Unit, delayedProduceLock: Option[Lock] = None, recordConversionStatsCallback: Map[TopicPartition, RecordConversionStats] => Unit = _ => ()) {
+		if (isValidRequiredAcks(requiredAcks)) {
+			val sTime = time.milliseconds
+			val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed,
+		}
+	}
+	private def appendToLocalLog(internalTopicsAllowed: Boolean, isFromClient: Boolean, entriesPerPartition: Map[TopicPartition, MemoryRecords], requiredAcks: Short): Map[TopicPartition, LogAppendResult] = {
+		entriesPerPartition.map { case (topicPartition, records) =>
+			brokerTopicStats.topicStats(topicPartition.topic).totalProduceRequestRate.mark()
+			val (partition, _) = getPartitionAndLeaderReplicaIfLocal(topicPartition)
+			val info = partition.appendRecordsToLeader(records, isFromClient, requiredAcks)
+		}
+	}
+}

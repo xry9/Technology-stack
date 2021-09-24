@@ -1,1 +1,0 @@
-https://github.com/spring-projects/spring-boot/tree/2.1.x/spring-boot-samples

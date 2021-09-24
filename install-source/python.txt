@@ -16,3 +16,10 @@ whereis python |xargs rm -frv ##删除所有残余文件 ##xargs，允许你对�
 whereis python ##验证删除，返回无结果
 --在 centos8 中彻底卸载之后(yum 用不了了)，新测可以安装3.6, 据说 3.7 及以上装不了, 亲测 make install 时会报如 https://www.jianshu.com/p/69681655309b 的错误
 https://github.com/python/cpython
+
+------------------------------------------------------------------------
+centos8 安装 pip :
+--https://www.runoob.com/w3cnote/python-pip-install-usage.html
+curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+python3 get-pip.py
+pip3 install numpy

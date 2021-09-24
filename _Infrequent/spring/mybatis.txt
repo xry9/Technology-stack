@@ -1,0 +1,9 @@
+org.apache.ibatis.builder.annotation.MapperAnnotationBuilder#getSqlSourceFromAnnotations
+
+
+
+
+
+-------------------------------------
+git clone -b mybatis-spring-1.3.2 git@github.com:mybatis/spring.git
+要在 test 中做测试, 在 main 中怎么都不可以

@@ -1,0 +1,633 @@
+
+
+public class Producer extends Thread {
+    private final KafkaProducer<Integer, String> producer;
+    public void run() {
+        int messageNo = 1;
+        while (true) {
+            String messageStr = "Message_" + messageNo;
+            long startTime = System.currentTimeMillis();
+            try { Thread.sleep(1000); } catch (InterruptedException e) { e.printStackTrace(); }
+            if (isAsync) { // Send asynchronously
+                producer.send(new ProducerRecord<>(topic, messageNo, messageStr), new DemoCallBack(startTime, messageNo, messageStr));
+            } else { // Send synchronously
+				producer.send(new ProducerRecord<>(topic, messageNo, messageStr)).get();
+            }
+        }
+    }
+}
+
+public class org.apache.kafka.clients.producer.KafkaProducer<K, V> implements Producer<K, V> {
+	public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
+        ProducerRecord<K, V> interceptedRecord = this.interceptors.onSend(record);
+        return doSend(interceptedRecord, callback);
+    }
+	private Future<RecordMetadata> doSend(ProducerRecord<K, V> record, Callback callback) {
+		Cluster cluster = clusterAndWaitTime.cluster;
+		byte[] serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
+		byte[] serializedValue = valueSerializer.serialize(record.topic(), record.headers(), record.value());
+		int partition = partition(record, serializedKey, serializedValue, cluster);
+		TopicPartition tp = new TopicPartition(record.topic(), partition);
+		Header[] headers = record.headers().toArray();
+		Callback interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
+		RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, headers, interceptCallback, remainingWaitMs);
+		return result.future;
+    }
+	private int partition(ProducerRecord<K, V> record, byte[] serializedKey, byte[] serializedValue, Cluster cluster) {
+		Integer partition = record.partition();
+		return partition != null ? partition : partitioner.partition(record.topic(), record.key(), serializedKey, record.value(), serializedValue, cluster);
+	}
+
+}
+
+public final class org.apache.kafka.clients.producer.internals.RecordAccumulator {
+	public RecordAppendResult append(TopicPartition tp, long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, long maxTimeToBlock) throws InterruptedException {
+        appendsInProgress.incrementAndGet();
+        ByteBuffer buffer = null;
+        if (headers == null) headers = Record.EMPTY_HEADERS;
+		Deque<ProducerBatch> dq = getOrCreateDeque(tp);
+		buffer = free.allocate(size, maxTimeToBlock);
+		RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq);
+		if (appendResult != null) {
+			return appendResult;
+		}
+		MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
+		ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, time.milliseconds());
+		FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, headers, callback, time.milliseconds()));
+		dq.addLast(batch);
+		incomplete.add(batch);
+		return new RecordAppendResult(future, dq.size() > 1 || batch.isFull(), true);
+    }
+	private RecordAppendResult tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, Deque<ProducerBatch> deque) {
+        ProducerBatch last = deque.peekLast();
+        if (last != null) {
+            FutureRecordMetadata future = last.tryAppend(timestamp, key, value, headers, callback, time.milliseconds());
+            if (future == null) last.closeForRecordAppends();
+            else return new RecordAppendResult(future, deque.size() > 1 || last.isFull(), false);
+        }
+        return null;
+    }
+	private Deque<ProducerBatch> getOrCreateDeque(TopicPartition tp) {
+        Deque<ProducerBatch> d = this.batches.get(tp);
+        if (d != null) return d;
+        d = new ArrayDeque<>();
+        Deque<ProducerBatch> previous = this.batches.putIfAbsent(tp, d);
+        if (previous == null) return d;
+        else return previous;
+    }
+	public Map<Integer, List<ProducerBatch>> drain(Cluster cluster, Set<Node> nodes, int maxSize, long now) {
+        Map<Integer, List<ProducerBatch>> batches = new HashMap<>();
+        for (Node node : nodes) {
+            List<PartitionInfo> parts = cluster.partitionsForNode(node.id());
+            List<ProducerBatch> ready = new ArrayList<>();
+            do {
+                PartitionInfo part = parts.get(drainIndex);
+                TopicPartition tp = new TopicPartition(part.topic(), part.partition());
+				Deque<ProducerBatch> deque = getDeque(tp);
+				ProducerBatch batch = deque.pollFirst();
+				ready.add(batch);
+            } while (start != drainIndex);
+            batches.put(node.id(), ready);
+        }
+        return batches;
+    }
+    private Deque<ProducerBatch> getDeque(TopicPartition tp) {
+        return batches.get(tp);
+    }
+}
+
+public class kafka.examples.Consumer extends ShutdownableThread {
+    public void doWork() {
+        consumer.subscribe(Collections.singletonList(this.topic));
+        ConsumerRecords<Integer, String> records = consumer.poll(1000);
+        for (ConsumerRecord<Integer, String> record : records) {
+            System.out.println("Received message: (" + record.key() + ", " + record.value() + ") at offset " + record.offset());
+        }
+    }
+}
+
+public class org.apache.kafka.clients.consumer.KafkaConsumer<K, V> implements Consumer<K, V> {
+    private boolean updateFetchPositions(final long timeoutMs) {
+        cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
+        if (cachedSubscriptionHashAllFetchPositions) return true;
+        if (!coordinator.refreshCommittedOffsetsIfNeeded(timeoutMs)) return false;
+        subscriptions.resetMissingPositions();
+        fetcher.resetOffsetsIfNeeded();
+        return true;
+    }
+	boolean updateAssignmentMetadataIfNeeded(final long timeoutMs) {
+        final long startMs = time.milliseconds();
+        if (!coordinator.poll(timeoutMs)) {
+            return false;
+        }
+        return updateFetchPositions(remainingTimeAtLeastZero(timeoutMs, time.milliseconds() - startMs));
+    }
+	public ConsumerRecords<K, V> poll(final long timeout) {
+        return poll(timeout, false);
+    }
+	private ConsumerRecords<K, V> poll(final long timeoutMs, final boolean includeMetadataInTimeout) {
+        acquireAndEnsureOpen();
+		long elapsedTime = 0L;
+		do {
+			client.maybeTriggerWakeup();
+			final long metadataEnd;
+			if (includeMetadataInTimeout) {
+				final long metadataStart = time.milliseconds();
+				if (!updateAssignmentMetadataIfNeeded(remainingTimeAtLeastZero(timeoutMs, elapsedTime))) {
+					return ConsumerRecords.empty();
+				}
+			} else {
+				while (!updateAssignmentMetadataIfNeeded(Long.MAX_VALUE)) {
+					log.warn("Still waiting for metadata");
+				}
+				metadataEnd = time.milliseconds();
+			}
+			final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(remainingTimeAtLeastZero(timeoutMs, elapsedTime));
+			if (!records.isEmpty()) {
+				if (fetcher.sendFetches() > 0 || client.hasPendingRequests()) {
+					client.pollNoWakeup();
+				}
+				return this.interceptors.onConsume(new ConsumerRecords<>(records));
+			}
+			final long fetchEnd = time.milliseconds();
+			elapsedTime += fetchEnd - metadataEnd;
+		} while (elapsedTime < timeoutMs);
+		return ConsumerRecords.empty();
+		release();
+    }
+	private Map<TopicPartition, List<ConsumerRecord<K, V>>> pollForFetches(final long timeoutMs) {
+        final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
+        if (!records.isEmpty()) {
+            return records;
+        }
+        fetcher.sendFetches();
+        client.poll(pollTimeout, startMs, () -> {
+            return !fetcher.hasCompletedFetches();
+        });
+        return fetcher.fetchedRecords();
+    }
+}
+public class org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient implements Closeable {
+    public void poll(long timeout, long now, PollCondition pollCondition) {
+        poll(timeout, now, pollCondition, false);
+    }
+	public void poll(long timeout, long now, PollCondition pollCondition, boolean disableWakeup) {
+		if (pendingCompletion.isEmpty() && (pollCondition == null || pollCondition.shouldBlock())) {
+			client.poll(Math.min(maxPollTimeoutMs, timeout), now);
+		}
+		trySend(now);
+		unsent.clean();
+    }
+	private long trySend(long now) {
+        for (Node node : unsent.nodes()) {
+            Iterator<ClientRequest> iterator = unsent.requestIterator(node);
+            while (iterator.hasNext()) {
+                ClientRequest request = iterator.next();
+                if (client.ready(node, now)) {
+                    client.send(request, now);
+                    iterator.remove();
+                }
+            }
+        }
+        return pollDelayMs;
+    }
+}
+
+public class org.apache.kafka.clients.NetworkClient implements KafkaClient {
+    public void send(ClientRequest request, long now) {
+        doSend(request, false, now);
+    }
+	private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now) {
+		AbstractRequest.Builder<?> builder = clientRequest.requestBuilder();
+		doSend(clientRequest, isInternalRequest, now, builder.build(version));
+    }
+	private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now, AbstractRequest request) {
+        String destination = clientRequest.destination();
+        RequestHeader header = clientRequest.makeHeader(request.version());
+        Send send = request.toSend(destination, header);
+        selector.send(send);
+    }
+	public List<ClientResponse> poll(long timeout, long now) {
+        handleInitiateApiVersionRequests(updatedNow);
+        return responses;
+    }
+	private void handleInitiateApiVersionRequests(long now) {
+        Iterator<Map.Entry<String, ApiVersionsRequest.Builder>> iter = nodesNeedingApiVersionsFetch.entrySet().iterator();
+        while (iter.hasNext()) {
+            Map.Entry<String, ApiVersionsRequest.Builder> entry = iter.next();
+            String node = entry.getKey();
+            if (selector.isChannelReady(node) && inFlightRequests.canSendMore(node)) {
+                ApiVersionsRequest.Builder apiVersionRequestBuilder = entry.getValue();
+                ClientRequest clientRequest = newClientRequest(node, apiVersionRequestBuilder, now, true);
+                doSend(clientRequest, true, now);
+                iter.remove();
+            }
+        }
+    }
+}
+
+public class org.apache.kafka.common.network.Selector implements Selectable, AutoCloseable {
+    public void send(Send send) {
+        String connectionId = send.destination();
+        KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
+        if (closingChannels.containsKey(connectionId)) {
+            this.failedSends.add(connectionId);
+        } else {
+			channel.setSend(send);
+        }
+    }
+}
+public final class org.apache.kafka.clients.consumer.internals.ConsumerCoordinator extends AbstractCoordinator {
+	private KafkaConsumer(ConsumerConfig config, Deserializer<K> keyDeserializer, Deserializer<V> valueDeserializer) {
+		String clientId = config.getString(ConsumerConfig.CLIENT_ID_CONFIG);
+		if (clientId.isEmpty()) clientId = "consumer-" + CONSUMER_CLIENT_ID_SEQUENCE.getAndIncrement();
+		this.clientId = clientId;
+		String groupId = config.getString(ConsumerConfig.GROUP_ID_CONFIG);
+		NetworkClient netClient = new NetworkClient(new Selector(config.getLong(ConsumerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), metrics, time, metricGrpPrefix, channelBuilder, logContext), this.metadata, clientId, 100, config.getLong(ConsumerConfig.RECONNECT_BACKOFF_MS_CONFIG), config.getLong(ConsumerConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG), config.getInt(ConsumerConfig.SEND_BUFFER_CONFIG), config.getInt(ConsumerConfig.RECEIVE_BUFFER_CONFIG), config.getInt(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG), time, true, new ApiVersions(), throttleTimeSensor, logContext);
+		this.client = new ConsumerNetworkClient(logContext, netClient, metadata, time, retryBackoffMs, config.getInt(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG), heartbeatIntervalMs);
+		this.coordinator = new ConsumerCoordinator(logContext, this.client, groupId, maxPollIntervalMs, sessionTimeoutMs, new Heartbeat(sessionTimeoutMs, heartbeatIntervalMs, maxPollIntervalMs, retryBackoffMs), assignors, this.metadata, this.subscriptions, metrics, metricGrpPrefix, this.time, retryBackoffMs, config.getBoolean(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG), config.getInt(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG), this.interceptors, config.getBoolean(ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG), config.getBoolean(ConsumerConfig.LEAVE_GROUP_ON_CLOSE_CONFIG));
+		this.fetcher = new Fetcher<>(logContext, this.client, config.getInt(ConsumerConfig.FETCH_MIN_BYTES_CONFIG), config.getInt(ConsumerConfig.FETCH_MAX_BYTES_CONFIG), config.getInt(ConsumerConfig.FETCH_MAX_WAIT_MS_CONFIG), config.getInt(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG), config.getInt(ConsumerConfig.MAX_POLL_RECORDS_CONFIG), config.getBoolean(ConsumerConfig.CHECK_CRCS_CONFIG), this.keyDeserializer, this.valueDeserializer, this.metadata, this.subscriptions, metrics, metricsRegistry.fetcherMetrics, this.time, this.retryBackoffMs, this.requestTimeoutMs, isolationLevel);
+		config.logUnused();
+		AppInfoParser.registerAppInfo(JMX_PREFIX, clientId, metrics);
+    }
+	public boolean refreshCommittedOffsetsIfNeeded(final long timeoutMs) {
+        final Set<TopicPartition> missingFetchPositions = subscriptions.missingFetchPositions();
+        final Map<TopicPartition, OffsetAndMetadata> offsets = fetchCommittedOffsets(missingFetchPositions, timeoutMs);
+        for (final Map.Entry<TopicPartition, OffsetAndMetadata> entry : offsets.entrySet()) {
+            final TopicPartition tp = entry.getKey();
+            final long offset = entry.getValue().offset();
+            this.subscriptions.seek(tp, offset);
+        }
+        return true;
+    }
+	public Map<TopicPartition, OffsetAndMetadata> fetchCommittedOffsets(final Set<TopicPartition> partitions, final long timeoutMs) {
+        while (true) {
+            elapsedTime = time.milliseconds() - startMs;
+			final RequestFuture<Map<TopicPartition, OffsetAndMetadata>> future = sendOffsetFetchRequest(partitions);
+			pendingCommittedOffsetRequest = new PendingCommittedOffsetRequest(partitions, generation, future);
+            client.poll(future, remainingTimeAtLeastZero(timeoutMs, elapsedTime));
+			return future.value();
+        }
+    }
+	private RequestFuture<Map<TopicPartition, OffsetAndMetadata>> sendOffsetFetchRequest(Set<TopicPartition> partitions) {
+        Node coordinator = checkAndGetCoordinator();
+        OffsetFetchRequest.Builder requestBuilder = new OffsetFetchRequest.Builder(this.groupId, new ArrayList<>(partitions));
+        return client.send(coordinator, requestBuilder).compose(new OffsetFetchResponseHandler());        
+    }
+	public boolean poll(final long timeoutMs) {
+        if (subscriptions.partitionsAutoAssigned()) {
+            if (rejoinNeededOrPending()) {
+                if (!ensureActiveGroup(remainingTimeAtLeastZero(timeoutMs, elapsed))) {
+                    return false;
+                }
+            }
+        }
+        maybeAutoCommitOffsetsAsync(currentTime);
+        return true;
+    }
+	protected void onJoinComplete(int generation, String memberId, String assignmentStrategy, ByteBuffer assignmentBuffer) {
+        PartitionAssignor assignor = lookupAssignor(assignmentStrategy);
+        Assignment assignment = ConsumerProtocol.deserializeAssignment(assignmentBuffer);
+        subscriptions.assignFromSubscribed(assignment.partitions());
+    }
+}
+
+public abstract class org.apache.kafka.clients.consumer.internals.AbstractCoordinator implements Closeable {
+	public AbstractCoordinator(LogContext logContext, ConsumerNetworkClient client, String groupId, int rebalanceTimeoutMs, int sessionTimeoutMs, Heartbeat heartbeat, Metrics metrics, String metricGrpPrefix, Time time, long retryBackoffMs, boolean leaveGroupOnClose) {
+        this.client = client;
+        this.groupId = groupId;
+    }
+    boolean ensureActiveGroup(final long timeoutMs) {
+        return ensureActiveGroup(timeoutMs, time.milliseconds());
+    }
+	boolean ensureActiveGroup(long timeoutMs, long startMs) {
+        startHeartbeatThreadIfNeeded();
+        long joinStartMs = time.milliseconds();
+        long joinTimeoutMs = remainingTimeAtLeastZero(timeoutMs, joinStartMs - startMs);
+        return joinGroupIfNeeded(joinTimeoutMs, joinStartMs);
+    }
+	boolean joinGroupIfNeeded(final long timeoutMs, final long startTimeMs) {
+        while (rejoinNeededOrPending()) {
+            final RequestFuture<ByteBuffer> future = initiateJoinGroup();
+            client.poll(future, remainingTimeAtLeastZero(timeoutMs, elapsedTime));
+            if (future.succeeded()) {
+                ByteBuffer memberAssignment = future.value().duplicate();
+                onJoinComplete(generation.generationId, generation.memberId, generation.protocol, memberAssignment);
+                resetJoinGroupFuture();
+                needsJoinPrepare = true;
+            }
+        }
+        return true;
+    }
+	private synchronized RequestFuture<ByteBuffer> initiateJoinGroup() {
+        if (joinFuture == null) {
+            joinFuture = sendJoinGroupRequest();
+        }
+        return joinFuture;
+    }
+	RequestFuture<ByteBuffer> sendJoinGroupRequest() {
+        JoinGroupRequest.Builder requestBuilder = new JoinGroupRequest.Builder(groupId, this.sessionTimeoutMs, this.generation.memberId, protocolType(), metadata()).setRebalanceTimeout(this.rebalanceTimeoutMs);
+        return client.send(coordinator, requestBuilder, joinGroupTimeoutMs).compose(new JoinGroupResponseHandler());        
+    }
+}
+
+public class org.apache.kafka.clients.consumer.internals.Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
+	public int sendFetches() {
+        Map<Node, FetchSessionHandler.FetchRequestData> fetchRequestMap = prepareFetchRequests();
+        for (Map.Entry<Node, FetchSessionHandler.FetchRequestData> entry : fetchRequestMap.entrySet()) {
+            final Node fetchTarget = entry.getKey();
+            final FetchSessionHandler.FetchRequestData data = entry.getValue();
+            final FetchRequest.Builder request = FetchRequest.Builder.forConsumer(this.maxWaitMs, this.minBytes, data.toSend()).isolationLevel(isolationLevel).setMaxBytes(this.maxBytes).metadata(data.metadata()).toForget(data.toForget());
+            client.send(fetchTarget, request)
+                    .addListener(new RequestFutureListener<ClientResponse>() {
+                        public void onSuccess(ClientResponse resp) {
+                            FetchResponse<Records> response = (FetchResponse<Records>) resp.responseBody();
+                            FetchSessionHandler handler = sessionHandlers.get(fetchTarget.id());
+                            Set<TopicPartition> partitions = new HashSet<>(response.responseData().keySet());
+                            FetchResponseMetricAggregator metricAggregator = new FetchResponseMetricAggregator(sensors, partitions);
+                            for (Map.Entry<TopicPartition, FetchResponse.PartitionData<Records>> entry : response.responseData().entrySet()) {
+                                TopicPartition partition = entry.getKey();
+                                long fetchOffset = data.sessionPartitions().get(partition).fetchOffset;
+                                FetchResponse.PartitionData fetchData = entry.getValue();
+                                completedFetches.add(new CompletedFetch(partition, fetchOffset, fetchData, metricAggregator, resp.requestHeader().apiVersion()));
+                            }
+                            sensors.fetchLatency.record(resp.requestLatencyMs());
+                        }
+                    });
+        }
+        return fetchRequestMap.size();
+    }
+    public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
+        Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>();
+        int recordsRemaining = maxPollRecords;
+		while (recordsRemaining > 0) {
+			if (nextInLineRecords == null || nextInLineRecords.isFetched) {
+				CompletedFetch completedFetch = completedFetches.peek();
+				nextInLineRecords = parseCompletedFetch(completedFetch);
+				completedFetches.poll();
+			} else {
+				List<ConsumerRecord<K, V>> records = fetchRecords(nextInLineRecords, recordsRemaining);
+				TopicPartition partition = nextInLineRecords.partition;
+				if (!records.isEmpty()) {
+					List<ConsumerRecord<K, V>> currentRecords = fetched.get(partition);
+					if (currentRecords == null) {
+						fetched.put(partition, records);
+					} else {
+						List<ConsumerRecord<K, V>> newRecords = new ArrayList<>(records.size() + currentRecords.size());
+						newRecords.addAll(currentRecords);
+						newRecords.addAll(records);
+						fetched.put(partition, newRecords);
+					}
+					recordsRemaining -= records.size();
+				}
+			}
+		}
+        return fetched;
+    }
+	private List<ConsumerRecord<K, V>> fetchRecords(PartitionRecords partitionRecords, int maxRecords) {
+		long position = subscriptions.position(partitionRecords.partition);
+		if (partitionRecords.nextFetchOffset == position) {
+			List<ConsumerRecord<K, V>> partRecords = partitionRecords.fetchRecords(maxRecords);
+			long nextOffset = partitionRecords.nextFetchOffset;
+			subscriptions.position(partitionRecords.partition, nextOffset);// 回写 offset
+			Long partitionLag = subscriptions.partitionLag(partitionRecords.partition, isolationLevel);
+			if (partitionLag != null) this.sensors.recordPartitionLag(partitionRecords.partition, partitionLag);
+			Long lead = subscriptions.partitionLead(partitionRecords.partition);
+			if (lead != null) {
+				this.sensors.recordPartitionLead(partitionRecords.partition, lead);
+			}
+			return partRecords;
+		}
+        partitionRecords.drain();
+        return emptyList();
+    }
+	private Map<Node, FetchSessionHandler.FetchRequestData> prepareFetchRequests() {
+        Cluster cluster = metadata.fetch();
+        Map<Node, FetchSessionHandler.Builder> fetchable = new LinkedHashMap<>();
+        for (TopicPartition partition : fetchablePartitions()) {
+            Node node = cluster.leaderFor(partition);
+			FetchSessionHandler.Builder builder = fetchable.get(node);
+			if (builder == null) {
+				FetchSessionHandler handler = sessionHandlers.get(node.id());
+				if (handler == null) {
+					handler = new FetchSessionHandler(logContext, node.id());
+					sessionHandlers.put(node.id(), handler);
+				}
+				builder = handler.newBuilder();
+				fetchable.put(node, builder);
+			}
+			long position = this.subscriptions.position(partition);
+			builder.add(partition, new FetchRequest.PartitionData(position, FetchRequest.INVALID_LOG_START_OFFSET, this.fetchSize));
+        }
+        Map<Node, FetchSessionHandler.FetchRequestData> reqs = new LinkedHashMap<>();
+        for (Map.Entry<Node, FetchSessionHandler.Builder> entry : fetchable.entrySet()) {
+            reqs.put(entry.getKey(), entry.getValue().build());
+        }
+        return reqs;
+    }
+    private List<TopicPartition> fetchablePartitions() {
+        Set<TopicPartition> exclude = new HashSet<>();
+        List<TopicPartition> fetchable = subscriptions.fetchablePartitions();
+        if (nextInLineRecords != null && !nextInLineRecords.isFetched) {
+            exclude.add(nextInLineRecords.partition);
+        }
+        for (CompletedFetch completedFetch : completedFetches) {
+            exclude.add(completedFetch.partition);
+        }
+        fetchable.removeAll(exclude);
+        return fetchable;
+    }
+}
+
+public class org.apache.kafka.clients.consumer.internals.SubscriptionState {
+	private TopicPartitionState assignedState(TopicPartition tp) {
+        TopicPartitionState state = this.assignment.stateValue(tp);
+        return state;
+    }
+    public void position(TopicPartition tp, long offset) {
+        assignedState(tp).position(offset);
+    }
+    public void seek(TopicPartition tp, long offset) {
+        assignedState(tp).seek(offset);
+    }
+	public void assignFromSubscribed(Collection<TopicPartition> assignments) {
+        Map<TopicPartition, TopicPartitionState> assignedPartitionStates = partitionToStateMap(assignments);
+        fireOnAssignment(assignedPartitionStates.keySet());
+        this.assignment.set(assignedPartitionStates);
+    }
+	public static class TopicPartitionState {
+		private void seek(long offset) {
+            this.position = offset;
+            this.resetStrategy = null;
+            this.nextAllowedRetryTimeMs = null;
+        }
+		private void position(long offset) {
+			this.position = offset;
+		}
+	}
+}
+
+public class org.apache.kafka.common.internals.PartitionStates<S> {
+    public void set(Map<TopicPartition, S> partitionToState) {
+        map.clear();
+        update(partitionToState);
+    }
+	private void update(Map<TopicPartition, S> partitionToState) {
+        LinkedHashMap<String, List<TopicPartition>> topicToPartitions = new LinkedHashMap<>();
+        for (TopicPartition tp : partitionToState.keySet()) {
+            List<TopicPartition> partitions = topicToPartitions.get(tp.topic());
+            if (partitions == null) {
+                partitions = new ArrayList<>();
+                topicToPartitions.put(tp.topic(), partitions);
+            }
+            partitions.add(tp);
+        }
+        for (Map.Entry<String, List<TopicPartition>> entry : topicToPartitions.entrySet()) {
+            for (TopicPartition tp : entry.getValue()) {
+                S state = partitionToState.get(tp);
+                map.put(tp, state);
+            }
+        }
+    }
+}
+
+public abstract class org.apache.kafka.common.requests.AbstractRequest extends AbstractRequestResponse {
+    public Send toSend(String destination, RequestHeader header) {
+        return new NetworkSend(destination, serialize(header));
+    }
+	public ByteBuffer serialize(RequestHeader header) {
+        return serialize(header.toStruct(), toStruct());
+    }
+}
+
+public class org.apache.kafka.common.requests.ProduceRequest extends AbstractRequest {
+    public Struct toStruct() {
+        Map<TopicPartition, MemoryRecords> partitionRecords = partitionRecordsOrFail();
+        short version = version();
+        Struct struct = new Struct(ApiKeys.PRODUCE.requestSchema(version));
+        Map<String, Map<Integer, MemoryRecords>> recordsByTopic = CollectionUtils.groupDataByTopic(partitionRecords);
+        struct.set(ACKS_KEY_NAME, acks);
+        struct.set(TIMEOUT_KEY_NAME, timeout);
+        struct.setIfExists(NULLABLE_TRANSACTIONAL_ID, transactionalId);
+        List<Struct> topicDatas = new ArrayList<>(recordsByTopic.size());
+        for (Map.Entry<String, Map<Integer, MemoryRecords>> topicEntry : recordsByTopic.entrySet()) {
+            Struct topicData = struct.instance(TOPIC_DATA_KEY_NAME);
+            topicData.set(TOPIC_NAME, topicEntry.getKey());
+            List<Struct> partitionArray = new ArrayList<>();
+            for (Map.Entry<Integer, MemoryRecords> partitionEntry : topicEntry.getValue().entrySet()) {
+                MemoryRecords records = partitionEntry.getValue();
+                Struct part = topicData.instance(PARTITION_DATA_KEY_NAME).set(PARTITION_ID, partitionEntry.getKey()).set(RECORD_SET_KEY_NAME, records);
+                partitionArray.add(part);
+            }
+            topicData.set(PARTITION_DATA_KEY_NAME, partitionArray.toArray());
+            topicDatas.add(topicData);
+        }
+        struct.set(TOPIC_DATA_KEY_NAME, topicDatas.toArray());
+        return struct;
+    }
+}
+
+public class org.apache.kafka.clients.producer.internals.DefaultPartitioner implements Partitioner {
+	public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+        int numPartitions = partitions.size();
+        if (keyBytes == null) {
+            int nextValue = nextValue(topic);
+            List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
+            if (availablePartitions.size() > 0) {
+                int part = Utils.toPositive(nextValue) % availablePartitions.size();
+                return availablePartitions.get(part).partition();
+            } else {
+                return Utils.toPositive(nextValue) % numPartitions;
+            }
+        } else {
+            return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
+        }
+    }
+	private int nextValue(String topic) {
+        AtomicInteger counter = topicCounterMap.get(topic);
+        if (null == counter) {
+            counter = new AtomicInteger(ThreadLocalRandom.current().nextInt());
+            AtomicInteger currentCounter = topicCounterMap.putIfAbsent(topic, counter);
+            if (currentCounter != null) {
+                counter = currentCounter;
+            }
+        }
+        return counter.getAndIncrement();
+    }
+}
+
+
+public class org.apache.kafka.clients.producer.internals.Sender implements Runnable {
+	public void run() {
+        while (running) {
+			run(time.milliseconds());
+        }
+    }
+	void run(long now) {
+        long pollTimeout = sendProducerData(now);
+        client.poll(pollTimeout, now);
+    }
+	private long sendProducerData(long now) {
+        Cluster cluster = metadata.fetch();
+        RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
+        Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
+        sensors.updateProduceRequestMetrics(batches);
+        sendProduceRequests(batches, now);
+        return pollTimeout;
+    }
+    private void sendProduceRequests(Map<Integer, List<ProducerBatch>> collated, long now) {
+        for (Map.Entry<Integer, List<ProducerBatch>> entry : collated.entrySet())
+            sendProduceRequest(now, entry.getKey(), acks, requestTimeoutMs, entry.getValue());
+    }
+	private void sendProduceRequest(long now, int destination, short acks, int timeout, List<ProducerBatch> batches) {
+        Map<TopicPartition, MemoryRecords> produceRecordsByPartition = new HashMap<>(batches.size());
+        final Map<TopicPartition, ProducerBatch> recordsByPartition = new HashMap<>(batches.size());
+        for (ProducerBatch batch : batches) {
+            TopicPartition tp = batch.topicPartition;
+            MemoryRecords records = batch.records();
+            if (!records.hasMatchingMagic(minUsedMagic)) records = batch.records().downConvert(minUsedMagic, 0, time).records();
+            produceRecordsByPartition.put(tp, records);
+            recordsByPartition.put(tp, batch);
+        }
+        ProduceRequest.Builder requestBuilder = ProduceRequest.Builder.forMagic(minUsedMagic, acks, timeout, produceRecordsByPartition, transactionalId);
+        RequestCompletionHandler callback = new RequestCompletionHandler() {
+            public void onComplete(ClientResponse response) {
+                handleProduceResponse(response, recordsByPartition, time.milliseconds());
+            }
+        };
+
+        String nodeId = Integer.toString(destination);
+        ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0, requestTimeoutMs, callback);
+        client.send(clientRequest, now);
+    }
+}
+
+public final class org.apache.kafka.clients.producer.internals.ProducerBatch {
+	public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, long now) {
+		Long checksum = this.recordsBuilder.append(timestamp, key, value, headers);
+		FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount, timestamp, checksum, key == null ? -1 : key.length, value == null ? -1 : value.length);
+		thunks.add(new Thunk(callback, future));
+		this.recordCount++;
+		return future;
+    }
+}
+
+public class org.apache.kafka.common.record.MemoryRecordsBuilder {
+    public Long append(long timestamp, byte[] key, byte[] value, Header[] headers) {
+        return append(timestamp, wrapNullable(key), wrapNullable(value), headers);
+    }
+	public Long append(long timestamp, ByteBuffer key, ByteBuffer value, Header[] headers) {
+        return appendWithOffset(nextSequentialOffset(), timestamp, key, value, headers);
+    }
+    public Long appendWithOffset(long offset, long timestamp, ByteBuffer key, ByteBuffer value, Header[] headers) {
+        return appendWithOffset(offset, false, timestamp, key, value, headers);
+    }
+	private Long appendWithOffset(long offset, boolean isControlRecord, long timestamp, ByteBuffer key, ByteBuffer value, Header[] headers) {
+		appendDefaultRecord(offset, timestamp, key, value, headers);
+    }
+    private void appendDefaultRecord(long offset, long timestamp, ByteBuffer key, ByteBuffer value, Header[] headers) throws IOException {
+        int sizeInBytes = DefaultRecord.writeTo(appendStream, offsetDelta, timestampDelta, key, value, headers);
+        recordWritten(offset, timestamp, sizeInBytes);
+    }
+}
