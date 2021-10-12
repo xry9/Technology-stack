@@ -1,7 +1,35 @@
+1、消息系统分类:
+  peer2peer( 只能 pull 方式吧)，发布订阅/pee(两种都可吧)
+2、Sync Producer, Aync Producer
+3、数据写到 leader, 然后应该是 leader push 到 follower
+  Leader会维护一个与其基本保持同步的Replica列表，该列表称为ISR（in-sync Replica）
+  当ISR中所有Replica都向Leader发送ACK时，Leader即Commit
+4、High Level Consumer将从某个Partition读取的最后一条
+消息的offset存于Zookeeper中（从0.8.2开始同时支持将
+offset存于Zookeeper中和专用的Kafka Topic中）。
+5、kafka.cluster.Partition#appendRecordsToLeader 中用到了min.insync.replicas, 调用的方法 maybeIncrementLeaderHW 用到了 replica.lag.time.max.ms
+  Producer 端有 org.apache.kafka.common.requests.ProduceRequest#acks
+6、自动管理offset auto.commit.enable=true
+  auto.commit.interval.ms=60 * 1000
+  手工管理offset, ConsumerConnector.commitOffsets();
+7、
+Partition/Replica重新分配
+  增加Broker后，已有的数据不会自动迁移到新Broker上
+  删除Broker前，需要将待删除的Broker上的数据迁移到其它Broker上
+kafka-reassign-partitions.sh  
+-----------------------
+../gradlew releaseTarGz -x signArchives && cp build/libs/kafka_2.11-2.0.0.jar /usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar && scp build/libs/kafka_2.11-2.0.0.jar pseudo2:/usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar && scp build/libs/kafka_2.11-2.0.0.jar pseudo3:/usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar
+../gradlew clean build -x signArchives && cp build/libs/kafka-clients-2.0.0.jar /usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar && scp build/libs/kafka-clients-2.0.0.jar pseudo2:/usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar && scp build/libs/kafka-clients-2.0.0.jar pseudo3:/usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar
+
 less k2.log |grep -E -A 15 "doSend===420===LEADER_AND_ISR"
 less logs/* |grep -E "doWork===239"
+doSend===465
 
-两个维度要探讨: pull/push, 发布订阅/peer to peer
+
+
+less app/kafka_2.11-2.0.0/logs/server.log | grep -E "send===191===\/brokers\/topics\/kt02\/partitions|updateIsr===730|maybeExpandIsr===405"
+
+kafka.controller.KafkaController#elect
 
 object kafka.server.KafkaServer {
 	def startup() {
@@ -253,8 +281,7 @@ class kafka.coordinator.group.GroupCoordinator(val brokerId: Int, val groupConfi
 		validateGroupStatus(groupId, ApiKeys.OFFSET_COMMIT) match {
 			case None =>
 				groupManager.getGroup(groupId) match {
-					case Some(group) =>
-						doCommitOffsets(group, memberId, generationId, NO_PRODUCER_ID, NO_PRODUCER_EPOCH, offsetMetadata, responseCallback)
+					case Some(group) => doCommitOffsets(group, memberId, generationId, NO_PRODUCER_ID, NO_PRODUCER_EPOCH, offsetMetadata, responseCallback)
 				}
 		}
 	}
@@ -330,12 +357,10 @@ class kafka.coordinator.group.GroupMetadataManager(brokerId: Int, interBrokerPro
 		group.initializeOffsets(loadedOffsets, pendingTransactionalOffsets.toMap)
 	}
 	def storeOffsets(group: GroupMetadata, consumerId: String, offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata], responseCallback: immutable.Map[TopicPartition, Errors] => Unit, producerId: Long = RecordBatch.NO_PRODUCER_ID, producerEpoch: Short = RecordBatch.NO_PRODUCER_EPOCH): Unit = {
-		val filteredOffsetMetadata = offsetMetadata.filter { case (_, offsetAndMetadata) =>
-		}
+		val filteredOffsetMetadata = offsetMetadata.filter { case (_, offsetAndMetadata) => }
 		getMagic(partitionFor(group.groupId)) match {
 			case Some(magicValue) =>
-				val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) =>
-				}
+				val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) => }
 				group.onOffsetCommitAppend(topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata))
 		}
 	}
@@ -397,7 +422,6 @@ class kafka.log.LogManager(logDirs: Seq[File], initialOfflineDirs: Seq[File], va
 		}
 	}
 }
-
 
 public class org.apache.kafka.common.requests.FetchRequest extends AbstractRequest {
     public FetchRequest(Struct struct, short version) {
@@ -647,6 +671,188 @@ object kafka.server.ReplicaManager {
 			brokerTopicStats.topicStats(topicPartition.topic).totalProduceRequestRate.mark()
 			val (partition, _) = getPartitionAndLeaderReplicaIfLocal(topicPartition)
 			val info = partition.appendRecordsToLeader(records, isFromClient, requiredAcks)
+		}
+	}
+}
+
+abstract class kafka.utils.ShutdownableThread(val name: String, val isInterruptible: Boolean = true) extends Thread(name) with Logging {
+	override def run(): Unit = {
+        doWork()
+	}
+}
+class kafka.controller.KafkaController(val config: KafkaConfig, zkClient: KafkaZkClient, time: Time, metrics: Metrics, initialBrokerInfo: BrokerInfo, tokenManager: DelegationTokenManager, threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
+	class ControllerEventThread(name: String) extends ShutdownableThread(name = name, isInterruptible = false) {
+		override def doWork(): Unit = {
+			queue.take() match {
+				case KafkaController.ShutdownEventThread => initiateShutdown()
+				case controllerEvent =>
+					controllerEvent.process()
+			}
+		}
+	}
+	def startup() = {
+		zkClient.registerStateChangeHandler(new StateChangeHandler {...})
+		eventManager.put(Startup)
+		eventManager.start()
+	}
+	private def elect(): Unit = {
+		zkClient.checkedEphemeralCreate(ControllerZNode.path, ControllerZNode.encode(config.brokerId, timestamp))
+		onControllerFailover()
+	}
+	private def onControllerFailover() {
+		val childChangeHandlers = Seq(brokerChangeHandler, topicChangeHandler, topicDeletionHandler, logDirEventNotificationHandler, isrChangeNotificationHandler)
+		childChangeHandlers.foreach(zkClient.registerZNodeChildChangeHandler)
+		val nodeChangeHandlers = Seq(preferredReplicaElectionHandler, partitionReassignmentHandler)
+		nodeChangeHandlers.foreach(zkClient.registerZNodeChangeHandlerAndCheckExistence)
+		zkClient.deleteLogDirEventNotifications()
+		zkClient.deleteIsrChangeNotifications()
+		initializeControllerContext()
+		topicDeletionManager.init(topicsToBeDeleted, topicsIneligibleForDeletion)
+		sendUpdateMetadataRequest(controllerContext.liveOrShuttingDownBrokerIds.toSeq)
+		replicaStateMachine.startup()
+		partitionStateMachine.startup()
+		maybeTriggerPartitionReassignment(controllerContext.partitionsBeingReassigned.keySet)
+		topicDeletionManager.tryTopicDeletion()
+		val pendingPreferredReplicaElections = fetchPendingPreferredReplicaElections()
+		onPreferredReplicaElection(pendingPreferredReplicaElections)
+		kafkaScheduler.startup()
+	}
+	case object Reelect extends ControllerEvent {
+		override def process(): Unit = {
+			elect()
+		}
+	}
+	case object Startup extends ControllerEvent {
+		override def process(): Unit = {
+			zkClient.registerZNodeChangeHandlerAndCheckExistence(controllerChangeHandler)
+			elect()
+		}
+	}
+
+}
+
+
+class kafka.controller.PartitionStateMachine(config: KafkaConfig, stateChangeLogger: StateChangeLogger, controllerContext: ControllerContext, topicDeletionManager: TopicDeletionManager, zkClient: KafkaZkClient, partitionState: mutable.Map[TopicPartition, PartitionState], controllerBrokerRequestBatch: ControllerBrokerRequestBatch) extends Logging {
+	def startup() {
+		triggerOnlinePartitionStateChange()
+	}
+	def triggerOnlinePartitionStateChange() {
+		val partitionsToTrigger = partitionState.filter { case (partition, partitionState) =>
+			!topicDeletionManager.isTopicQueuedUpForDeletion(partition.topic) &&
+			(partitionState.equals(OfflinePartition) || partitionState.equals(NewPartition))
+		}.keys.toSeq
+		handleStateChanges(partitionsToTrigger, OnlinePartition, Option(OfflinePartitionLeaderElectionStrategy))
+	}
+	def handleStateChanges(partitions: Seq[TopicPartition], targetState: PartitionState, partitionLeaderElectionStrategyOpt: Option[PartitionLeaderElectionStrategy] = None): Unit = {
+		controllerBrokerRequestBatch.newBatch()
+		doHandleStateChanges(partitions, targetState, partitionLeaderElectionStrategyOpt)
+		controllerBrokerRequestBatch.sendRequestsToBrokers(controllerContext.epoch)
+	}
+	private def doHandleStateChanges(partitions: Seq[TopicPartition], targetState: PartitionState, partitionLeaderElectionStrategyOpt: Option[PartitionLeaderElectionStrategy]): Unit = {
+		partitions.foreach(partition => partitionState.getOrElseUpdate(partition, NonExistentPartition))
+		val (validPartitions, invalidPartitions) = partitions.partition(partition => isValidTransition(partition, targetState))
+		invalidPartitions.foreach(partition => logInvalidTransition(partition, targetState))
+		targetState match {
+			case OnlinePartition =>
+			val partitionsToElectLeader = validPartitions.filter(partition => partitionState(partition) == OfflinePartition || partitionState(partition) == OnlinePartition)
+			if (partitionsToElectLeader.nonEmpty) {
+				val successfulElections = electLeaderForPartitions(partitionsToElectLeader, partitionLeaderElectionStrategyOpt.get)
+			}
+		}
+	}
+  
+	private def electLeaderForPartitions(partitions: Seq[TopicPartition], partitionLeaderElectionStrategy: PartitionLeaderElectionStrategy): Seq[TopicPartition] = {
+		while (remaining.nonEmpty) {
+			val (success, updatesToRetry, failedElections) = doElectLeaderForPartitions(partitions, partitionLeaderElectionStrategy)
+		}
+		successfulElections
+	}
+	private def doElectLeaderForPartitions(partitions: Seq[TopicPartition], partitionLeaderElectionStrategy: PartitionLeaderElectionStrategy):
+		(Seq[TopicPartition], Seq[TopicPartition], Map[TopicPartition, Exception]) = {
+			val adjustedLeaderAndIsrs = partitionsWithLeaders.map { case (partition, leaderAndIsrOpt, _) => partition -> leaderAndIsrOpt.get }.toMap
+			val UpdateLeaderAndIsrResult(successfulUpdates, updatesToRetry, failedUpdates) = zkClient.updateLeaderAndIsr(adjustedLeaderAndIsrs, controllerContext.epoch)
+		}
+	}
+}
+
+class kafka.zk.KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean, time: Time) extends AutoCloseable with Logging with KafkaMetricsGroup {
+	def updateLeaderAndIsr(leaderAndIsrs: Map[TopicPartition, LeaderAndIsr], controllerEpoch: Int): UpdateLeaderAndIsrResult = {
+		val successfulUpdates = mutable.Map.empty[TopicPartition, LeaderAndIsr]
+		val updatesToRetry = mutable.Buffer.empty[TopicPartition]
+		val failed = mutable.Map.empty[TopicPartition, Exception]
+		val leaderIsrAndControllerEpochs = leaderAndIsrs.map { case (partition, leaderAndIsr) =>
+			partition -> LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)
+		}
+		val setDataResponses = setTopicPartitionStatesRaw(leaderIsrAndControllerEpochs)	
+		UpdateLeaderAndIsrResult(successfulUpdates.toMap, updatesToRetry, failed.toMap)
+	}
+	def setTopicPartitionStatesRaw(leaderIsrAndControllerEpochs: Map[TopicPartition, LeaderIsrAndControllerEpoch]): Seq[SetDataResponse] = {
+		val setDataRequests = leaderIsrAndControllerEpochs.map { case (partition, leaderIsrAndControllerEpoch) =>
+			val path = TopicPartitionStateZNode.path(partition)
+			val data = TopicPartitionStateZNode.encode(leaderIsrAndControllerEpoch)
+			SetDataRequest(path, data, leaderIsrAndControllerEpoch.leaderAndIsr.zkVersion, Some(partition))
+		}
+		retryRequestsUntilConnected(setDataRequests.toSeq)
+	}
+	private def retryRequestsUntilConnected[Req <: AsyncRequest](requests: Seq[Req]): Seq[Req#Response] = {
+		val remainingRequests = ArrayBuffer(requests: _*)
+		val responses = new ArrayBuffer[Req#Response]
+		while (remainingRequests.nonEmpty) {
+			val batchResponses = zooKeeperClient.handleRequests(remainingRequests)
+		}
+		responses
+	}
+}
+
+
+class kafka.zookeeper.ZooKeeperClient(connectString: String, sessionTimeoutMs: Int, connectionTimeoutMs: Int, maxInFlightRequests: Int, time: Time, metricGroup: String, metricType: String) extends Logging with KafkaMetricsGroup {
+	def handleRequests[Req <: AsyncRequest](requests: Seq[Req]): Seq[Req#Response] = {
+		val responseQueue = new ArrayBlockingQueue[Req#Response](requests.size)
+		requests.foreach { request =>
+			inFlightRequests.acquire()
+			inReadLock(initializationLock) {
+				send(request) { response =>
+					responseQueue.add(response)
+				}
+			}		
+		}
+	}
+	private[zookeeper] def send[Req <: AsyncRequest](request: Req)(processResponse: Req#Response => Unit): Unit = {
+		def callback(response: AsyncResponse): Unit = processResponse(response.asInstanceOf[Req#Response])
+		request match {
+			case ExistsRequest(path, ctx) =>
+			case GetDataRequest(path, ctx) =>
+			case GetChildrenRequest(path, ctx) =>
+			case CreateRequest(path, data, acl, createMode, ctx) =>
+			case SetDataRequest(path, data, version, ctx) =>
+			case DeleteRequest(path, version, ctx) =>
+		}
+	}
+	private[zookeeper] object ZooKeeperClientWatcher extends Watcher {
+		override def process(event: WatchedEvent): Unit = {
+			Option(event.getPath) match {
+				case Some(path) =>
+				(event.getType: @unchecked) match {
+					case EventType.NodeChildrenChanged => zNodeChildChangeHandlers.get(path).foreach(_.handleChildChange())
+					case EventType.NodeCreated => zNodeChangeHandlers.get(path).foreach(_.handleCreation())
+					case EventType.NodeDeleted => zNodeChangeHandlers.get(path).foreach(_.handleDeletion())
+					case EventType.NodeDataChanged => zNodeChangeHandlers.get(path).foreach(_.handleDataChange())
+				}
+			}
+		}
+	}
+}
+
+class ControllerBrokerRequestBatch(controller: KafkaController, stateChangeLogger: StateChangeLogger) extends  Logging {
+	def sendRequestsToBrokers(controllerEpoch: Int) {
+		val stateChangeLog = stateChangeLogger.withControllerEpoch(controllerEpoch)
+		leaderAndIsrRequestMap.foreach { case (broker, leaderAndIsrPartitionStates) =>
+			val leaderIds = leaderAndIsrPartitionStates.map(_._2.basePartitionState.leader).toSet
+			val leaders = controllerContext.liveOrShuttingDownBrokers.filter(b => leaderIds.contains(b.id)).map {
+				_.node(controller.config.interBrokerListenerName)
+			}
+			val leaderAndIsrRequestBuilder = new LeaderAndIsrRequest.Builder(leaderAndIsrRequestVersion, controllerId, controllerEpoch, leaderAndIsrPartitionStates.asJava, leaders.asJava)
+			controller.sendRequest(broker, ApiKeys.LEADER_AND_ISR, leaderAndIsrRequestBuilder, (r: AbstractResponse) => controller.eventManager.put(controller.LeaderAndIsrResponseReceived(r, broker)))
 		}
 	}
 }

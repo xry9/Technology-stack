@@ -85,6 +85,7 @@ public final class org.apache.kafka.clients.producer.internals.RecordAccumulator
                 TopicPartition tp = new TopicPartition(part.topic(), part.partition());
 				Deque<ProducerBatch> deque = getDeque(tp);
 				ProducerBatch batch = deque.pollFirst();
+				batch.close();
 				ready.add(batch);
             } while (start != drainIndex);
             batches.put(node.id(), ready);
@@ -611,6 +612,9 @@ public final class org.apache.kafka.clients.producer.internals.ProducerBatch {
 		this.recordCount++;
 		return future;
     }
+	public void close() {
+        recordsBuilder.close();
+    }
 }
 
 public class org.apache.kafka.common.record.MemoryRecordsBuilder {
@@ -630,4 +634,11 @@ public class org.apache.kafka.common.record.MemoryRecordsBuilder {
         int sizeInBytes = DefaultRecord.writeTo(appendStream, offsetDelta, timestampDelta, key, value, headers);
         recordWritten(offset, timestamp, sizeInBytes);
     }
+	public void close() {
+        closeForRecordAppends();
+    }
+	public void closeForRecordAppends() {
+		appendStream.close();
+    }
+
 }

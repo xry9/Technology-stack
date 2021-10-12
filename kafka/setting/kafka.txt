@@ -33,10 +33,10 @@ lsof -i:2181	lsof -i:9092
 	broker.id=0	broker.id=1	broker.id=2
 4、启动zk
 5、$KAFKA_HOME/bin/kafka-server-start.sh $KAFKA_HOME/config/server.properties &
-	$KAFKA_HOME/bin/kafka-topics.sh --create --zookeeper cloud01:2181 --replication-factor 3 --partitions 3 --topic kt01
-	$KAFKA_HOME/bin/kafka-topics.sh --describe --zookeeper cloud01:2181 --topic kt01
-	$KAFKA_HOME/bin/kafka-console-producer.sh --broker-list cloud01:9092 --topic kt01
-	$KAFKA_HOME/bin/kafka-console-consumer.sh --zookeeper cloud02:2181 --from-beginning --topic kt01
+	$KAFKA_HOME/bin/kafka-topics.sh --create --zookeeper pseudo2:2181/kafka200 --replication-factor 3 --partitions 3 --topic kt02
+	$KAFKA_HOME/bin/kafka-topics.sh --describe --zookeeper pseudo2:2181/kafka200 --topic kt02
+	$KAFKA_HOME/bin/kafka-console-producer.sh --broker-list pseudo2:9092 --topic kt01
+	$KAFKA_HOME/bin/kafka-console-consumer.sh --zookeeper pseudo2:2181 --from-beginning --topic kt01
 
 ==============重要参数=======================
 zookeeper.connect=cloud01:2181,cloud02:2181,cloud03:2181/kafka
