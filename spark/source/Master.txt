@@ -1,5 +1,5 @@
-private[deploy] class org.apache.spark.deploy.master.Master(override val rpcEnv: RpcEnv, address: RpcAddress, webUiPort: Int, val securityMgr: SecurityManager, val conf: SparkConf) extends ThreadSafeRpcEndpoint with Logging with LeaderElectable {
 
+private[deploy] class org.apache.spark.deploy.master.Master(override val rpcEnv: RpcEnv, address: RpcAddress, webUiPort: Int, val securityMgr: SecurityManager, val conf: SparkConf) extends ThreadSafeRpcEndpoint with Logging with LeaderElectable {
 	override def receive: PartialFunction[Any, Unit] = {
 		case RegisterApplication(description, driver) =>
 			logInfo("Registering app " + description.name)

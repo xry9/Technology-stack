@@ -1,3 +1,7 @@
+1、Hbase 连接中(HConnectionImplementation) 存在两个线程池 batchPool, metaLookupPool(meta 表 scan 时用到, 但是感觉没必要) 
+  get 用不到 batchPool, scan 会用到
+
+
 1、一个 get 请求, client 首次请求时要写 4 次, 以后当然每次请求写一次, 已经在 server 验证, 收到的字节大小是对得上的
 writeConnectionHeaderPreamble===810===6
 writeConnectionHeader===821===239

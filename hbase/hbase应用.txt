@@ -6,34 +6,30 @@
 2、region split
     $ hbase> split 'tableName', 'splitKey'
     $ hbase> split 'regionName', 'splitKey'
-3、region预分区:create 'ns:MyTab','cf',SPLITS => ['key3','key5']，预分区后写入会快一些，但不是太明显，但是IO消耗差别应该还是很大，因为写完之后还会有一段时间的compact IO
+    $ hbase> scan 'hbase:meta', {COLUMNS=>'info:server'}
+3、要手动 alter 'tab', NORMALIZATION_ENABLED =>'true', 否则不能自动 NORMALIZATION
+3、region预分区:create 'ns:MyTab','cf',SPLITS => ['key3','key5']，预分区后写入会快一些，但不是太明显，但是IO消耗差别应该还是很大，因为写完之后还会有一段时间的 compact IO
 4、major_compact '9b1bf877acc4334df195755ab384b53b','cf'	region中至少有两个Hfile时才生效（比如有很多delete的RowKey）
 
-5、测试memoryStore storeFile，单region多region，单storeFile多storeFile
-6、hbase.client.write.buffer 此参数没试出影响
-7、/hbase/archive/data，drop table的数据会在此
 8、kill 掉一个HRegionServer节点，相应region数据暂时是不能访问的，但是过段时间（一两分钟吧），此HRegionServer下的region会转交给其它HRegionServer，可以继续访问数据了
 9、经我测试minor compaction时也会合并数据呀
 
 ==================================
-org.apache.hadoop.hbase.regionserver.IncreasingToUpperBoundRegionSplitPolicy.shouldSplit()
-==================================
 create 'testImport1','cf','cg'
-准备数据文件sample.csv，并上传到HDFS，内容为：
+准备数据文件 sample.csv，并上传到HDFS，内容为：
 1,tom,ss,jj
 2,sam,rr,hh
 3,jerry,hh,mm
 4,marry,mm,dd
 5,john,kk,rr
 ----
-hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport1 /sample.csv
-hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.bulk.output=/result/hfile_tmp -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport3 /sample.csv
-hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /result/hfile_tmp testImport3
-list_namespace
-list_namespace_tables 'hbase'
-scan 'hbase:meta' 可以看到用户定义表的region位置，get /hbase/meta-region-server，可以看到meta表的region
+方式1: hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport1 /sample.csv
+
+方式2: hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.bulk.output=/result/hfile_tmp -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport1 /sample.csv
+  hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /result/hfile_tmp testImport1
+
 ----
-做HMasterHA，只改这里即可，其它节点hbase-daemon.sh start master，在前台看active状态（16010）
+做 HMaster HA, 只改这里即可，其它节点hbase-daemon.sh start master，在前台看active状态（16010）
 <name>hbase.master.port</name>
 <value>60000</value>
 =================================================
@@ -48,7 +44,7 @@ mr任务会报内存溢出，看日志发现
 snapshot 'tableName','snapshotName'	list_snapshots	clone_snapshot 'snapshotName','newTableName'
 经测试对集群负载没什么压力
 =============================================
-将hive的hive-hbase-handler-1.2.1.jar复制到hbase/lib
+将 hive 的 hive-hbase-handler-1.2.1.jar 复制到 hbase/lib
 create 'user1',{NAME => 'info',VERSIONS => 1}
 put 'user1','1','info:name','zhangsan'
 put 'user1','1','info:age','25'

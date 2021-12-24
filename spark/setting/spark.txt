@@ -134,7 +134,7 @@ import scala.sys.process._
 val file = sc.textFile("file:///usr/local/app/spark-1.5.2-bin-hadoop2.6/README.md",2)
 ps -ef | grep java
 ==================================
-spark on hive时只需把hive元数据文件放到$SPARK_HOME/conf下，改名为hive-site.xml，提交作业时加上--driver-class-path mysql驱动包
+spark on hive 时只需把 hive 元数据文件放到$SPARK_HOME/conf下，改名为hive-site.xml, 提交作业时加上 --driver-class-path mysql 驱动包
 ----
 想要查看运行作业的日志
 vim spark-defaults.conf
@@ -143,9 +143,9 @@ spark.eventLog.dir               hdfs://pseudo:9000/sparkLog
 查看历史日志
 vim spark-env.sh
 SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=hdfs://pseudo:9000/sparkLog"
-start-history-server.sh	web端口 18080
+start-history-server.sh	web 端口 18080
 ----spark on yarn 日志配置
-0、mapreduce任务日志查看好用为前提
+0、mapreduce 任务日志查看好用为前提
 1、vim spark-defaults.conf
 spark.eventLog.enabled           true
 spark.eventLog.dir               hdfs://ns1/sparkLog

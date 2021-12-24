@@ -35,7 +35,6 @@ private[spark] class org.apache.spark.executor.Executor(executorId: String, exec
 		runningTasks.put(taskDescription.taskId, tr)
 		threadPool.execute(tr)
 	}
-  
 	class TaskRunner(execBackend: ExecutorBackend, private val taskDescription: TaskDescription, private val plugins: Option[PluginContainer]) extends Runnable {
 		override def run(): Unit = {
 			execBackend.statusUpdate(taskId, TaskState.RUNNING, EMPTY_BYTE_BUFFER)

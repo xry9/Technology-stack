@@ -32,9 +32,10 @@ mvn clean package -DskipTests -Pdist,native -Dtar -Dmaven.javadoc.skip=true
 centos7 上编译 hadoop-3.2.2 需要装 cmake-3.10.2, ./configure && make -j8 && make install
 centos8 上编译 hadoop-3.0.0 装了 cmake-3.10.2 后需要注释掉 hadoop-pipes 工程, 不知道不装行不行
 centos8 上编译 hadoop-3.2.2 装了 cmake-3.10.2 后需要注释掉 hadoop-hdfs-native-client 工程
-
+centos8 中注释掉 hadoop-common-project/hadoop-common/pom.xml --> maven-antrun-plugin 就可以了
 
 2、hbase:
+mvn 要用 3.3.9, 用 3.6.3 有问题
 mvn clean package -DskipTests
 [ERROR] The specified user settings file does not exist: /home/tyx/.m2/settings.xml
 

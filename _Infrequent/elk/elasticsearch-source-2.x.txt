@@ -23,28 +23,74 @@ path.data: /Users/fintopia/app/elasticsearch-6.4.2-3/data
 path.logs: /Users/fintopia/app/elasticsearch-6.4.2-3/logs
 discovery.zen.ping.unicast.hosts: ["127.0.0.1:9300", "127.0.0.1:9500", "127.0.0.1:9700"]
 
+kill -9 $(ps -ef|grep Elasticsearch |gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
+
+http://192.168.58.141:9200/_cat/health?v
+http://192.168.58.141:9200/_cat/indices?v
+http://192.168.58.141:9200/usermanage/user/_search?q=id=1
 ============================================
+
+
+
+
+--------------------------------------------
 bindServerBootstrap===429|bindAddress===281
+sendResponse===97
+handleRequest===238|sendResponse===82, server: 接收 request 并返回 response
+sendRequest===286|messageReceived===112===false, client:发送 request 和接收本 request 和 response
+sendRequest===756|handleRequest===238, client 发送与 server 接收
 
+http: 
+registerHandler===116
 sendResponse===77|messageReceived===58
+--------------------------------------------
+org.elasticsearch.indices.cluster.IndicesClusterStateService#findSourceNodeForPeerRecovery 这个方法很重要
 
-sendRequest===756, messageReceived===115
-sendResponse===97, messageReceived===132
+cluster:monitor/nodes/stats: master 收集节点的磁盘等信息
+indices:monitor/stats 同上, 收集 shard 的信息
+internal:index/shard/recovery/start_recovery, 在方法 org.elasticsearch.indices.recovery.RecoveryTarget#doRecovery, 相当于本 shard 节点告诉主 shard 节点, 来向我发起 recovery 请示
+  在主 shard 节点中, org.elasticsearch.indices.recovery.RecoverySourceHandler#recoverToTarget 方法完成操作, phase1 phase2 finalizeRecovery 等. 
+internal:index/shard/recovery/prepare_translog, 是响应 internal:index/shard/recovery/start_recovery 后的操作, 会启动 InternalEngine。在 phase1 中调用
+  见 org.elasticsearch.indices.recovery.RecoverySourceHandler#prepareTargetForTranslog 中注释
+internal:index/shard/recovery/finalize 在 finalizeRecovery 方法中发送请示
+internal:discovery/zen/join, 从节点向 master 节点发请示
+internal:discovery/zen/join/validate master 节点返回给从节点
+internal:cluster/shard/started 向 master 发送 shard 信息, 到 master 好像也没干啥呀
+internal:discovery/zen/unicast ping 了一下, master 选举时需要依赖于此, 并不是在 server 端生效, 而是在 client handleResponse 
 
+internal:gateway/local/started_shards, 调用 nodes(几个不确定) shard 的 Store.tryOpenIndex (org.elasticsearch.gateway.TransportNodesListGatewayStartedShards#nodeOperation)
+internal:cluster/nodes/indices/shard/store, 与 started_shards 类似 
+internal:discovery/zen/publish, master 节点调用另两个节点,  if (newClusterState.nodes().localNodeMaster()) { discoveryService.publish(clusterChangedEvent, ackListener); }
+
+internal:indices/flush/synced/pre, 在 org.elasticsearch.indices.IndicesLifecycle.Listener#onShardInactive 中 shard 是 primary 会调用, 在 server 端 indexShard.flush
+internal:indices/flush/synced/sync 在 pre 的 listener 中被调用
+internal:discovery/zen/fd/master_ping 非 master 节点向 master 节点发送, clent 有一个线程 MasterPinger
+internal:discovery/zen/fd/ping 与上相反
+cluster:monitor/nodes/liveness client 连接时用到
+
+checkPendingJoinsAndElectIfNeeded===237 是 node master 被先出来, 本质还是在上面的日志 "elected as master task already submitted"
+
+shard 选举开始是在 org.elasticsearch.gateway.GatewayService#doStart 中, 如果 node 是 master 才往下走, 完成是在 org.elasticsearch.cluster.routing.ShardRouting#newUnassigned
+分配 node 是在 org.elasticsearch.cluster.action.shard.ShardStateAction#shardStartedOnMaster, 即 internal:cluster/shard/started 的 handler 中调用
+  日志: allocating [{}] to [{}] on primary allocation
+
+ClusterState.nodes 实在太重要是, 但是增加 node 应该是在 org.elasticsearch.cluster.node.DiscoveryNodes.Builder#put , 除了本地增加就是 ProcessJoinsTask 中, 溯源还是 JoinRequestRequestHandler 中添加的
+
+start===147,         
+less logs/elasticsearch.log | grep -E -A 15 "executeFetch===112"
+
+org.elasticsearch.cluster.routing.IndexShardRoutingTable#activeInitializingShardsIt 对 shards 有打散的操作
+第二阶段请求: indices:data/read/search[phase/query] 第二阶段请求: indices:data/read/search[phase/fetch/id]
 
 集群的 ClusterState 是关键, put===635(三行数据的是 master), execute===3 是 ClusterState 的关键
 Create===766, allocateUnassigned===97(选举出 primary shard)
 org.elasticsearch.action.support.replication.TransportReplicationAction.PrimaryPhase#finishAndMoveToReplication, primary shard 写完后会执行
 -- master 在 3, 但是 primary shard 只有一个在 3, 其它在 1
-allocateUnassigned===97
 
 getFromSearcher===236
 java api 会到 MessageChannelHandler#messageReceived 中, 不走 http 
 
-grep -E "STATE===STATE"
 clientBootstrap===
-
-
 
 这行代码: this.nodeId = nodeId.intern();
 curl -XPUT 'http://localhost:9200/usermanage/_settings' -H 'Content-Type: application/json' -d '
@@ -53,7 +99,15 @@ curl -XPUT 'http://localhost:9200/usermanage/_settings' -H 'Content-Type: applic
 "number_of_replicas" : 3
 }
 }'
+------------------------
+indices:data/write/index registerRequestHandler 是在 TransportReplicationAction, rpc 部分就可以串起来了
+org.elasticsearch.index.engine.InternalEngine#innerCreateNoLock 写入在这里
+org.elasticsearch.cluster.routing.OperationRouting#shardId 中 hash
 
+org.elasticsearch.action.search.TransportSearchAction#doExecute 读操作
+	org.elasticsearch.search.internal.ContextIndexSearcher#search 第一阶段读操作
+	org.elasticsearch.search.fetch.FetchPhase#loadStoredFields 第二阶段根据 docId 读取数据
+executeFetch===112|executeFetchPhase===593
 
 org.elasticsearch.action.search.type.TransportSearchTypeAction.BaseAsyncAction#performFirstPhase 方法的 
   sendExecuteFirstPhase(node, internalSearchRequest(shard, shardsIts.size(), request, filteringAliases, startTime()), new ActionListener<FirstResult>() {}); 调用很重要
@@ -94,15 +148,11 @@ final class org.elasticsearch.bootstrap.Bootstrap {
     }
 }
 public class org.elasticsearch.node.Node implements Releasable {
-
     public Node(Settings preparedSettings) {
         final Settings pSettings = settingsBuilder().put(preparedSettings).put(Client.CLIENT_TYPE_SETTING, CLIENT_TYPE).build();
         Environment tmpEnv = InternalSettingsPreparer.prepareEnvironment(pSettings, null);
         Settings tmpSettings = TribeService.processSettings(tmpEnv.settings());
         Version version = pSettings.getAsVersion("tests.mock.version", Version.CURRENT);
-        ESLogger logger = Loggers.getLogger(Node.class, tmpSettings.get("name"));
-
-        logger.info("version[{}], pid[{}], build[{}/{}]", version, JvmInfo.jvmInfo().pid(), Build.CURRENT.hashShort(), Build.CURRENT.timestamp());
         this.pluginsService = new PluginsService(tmpSettings, tmpEnv.pluginsFile());
         this.settings = pluginsService.updatedSettings();
         this.environment = new Environment(this.settings());
@@ -149,10 +199,6 @@ public class org.elasticsearch.node.Node implements Releasable {
         threadPool.setNodeSettingsService(injector.getInstance(NodeSettingsService.class));
     }
     public Node start() {
-        if (!lifecycle.moveToStarted()) {
-            return this;
-        }
-        ESLogger logger = Loggers.getLogger(Node.class, settings.get("name"));
         injector.getInstance(Discovery.class).setRoutingService(injector.getInstance(RoutingService.class));
         for (Class<? extends LifecycleComponent> plugin : pluginsService.nodeServices()) {
             injector.getInstance(plugin).start();
@@ -182,8 +228,7 @@ public class org.elasticsearch.node.Node implements Releasable {
         return this;
     }
 }
-
- public class com.xry9.elasticsearch.EsClient {
+public class com.xry9.elasticsearch.EsClient {
     private void buildClient() {
         Settings settings = Settings.settingsBuilder().put("cluster.name", esEnv.getClusterName()).put("transport.tcp.compress", true).build();
         client = TransportClient.builder().settings(settings).build().addTransportAddresses(addressArr);
@@ -893,34 +938,4 @@ public abstract class org.elasticsearch.action.support.replication.TransportRepl
 ===registerHandler===116===POST===/_search/scroll===org.elasticsearch.rest.action.search.RestSearchScrollAction
 ===registerHandler===116===POST===/_search/scroll/{scroll_id}===org.elasticsearch.rest.action.search.RestSearchScrollAction
 ===registerHandler===116===POST===/_msearch===org.elasticsearch.rest.action.search.RestMultiSearchAction
-
-
-
-[2021-07-06 10:08:46,197][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][1] [1]
-[2021-07-06 10:08:46,711][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][1] [1]
-[2021-07-06 10:08:46,957][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][2] [6]
-[2021-07-06 10:08:47,463][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][2] [6]
-[2021-07-06 10:08:46,383][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][2] [4]
-[2021-07-06 10:08:46,810][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][0] [5]
-[2021-07-06 10:08:46,284][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][0] [3]
-[2021-07-06 10:08:47,323][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][0] [5]
-[2021-07-06 10:08:47,405][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][3] [7]
-[2021-07-06 10:08:46,221][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][4] [2]
-[2021-07-06 10:08:47,474][INFO ][discovery.zen            ] [Infant Terrible] ===doRecovery===179===[usermanage][4] [8]
-
-
-
-[2021-07-06 10:08:47,435][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][0] [6]
-[2021-07-06 10:08:46,922][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][0] [6]
-[2021-07-06 10:08:46,171][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][1] [1]
-[2021-07-06 10:08:46,690][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][1] [1]
-[2021-07-06 10:08:46,185][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][2] [2]
-[2021-07-06 10:08:46,975][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][2] [7]
-[2021-07-06 10:08:46,294][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][2] [3]
-[2021-07-06 10:08:46,857][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][3] [4]
-[2021-07-06 10:08:47,165][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][3] [10]
-[2021-07-06 10:08:46,346][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][3] [4]
-[2021-07-06 10:08:46,810][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][4] [5]
-[2021-07-06 10:08:47,046][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][4] [8]
-[2021-07-06 10:08:47,108][INFO ][discovery.zen            ] [Katherine "Kitty" Pryde] ===doRecovery===179===[usermanage][4] [9]
 

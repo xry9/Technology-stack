@@ -1,5 +1,12 @@
 1、rpc: org.apache.spark.rpc.netty.NettyRpcEnv#postToOutbox
 2、org.apache.spark.scheduler.DAGScheduler#handleTaskCompletion ShuffleMapTask 执行完会走这个提交下一个任务
+3、org.apache.spark.executor.Executor.TaskRunner#run 方法中 task = ser.deserialize[Task[Any]], 不会调用 ResultTask 的构造方法
+
+nohup spark-submit --master=spark://pseudo:7077 --class org.apache.spark.examples.JavaWordCount /usr/local/app/mygit/spark-3.1.2-simple/examples/target/spark-examples_2.12-3.1.2.jar /data/words.txt /data/words2.txt cache > logs/spark-job.txt &
+
+channelRead0===|tc-send===
+
+core/streaming 产生 rdd 可以看看这里 combineByKeyWithClassTag===95
 
 public final class JavaWordCount {
 	public static void main(String[] args) throws Exception {
@@ -22,7 +29,6 @@ class SparkContext(config: SparkConf) extends Logging {
     val (sched, ts) = SparkContext.createTaskScheduler(this, master, deployMode)
 	_taskScheduler = ts
 	_taskScheduler.start()
-	// RDD.$anonfun$collect$1
 	def runJob[T, U: ClassTag](rdd: RDD[T], func: Iterator[T] => U): Array[U] = {
 		runJob(rdd, func, 0 until rdd.partitions.length)
 	}
@@ -100,12 +106,14 @@ class org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend(scheduler
 			launchTasks(taskDescs)
 		}
     }
-	override def receive: PartialFunction[Any, Unit] = {
-		case StatusUpdate(executorId, taskId, state, data, resources) =>
-			scheduler.statusUpdate(taskId, state, data.value)   
-		case ReviveOffers =>
-			makeOffers()
-    }
+	class DriverEndpoint extends IsolatedRpcEndpoint with Logging {
+		override def receive: PartialFunction[Any, Unit] = {
+			case StatusUpdate(executorId, taskId, state, data, resources) =>
+				scheduler.statusUpdate(taskId, state, data.value)
+			case ReviveOffers =>
+				makeOffers()
+		}
+	}
 	override def reviveOffers(): Unit = Utils.tryLogNonFatalError {
 		driverEndpoint.send(ReviveOffers)
 	}
@@ -114,7 +122,7 @@ class org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend(scheduler
 
 private[spark] class org.apache.spark.scheduler.TaskSchedulerImpl(val sc: SparkContext, val maxTaskFailures: Int, isLocal: Boolean = false, clock: Clock = new SystemClock) extends TaskScheduler with Logging {
 
-override def submitTasks(taskSet: TaskSet): Unit = {
+  override def submitTasks(taskSet: TaskSet): Unit = {
     val tasks = taskSet.tasks
     this.synchronized {
 		val manager = createTaskSetManager(taskSet, maxTaskFailures)
@@ -127,7 +135,7 @@ override def submitTasks(taskSet: TaskSet): Unit = {
   }
 }
 
-private[spark] class org.apache.spark.scheduler.DAGScheduler(private[scheduler] val sc: SparkContext, private[scheduler] val taskScheduler: TaskScheduler, listenerBus: LiveListenerBus, mapOutputTracker: MapOutputTrackerMaster, blockManagerMaster: BlockManagerMaster, env: SparkEnv, clock: Clock = new SystemClock()) extends Logging {、
+private[spark] class org.apache.spark.scheduler.DAGScheduler(private[scheduler] val sc: SparkContext, private[scheduler] val taskScheduler: TaskScheduler, listenerBus: LiveListenerBus, mapOutputTracker: MapOutputTrackerMaster, blockManagerMaster: BlockManagerMaster, env: SparkEnv, clock: Clock = new SystemClock()) extends Logging {
 	def runJob[T, U](rdd: RDD[T], func: (TaskContext, Iterator[T]) => U, partitions: Seq[Int], callSite: CallSite, resultHandler: (Int, U) => Unit, properties: Properties): Unit = {
 		val waiter = submitJob(rdd, func, partitions, callSite, resultHandler, properties)    
 	}
@@ -160,19 +168,14 @@ private[spark] class org.apache.spark.scheduler.DAGScheduler(private[scheduler] 
 					val locs = taskIdToLocations(id)
 					val part = partitions(id)
 					stage.pendingPartitions += id
-					new ShuffleMapTask(stage.id, stage.latestInfo.attemptNumber,
-					  taskBinary, part, locs, properties, serializedTaskMetrics, Option(jobId),
-					  Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier())
+					new ShuffleMapTask(stage.id, stage.latestInfo.attemptNumber, taskBinary, part, locs, properties, serializedTaskMetrics, Option(jobId), Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier())
 				  }
 				case stage: ResultStage =>
 				  partitionsToCompute.map { id =>
 					val p: Int = stage.partitions(id)
 					val part = partitions(p)
 					val locs = taskIdToLocations(id)
-					new ResultTask(stage.id, stage.latestInfo.attemptNumber,
-					  taskBinary, part, locs, id, properties, serializedTaskMetrics,
-					  Option(jobId), Option(sc.applicationId), sc.applicationAttemptId,
-					  stage.rdd.isBarrier())
+					new ResultTask(stage.id, stage.latestInfo.attemptNumber, taskBinary, part, locs, id, properties, serializedTaskMetrics, Option(jobId), Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier())
 				  }
 		  }
 		}
@@ -218,7 +221,6 @@ private[spark] class org.apache.spark.scheduler.DAGScheduler(private[scheduler] 
 	def taskEnded(task: Task[_], reason: TaskEndReason, result: Any, accumUpdates: Seq[AccumulatorV2[_, _]], metricPeaks: Array[Long], taskInfo: TaskInfo): Unit = {
 		eventProcessLoop.post(CompletionEvent(task, reason, result, accumUpdates, metricPeaks, taskInfo))
 	}
-
 }
 
 private[spark] class org.apache.spark.scheduler.TaskSetManager(sched: TaskSchedulerImpl, val taskSet: TaskSet, val maxTaskFailures: Int, healthTracker: Option[HealthTracker] = None, clock: Clock = new SystemClock()) extends Schedulable with Logging {

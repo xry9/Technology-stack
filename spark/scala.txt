@@ -1,0 +1,2 @@
+1、object 相当于 class 的当个实例, 放一些静态的 field 或 method, object 不能接受带参数的 constructor
+2、

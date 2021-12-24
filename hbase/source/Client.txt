@@ -1,10 +1,16 @@
+mvn clean package -DskipTests && cp target/hbase-server-1.3.0.jar /usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar && scp target/hbase-server-1.3.0.jar pseudo2:/usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar && scp target/hbase-server-1.3.0.jar pseudo3:/usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar 
+less logs/hbase-tyx-regionserver-pseudo*.log | grep -E "run===74|mergeRegions===1486|splitRegion===19"
+less logs/hbase-tyx-master-pseudo.log | grep -E "computePlanForTable===|normalizeRegions===1419"
+
 create_namespace 'nametest'
 drop_namespace 'nametest'
 describe_namespace 'nametest'
 list_namespace
+list_namespace_tables 'hbase'
+scan 'hbase:meta' 可以看到用户定义表的region位置. zk: get /hbase/meta-region-server，可以看到 meta表的 region
 
 
-1、去 zk 中查到 HRegionLocation(region=hbase:meta,,...)
+1、去 zk(/hbase/meta-region-server) 中查到 HRegionLocation(region=hbase:meta,,...)
 2、scan meta 表得到 HRegionLocation(region=tab,,...)
 3、HConnectionImplementation.getClient(final ServerName sn) 方法的返回值是 ClientService.BlockingInterface, 所以说此 connection只是 rpc 的
 句柄, 内还有 HRegionLocation, 需要连zk. 而 rpc 连接里才会有 socket, 可以认为是两级线程与两级连接, batchPool 是维护 rpc 请求的线程池, 而 RpcClientImpl.Connection 
@@ -23,9 +29,17 @@ list_namespace
   在 RegionCoprocessorRpcChannel 中对真正要调用的用户自定义方法进行了一个转换, 执行了 execService CoprocessorServiceRequest, 此 request 包含
   ClientProtos.CoprocessorServiceCall call = CoprocessorRpcUtils.buildServiceCall(row, method, request);// 真的 method request
   在服务端是这样的 RSRpcServices.execService--> RSRpcServices.execServiceOnRegion --> HRegion.execService --> RowCountEndpoint.getRowCount
+-----------------------
+1、
+ConnectionManager.HConnectionImplementation#metaLookupPool 被用的很少, 只有 ClientSmallReversedScanner --> ClientScanner.pool
+ConnectionManager.HConnectionImplementation#batchPool 基本只是被用在 HTable 中了
+ConnectionManager.HConnectionImplementation#rpcClient stub 底层用到, 都没多复杂
+2、关于获取 region 元信息有些绕, 仔细捊也还好, 首先 zk: get /hbase/meta-region-server
+
+
   
 public class MyDemo {
-	static Configuration conf ;
+	static Configuration conf;
 	public static Connection conn;
 	static {
 		conf = HBaseConfiguration.create();

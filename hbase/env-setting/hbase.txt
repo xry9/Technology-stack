@@ -1,7 +1,6 @@
 单机：
 1、vim hbase-site.xml
 2、./start-hbase.sh	./hbase shell
-3、Windows下hosts中配置192.168.183.179 pseudo----不配也可
 <property>
 <name>hbase.rootdir</name>
 <value>hdfs://pseudo:9000/hbase</value>
@@ -45,11 +44,29 @@ cloud03
 4、拷贝core-site.xml,hdfs-site.xml文件
 4、scp -r hbase-1.0.3 cloud02:/usr/local/app/	三台机器配置都一样
 5、启动zk
-6、./start-hbase.sh
-7、三台机器	./hbase shell，查询结果完全一样
-8、windows下连任意都可以configuration.set("hbase.zookeeper.quorum", "cloud03:2181");直接ip也可
+6、主节点 start-hbase.sh
 
-**********************伪分部式模式**********************
-1、相同
-2、zk 可以用 standalone 模式
-3、没有其它了
+====================================
+hive on hbase:
+
+将 hive 的 hive-hbase-handler-1.2.1.jar 复制到 hbase/lib
+create 'user1',{NAME => 'info',VERSIONS => 1}
+put 'user1','1','info:name','zhangsan'
+put 'user1','1','info:age','25'
+put 'user1','2','info:name','lisi'
+put 'user1','2','info:age','22'
+put 'user1','3','info:name','wangswu'
+put 'user1','3','info:age','21'
+----
+SET hbase.zookeeper.quorum=pseudo;
+SET zookeeper.znode.parent=/hbase;
+ADD jar /usr/local/app/apache-hive-1.2.1-bin/lib/hive-hbase-handler-1.2.1.jar;
+CREATE EXTERNAL TABLE user1 (
+rowkey string,
+info map<STRING,STRING>
+) STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,info:")
+TBLPROPERTIES ("hbase.table.name" = "user1");
+CREATE EXTERNAL TABLE user2 (rowkey string,name string,age int) STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler' WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,info:name,info:age")TBLPROPERTIES ("hbase.table.name" = "user1");
+hive插入数据到hbase：
+INSERT INTO TABLE user1 SELECT '4' AS rowkey,map('name','lijin','age','22') AS info from tab limit 1;

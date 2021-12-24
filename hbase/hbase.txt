@@ -1,123 +1,85 @@
-http://hbase.apache.org/book.html
+******************** HBase － 数据写入流程解析 ********************
 
-$ cat /tmp/hbase-testuser-1-master.pid |xargs kill -9
-$ .bin/local-regionservers.sh start 2 3 4 5
-Another related setting is the number of processes a user is allowed to run at once. 
-Replace the Hadoop Bundled With HBase!
-4.1.1. dfs.datanode.max.transfer.threads
-Procedure: HDFS Client Configuration
+4、WAL之所以能够提升写性能，是因为WAL将一次随机写转化为了一次顺序写加一次内存写。
+	WAL持久化等级:SKIP_WAL：只写缓存，不写HLog日志；ASYNC_WAL：异步将数据写入HLog日志中；
+	SYNC_WAL：同步将数据写入日志文件中，需要注意的是数据只是被写入文件系统中，并没有真正落盘（默认）
+	FSYNC_WAL：同步将数据写入日志文件并强制落盘。最严格的日志写入等级，可以保证数据不会丢失，但是性能相对比较差
 
-hbase.regionserver.handler.count
-* hbase.regionserver.global.memstore.size
-hbase.regionserver.global.memstore.size.lower.limit
-hbase.systemtables.compacting.memstore.type
-hbase.regionserver.regionSplitLimit
-hbase.client.write.buffer  -->  hbase.client.write.buffer * hbase.regionserver.handler.count
-hbase.client.max.perregion.tasks
-hbase.client.perserver.requests.threshold
-hbase.client.scanner.caching
+******************** HBase – Memstore Flush深度解析 ********************
+1、HBase会在如下几种情况下触发flush操作，需要注意的是MemStore的最小flush单元是HRegion而不是单个MemStore
+Memstore Flush触发条件：
+	Memstore级别限制：当Region中任意一个MemStore的大小达到了上限（hbase.hregion.memstore.flush.size，默认128MB）
+	Region级别限制：当Region中所有Memstore的大小总和达到了上限（hbase.hregion.memstore.block.multiplier * hbase.hregion.memstore.flush.size，默认 2* 128M = 256M）
+	Region Server级别限制：当一个Region Server中所有Memstore的大小总和达到了上限（hbase.regionserver.global.memstore.upperLimit ＊ hbase_heapsize，默认 
+		40%的JVM内存使用量），会触发部分Memstore刷新。Flush顺序是按照Memstore由大到小执行，先Flush Memstore最大的Region，再执行次大的，直至总体Memstore内存使用量
+		低于阈值（hbase.regionserver.global.memstore.lowerLimit ＊ hbase_heapsize，默认 38%的JVM内存使用量）
+	当一个Region Server中HLog数量达到上限（可通过参数hbase.regionserver.maxlogs配置）时，系统会选取最早的一个 HLog对应的一个或多个Region进行flush
+	HBase定期刷新Memstore：默认周期为1小时，确保Memstore不会长时间没有持久化。为避免所有的MemStore在同一时间都进行flush导致的问题，
+		定期的flush操作有20000左右的随机延时
+	手动执行flush：用户可以通过shell命令 flush ‘tablename’或者flush ‘region name’分别对一个表或者一个Region进行flush
+Memstore Flush流程：
+prepare阶段：遍历当前Region中的所有Memstore，将Memstore中当前数据集kvset做一个快照snapshot，然后再新建一个新的kvset。后期的所有写入操作都会写入新的kvset中，
+	而整个flush阶段读操作会首先分别遍历kvset和snapshot，如果查找不到再会到HFile中查找。prepare阶段需要加一把updateLock对写请求阻塞，结束之后会释放该锁。
+	因为此阶段没有任何费时操作，因此持锁时间很短。
+flush阶段：遍历所有Memstore，将prepare阶段生成的snapshot持久化为临时文件，临时文件会统一放到目录.tmp下。这个过程因为涉及到磁盘IO操作，因此相对比较耗时。
+commit阶段：遍历所有的Memstore，将flush阶段生成的临时文件移到指定的ColumnFamily目录下，针对HFile生成对应的storefile和Reader，把storefile添加到HStore的
+	storefiles列表中，最后再清空prepare阶段生成的snapshot。 	
+Memstore Flush对业务读写的影响；
+	正常情况下，大部分Memstore Flush操作都不会对业务读写产生太大影响，比如这几种场景：HBase定期刷新Memstore、手动执行flush操作、触发Memstore级别限制、
+	触发HLog数量限制以及触发Region级别限制等，这几种场景只会阻塞对应Region上的写请求，阻塞时间很短，毫秒级别
+	然而一旦触发Region Server级别限制导致flush，就会对用户请求产生较大的影响。会阻塞所有落在该Region Server上的更新操作，阻塞时间很长，甚至可以达到分钟级别。
+	一般情况下Region Server级别限制很难触发，但在一些极端情况下也不排除有触发的可能，下面分析一种可能触发这种flush操作的场景
+	maxHeap = 71，hbase.regionserver.global.memstore.upperLimit = 0.35，hbase.regionserver.global.memstore.lowerLimit = 0.30，globalMemStoreLimit=24.9 G, globalMemStoreLimitLowMark=21.3 G
+	假设每个Memstore大小为默认128M，在上述配置下如果每个Region有两个Memstore，整个Region Server上运行了100个region，根据计算可得总消耗内存 = 128M * 100 * 2 = 25.6G > 24.9G
+	根据上面的分析，导致触发Region Server级别限制的因素主要有一个Region Server上运行的Region总数，一个是Region上的Store数（即表的ColumnFamily数）。对于前者，根据读写请求量一般建议线上一个Region Server上运行的Region保持在50~80个左右，太小的话会浪费资源，太大的话有可能触发其他异常；对于后者，建议ColumnFamily越少越好，如果从逻辑上确实需要多个ColumnFamily，最好控制在3个以内
+	
 
-hbase.hregion.memstore.flush.size
-* hbase.hregion.percolumnfamilyflush.size.lower.bound.min
-hbase.hregion.preclose.flush.size
-* hbase.hregion.memstore.block.multiplier
-* hbase.hregion.memstore.mslab.enabled
-* hbase.hregion.max.filesize
-* hbase.hregion.majorcompaction
-* hbase.hstore.compactionThreshold
-* hbase.hstore.blockingStoreFiles
-* hbase.hstore.compaction.min
-hbase.hstore.compaction.max
-* hbase.hstore.compaction.min.size
-hbase.hstore.compaction.ratio
-hbase.hstore.time.to.purge.deletes
-hbase.offpeak.start.hour
-* hbase.regionserver.thread.compaction.throttle
-hbase.regionserver.majorcompaction.pagecache.drop
-hbase.regionserver.minorcompaction.pagecache.drop
-* hbase.storescanner.parallel.seek.enable
-hbase.storescanner.parallel.seek.threads
-* hfile.block.cache.size
-hfile.index.block.max.size
-hbase.bucketcache.ioengine
-hbase.bucketcache.size
-hbase.bucketcache.bucket.sizes
-hfile.block.bloom.cacheonwrite
-io.storefile.bloom.block.size
-hbase.rs.cacheblocksonwrite
-hbase.rpc.timeout
-hbase.client.operation.timeout
-hbase.cells.scanned.per.heartbeat.check
-hbase.rpc.shortoperation.timeout
-hbase.ipc.client.tcpnodelay
-hadoop.policy.file
-hbase.superuser
-hbase.rest.port
-hbase.table.max.rowsize
-hbase.snapshot.enabled
-hbase.client.scanner.max.result.size
-hbase.server.scanner.max.result.size
-hbase.dynamic.jars.dir
-Set HBase environment variables in this file. Examples include options to pass the JVM on start of an HBase daemon such as heap size and garbage collector configs. You can also set configurations for HBase configuration, log directories, niceness, ssh options, where to locate process pid files, etc. Open the file at conf/hbase-env.sh and peruse its content. Each option is fairly well documented. Add your own environment variables here if you want them read by HBase daemons on startup.
-<artifactId>hbase-shaded-client</artifactId>
-The factory method on HBaseConfiguration, HBaseConfiguration.create();, on invocation, will read in the content of the first hbase-site.xml found on the client’s CLASSPATH, if one is present (Invocation will also factor in any hbase-default.xml found; an hbase-default.xml ships inside the hbase.X.X.X.jar). It is also possible to specify configuration directly without having to read from a hbase-site.xml. For example, to set the ZooKeeper ensemble for the cluster programmatically do as follows:
-7.6. Timeout settings
-zookeeper.session.timeout
-./hbase shell ./sample_commands.txt
-19. Overriding configuration starting the HBase Shell
-20.3. LOG data to timestamp
-20.4. Query Shell Configuration
-hbase>create 't14','f',SPLITS_FILE=>'splits.txt'
---
-# create table with four regions based on random bytes keys
-hbase>create 't2','f1', { NUMREGIONS => 4 , SPLITALGO => 'UniformSplit' }
---
-hbase> alter ‘t1′, NAME => ‘f1′, VERSIONS => 5
-----
-29.3. Optional New Version and Delete behavior in HBase-2.0.0
-Aim to have regions sized between 10 and 50 GB.
-Aim to have cells no larger than 10 MB, or 50 MB
-Around 50-100 regions is a good number for a table with 1 or 2 column families. Remember that a region is a contiguous segment of a column family.
-If you are storing time-based machine data or logging information, and the row key is based on device ID or service ID plus time, you can end up with a pattern where older data regions never have additional writes beyond a certain age. In this type of situation, you end up with a small number of active regions and a large number of older regions which have no new writes. For these situations, you can tolerate a larger number of regions because your resource consumption is driven by the active regions only.
-If only one column family is busy with writes, only that column family accomulates memory. Be aware of write patterns when allocating resources.
+3、LRUBlockCache：HBase默认的BlockCache实现方案。Block数据块都存储在 JVM heap内，由JVM进行垃圾回收管理。它将内存从逻辑上分为了三块：
+single-access区、
+	mutil-access区、in-memory区，分别占到整个BlockCache大小的25%、50%、25%。一次随机读中，一个Block块从HDFS中加载出来之后首先放入signle区，
+	后续如果有多次请求访问到这块数据的话，就会将这块数据移到mutil-access区。而in-memory区表示数据可以常驻内存，一般用来存放访问频繁、数据量小的数据，比如元数据，
+	用户也可以在建表的时候通过设置列族属性IN-MEMORY= true将此列族放入in-memory区。很显然，这种设计策略类似于JVM中young区、old区以及perm区。无论哪个区，
+	系统都会采用严格的Least-Recently-Used算法，当BlockCache总量达到一定阈值之后就会启动淘汰机制，最少使用的Block会被置换出来，为新加载的Block预留空间。 
 
-Personally I would place the maximum disk space per machine that can be served exclusively with HBase around 6T, unless you have a very read-heavy workload. In that case the Java heap should be 32GB (20G regions, 128M memstores, the rest defaults).
-* flushing and compactions are done on a per Region basis so if one column family is carrying the bulk of the data bringing on flushes, the adjacent families will also be flushed even though the amount of data they carry is small
-* Try to make do with one column family if you can in your schemas. Only introduce a second and third column family in the case where data access is usually column scoped; i.e. you query one column family or the other but usually not both at the one time.
-* the indices that are kept on HBase storefiles (StoreFile (HFile)) to facilitate random access may end up occupying large chunks of the HBase allotted RAM because the cell value coordinates are large. Mark in the above cited comment suggests upping the block size so entries in the store file index happen at a larger interval or modify the table schema so it makes for smaller rows and column names. Compression will also make for larger indices. See the thread a question storefileIndexSize up on the user mailing list.
-This parameter should only be set when time-to-live is enabled for a column family and must be less than the number of row versions.
-41. Time To Live (TTL)
-42. Keeping Deleted Cells
-Scan.setReversed()
-46.4. Optimize on the Server Side for Low Latency
-46.5. JVM Tuning
-47. Special Cases
-67.1. hbase:meta
-67.2. Startup Sequencing
-This information is cached in the client so that subsequent requests need not go through the lookup process. 
-For the asynchronous table, most methods have the same meaning with the old Table interface, expect that the return value is wrapped with a CompletableFuture usually. We do not have any buffer here so there is no close method for asynchronous table, you do not need to close it. And it is thread safe.
-68.3. Asynchronous Client
-* So while the cluster can still run for a short time without the Master, the Master should be restarted as soon as possible
-70.5. MasterProcWAL
-HBase provides two different BlockCache implementations to cache data read from HDFS: the default on-heap LruBlockCache and the BucketCache
-* 71.4.3. LruBlockCache Design
-* 71.4.4. LruBlockCache Usage
-* 71.4.5. Off-heap Block Cache
-* 71.4.6. Compressed BlockCache
-71.5. RegionServer Offheap Read/Write Path
-* 71.6. RegionServer Splitting Implementation
-71.7. Write Ahead Log (WAL)
-72.1.1. Why should I keep my Region count low?
-72.2. Region-RegionServer Assignment
-72.3. Region-RegionServer Locality
-72.4. Region Splits
-72.5. Manual Region Splitting
-* 72.6. Online Region Merges
-72.7. Store
-	Note that when the flush happens, MemStores that belong to the same region will all be flushed.
-72.7.5. Blocks
-72.7.7. Compaction
-	The end result of a major compaction is a single StoreFile per Store
-	Compactions do not perform region merges. See Merge for more information on region merging.
-73. Bulk Loading
-75. Timeline-consistent High Available Reads
+	实际实现中，HBase将BucketCache和LRUBlockCache搭配使用，称为CombinedBlockCache。
+	和DoubleBlockCache不同，系统在LRUBlockCache中主要存储Index Block和Bloom Block，而将Data Block存储在BucketCache中
+
+******************** HBase BlockCache系列 － 探求BlockCache实现机制 ********************
+1、LRUBlockCache：它使用一个ConcurrentHashMap管理BlockKey到Block的映射关系，缓存Block只需要将BlockKey和对应的Block放入该HashMap中，查询缓存就根据BlockKey从HashMap中获取即可
+   HBase在LRU缓存基础上，采用了缓存分层设计，将整个BlockCache分为三个部分：single-access、mutil-access和inMemory。需要特别注意的是，HBase系统元数据存放在InMemory区，因此设置数据属性InMemory = true需要非常谨慎，确保此列族数据量很小且访问频繁，否则有可能会将hbase.meta元数据挤出内存，严重影响所有业务性能
+   LRU方案使用JVM提供的HashMap管理缓存，简单有效。但随着数据从single-access区晋升到mutil-access区，基本就伴随着对应的内存对象从young区到old区 ，晋升到old区的Block被淘汰后会变为内存垃圾，最终由CMS回收掉（Conccurent Mark Sweep，一种标记清除算法），然而这种算法会带来大量的内存碎片，碎片空间一直累计就会产生臭名昭著的Full GC。尤其在大内存条件下，一次Full GC很可能会持续较长时间，甚至达到分钟级别。大家知道Full GC是会将整个进程暂停的（称为stop-the-wold暂停），因此长时间Full GC必然会极大影响业务的正常读写请求。也正因为这样的弊端，SlabCache方案和BucketCache方案才会横空出世
+   
+2、 BucketCache工作模式
+	相比LRUBlockCache，BucketCache实现相对比较复杂。它没有使用JVM 内存管理算法来管理缓存，而是自己对内存进行管理，因此不会因为出现大量
+	碎片导致Full GC的情况发生。本节主要介绍BucketCache的具体实现方式（包括BucketCache的内存组织形式、缓存写入读取流程等）
+	以及如何配置使用BucketCache。
+	
+	BucketCache默认有三种工作模式：heap、offheap和file；这三种工作模式在内存逻辑组织形式以及缓存流程上都是相同的，参见上节讲解。
+	不同的是三者对应的最终存储介质有所不同，即上述所讲的IOEngine有所不同。
+	其中heap模式和offheap模式都使用内存作为最终存储介质，内存分配查询也都使用Java NIO ByteBuffer技术，不同的是，heap模式分配内存会调用
+	byteBuffer.allocate方法，从JVM提供的heap区分配，而后者会调用byteBuffer.allocateDirect方法，直接从操作系统分配。这两种内存分配模式会
+	对HBase实际工作性能产生一定的影响。影响最大的无疑是GC ，相比heap模式，offheap模式因为内存属于操作系统，所以基本不会产生CMS GC，
+	也就在任何情况下都不会因为内存碎片导致触发Full GC。除此之外，在内存分配以及读取方面，两者性能也有不同，比如，内存分配时heap模式需要
+	首先从操作系统分配内存再拷贝到JVM heap，相比offheap直接从操作系统分配内存更耗时；但是反过来，读取缓存时heap模式可以从JVM heap中直接
+	读取，而offheap模式则需要首先从操作系统拷贝到JVM heap再读取，显得后者更费时。 
+	
+	file模式和前面两者不同，它使用Fussion-IO或者SSD等作为存储介质，相比昂贵的内存，这样可以提供更大的存储容量，因此可以极大地提升缓存命中率
+
+******************** HBase BlockCache系列 － 性能对比测试报告 ********************
+1. 在’缓存全部命中’场景下，LRU君可谓完胜CBC君。因此如果总数据量相比JVM内存容量很小的时候，选择LRU君；
+2. 在所有其他存在缓存未命中情况的场景下， LRU君的GC性能几乎只有CBC君的1/3，而吞吐量、读写延迟、IO、CPU等指标两者基本相当，因此建议选择CBC。 
+之所以在’缓存全部命中’场景下LRU的各项指标完胜CBC，而在’缓存大量未命中’的场景下，LRU各项指标与CBC基本相当，是因为HBase在读取数据的时候，如果都缓存命中的话，对于CBC，需要将堆外内存先拷贝到JVM内，然后再返回给用户，流程比LRU君的堆内内存复杂，延迟就会更高。而如果大量缓存未命中，内存操作就会占比很小，延迟瓶颈主要在于IO，使得LRU和CBC两者各项指标基本相当
+********************  ********************
+********************  ********************
+********************  ********************
+********************  ********************
+********************  ********************
+1、之所以能够提升写性能，是因为WAL将一次随机写转化为了一次顺序写加一次内存写
+2、Memstore Flush触发条件
+	需要注意的是MemStore的最小flush单元是HRegion而不是单个MemStore
+	Memstore级别限制：当Region中任意一个MemStore的大小达到了上限（hbase.hregion.memstore.flush.size，默认128MB），会触发Memstore刷新。
+	Region级别限制：当Region中所有Memstore的大小总和达到了上限（hbase.hregion.memstore.block.multiplier * hbase.hregion.memstore.flush.size，默认 2* 128M = 256M），会触发memstore刷新。
+	Region Server级别限制：当一个Region Server中所有Memstore的大小总和达到了上限（hbase.regionserver.global.memstore.upperLimit ＊ hbase_heapsize，默认 40%的JVM内存使用量），会触发部分Memstore刷新。Flush顺序是按照Memstore由大到小执行，先Flush Memstore最大的Region，再执行次大的，直至总体Memstore内存使用量低于阈值（hbase.regionserver.global.memstore.lowerLimit ＊ hbase_heapsize，默认 38%的JVM内存使用量）。
+	当一个Region Server中HLog数量达到上限（可通过参数hbase.regionserver.maxlogs配置）时，系统会选取最早的一个 HLog对应的一个或多个Region进行flush
+	HBase定期刷新Memstore：默认周期为1小时，确保Memstore不会长时间没有持久化。为避免所有的MemStore在同一时间都进行flush导致的问题，定期的flush操作有20000左右的随机延时。
+	手动执行flush：用户可以通过shell命令 flush ‘tablename’或者flush ‘region name’分别对一个表或者一个Region进行flush。 

@@ -3,8 +3,6 @@
 /hbase/data/hbase/meta
 /hbase/data/hbase/namespace		(怎么是还有个这表)
 
-2、通过 /hbase/WALs 目录观察，一个 regionserver 共用一个文件
-3、org.apache.hadoop.hbase.util.Bytes#binarySearch 这是不是二分查找
 4、RatioBasedCompactionPolicy#needsCompaction 中 storeFiles > hbase.hstore.compactionThreshold(3) 则可 compaction, 每次 flush 则会做此判断
   面试中被问到怎么 compaction 时怎么选 storeFile
 5、一级缓存就是个 ConcurrentHashMap, map.put map.remove, remove 后会加到二级缓存中
@@ -54,11 +52,15 @@ HStore#compact --> HStore#replaceStoreFiles 这应该没有上述问题, 因为�
 18、有人说 rowkey 设计原则时, 别忘了不要太长就好
 19、hbase 与 es 二级索引保障数据一致性, 突然发现好简单, 串行就完了, 先写 es 再写 hbase, 有异常就都回滚
 20、数据结构为什么是 kv, 在 memStore 里这样存是必须的, 但在 storeFile 中我还是没参透
-
+21、获取 scanner 时会用 org.apache.hadoop.hbase.regionserver.StoreFile.Reader#passesGeneralBloomFilter 判断是否在这个 storeFile 中的
+22、有两种 bloom 块 GENERAL_BLOOM_META(bloom 过滤器)、BLOOM_CHUNK(bloom 过滤器的 buffer)
+23、RSRpcServices.bulkLoadHFile 跟过代码, 走到 HRegionFileSystem.commitStoreFile
+24、region split 中, SplitTransactionImpl#openDaughters 会调用 CompactionRunner
 
 hbase 多列簇的不好：
 1、读取时如果不指定 列簇 相当于多次文件IO，而且结果还要拼起来，性能开锁是直线增长的
 2、每个列簇一个metastore，占用内存
+
 
 
 public class org.apache.hadoop.hbase.regionserver.HRegion implements HeapSize, PropagatingConfigurationObserver, Region {
