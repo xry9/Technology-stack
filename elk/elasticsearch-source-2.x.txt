@@ -1,8 +1,8 @@
 https://github.com/elastic/elasticsearch/
-mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-2.0.0-1/lib/elasticsearch-2.0.0.jar&& cp target/elasticsearch-2.0.3-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-2.0.0-2/lib/elasticsearch-2.0.0.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-2.0.0-3/lib/elasticsearch-2.0.0.jar
+mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-1/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-2/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-3/lib/elasticsearch-2.0.3-SNAPSHOT.jar 
 
 git clone -b 1.2 https://github.com/elastic/elasticsearch.git
-mvn clean package -DskipTests
+
 --------
 gradle -version
 Gradle 5.4
@@ -34,11 +34,15 @@ http://192.168.58.141:9200/usermanage/user/_search?q=id=1
 
 
 --------------------------------------------
+
 bindServerBootstrap===429|bindAddress===281
 sendResponse===97
 handleRequest===238|sendResponse===82, server: 接收 request 并返回 response
 sendRequest===286|messageReceived===112===false, client:发送 request 和接收本 request 和 response
 sendRequest===756|handleRequest===238, client 发送与 server 接收
+
+tail -f logs/es.log | grep -E "sendRequest===756|sendLocalRequest===339|messageReceived===115"
+
 
 http: 
 registerHandler===116
@@ -52,11 +56,12 @@ internal:index/shard/recovery/start_recovery, 在方法 org.elasticsearch.indice
   在主 shard 节点中, org.elasticsearch.indices.recovery.RecoverySourceHandler#recoverToTarget 方法完成操作, phase1 phase2 finalizeRecovery 等. 
 internal:index/shard/recovery/prepare_translog, 是响应 internal:index/shard/recovery/start_recovery 后的操作, 会启动 InternalEngine。在 phase1 中调用
   见 org.elasticsearch.indices.recovery.RecoverySourceHandler#prepareTargetForTranslog 中注释
+  internal:index/shard/recovery/filesInfo 是 phase1 中操作
 internal:index/shard/recovery/finalize 在 finalizeRecovery 方法中发送请示
 internal:discovery/zen/join, 从节点向 master 节点发请示
 internal:discovery/zen/join/validate master 节点返回给从节点
 internal:cluster/shard/started 向 master 发送 shard 信息, 到 master 好像也没干啥呀
-internal:discovery/zen/unicast ping 了一下, master 选举时需要依赖于此, 并不是在 server 端生效, 而是在 client handleResponse 
+internal:discovery/zen/unicast ping 了一下, master 选举时需要依赖于此, [并不是在 server 端生效, 而是在 client handleResponse. findMaster 也调用
 
 internal:gateway/local/started_shards, 调用 nodes(几个不确定) shard 的 Store.tryOpenIndex (org.elasticsearch.gateway.TransportNodesListGatewayStartedShards#nodeOperation)
 internal:cluster/nodes/indices/shard/store, 与 started_shards 类似 
@@ -67,7 +72,7 @@ internal:indices/flush/synced/sync 在 pre 的 listener 中被调用
 internal:discovery/zen/fd/master_ping 非 master 节点向 master 节点发送, clent 有一个线程 MasterPinger
 internal:discovery/zen/fd/ping 与上相反
 cluster:monitor/nodes/liveness client 连接时用到
-
+internal:gateway/local/meta_state GatewayService start 调用
 checkPendingJoinsAndElectIfNeeded===237 是 node master 被先出来, 本质还是在上面的日志 "elected as master task already submitted"
 
 shard 选举开始是在 org.elasticsearch.gateway.GatewayService#doStart 中, 如果 node 是 master 才往下走, 完成是在 org.elasticsearch.cluster.routing.ShardRouting#newUnassigned
@@ -108,6 +113,9 @@ org.elasticsearch.action.search.TransportSearchAction#doExecute 读操作
 	org.elasticsearch.search.internal.ContextIndexSearcher#search 第一阶段读操作
 	org.elasticsearch.search.fetch.FetchPhase#loadStoredFields 第二阶段根据 docId 读取数据
 executeFetch===112|executeFetchPhase===593
+
+-- 这种代码有点意思 transportService.registerRequestHandler(actionName, request, ThreadPool.Names.SAME, new OperationTransportHandler()); OperationTransportHandler 是 abstract class TransportReplicationAction 的内部类, 会调用外部类方法。所以我想说的是会有隐式传参
+
 
 org.elasticsearch.action.search.type.TransportSearchTypeAction.BaseAsyncAction#performFirstPhase 方法的 
   sendExecuteFirstPhase(node, internalSearchRequest(shard, shardsIts.size(), request, filteringAliases, startTime()), new ActionListener<FirstResult>() {}); 调用很重要

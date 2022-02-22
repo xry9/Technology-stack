@@ -246,4 +246,6 @@ hive -e "set hive.support.quoted.identifiers=None;select \`(shop_id|sm_name)?+.+
 ALTER TABLE spu DROP IF EXISTS PARTITION(month_id=201801,day_id=20180101);
 
 12、select id from emp where id in (select id from dept where id<10); 这种语法真支持啊
-
+13、
+hadoop fs -getmerge
+dfs -count 

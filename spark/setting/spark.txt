@@ -7,15 +7,33 @@ scala安装：
 2、vim spark-env.sh SPARK_LOCAL_IP=pseudo
 3、bin/spark-shell --master=local
 4、val l1 = sc.makeRDD(List(1,2,3,4))
-	--与hadoop整合，HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
-	--配置slaves，同时启动 master,slave
+	--与hadoop整合, HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
+	--配置slaves, 同时启动 master,slave
 spark-submit --master=local --class org.apache.spark.examples.SparkPi /usr/local/app/spark-1.5.2-bin-hadoop2.6/lib/spark-examples-1.5.2-hadoop2.6.0.jar
 ====================================
 集群：
 1、sbin/start-master.sh
 2、sbin/start-slave.sh spark://pseudo:7077 --动态添加work
-	--只配了hosts文件映射，没有配主机名，造成连不上，用ip就可以了，据此分析，当做为服务时只配映射不配主机名就玩儿不转了
+	--只配了hosts文件映射, 没有配主机名, 造成连不上, 用ip就可以了, 据此分析, 当做为服务时只配映射不配主机名就玩儿不转了
 3、bin/spark-shell --master=spark://pseudo:7077
+-- 不要添加 SPARK_LOCAL_IP 否则 master 中的值会被识别到 worker 中
+4、my experience: yarn-client 模式会造成 virtual 内存激增, 可能是进程集中到一个节点导致, 在 ContainersMonitorImpl.MonitoringThread, 需要 yarn.nodemanager.vmem-check-enabled --> false
+5、
+spark on yarn 的两种模式cluster,client
+两种模式都启动 applicationMaster, 只不过cluster模式的am负责资源申请和任务调度（driver）, 而client模式的am只负责资源申请, 任务调度在client
+实践经验, 碰到的yarn-cluster的问题：
+有的时候, 运行一些包含了spark sql的spark作业, 可能会碰到 yarn-client 模式下, 可以正常提交运行；yarn-cluster模式下, 可能是无法提交运行的, 会报出JVM的PermGen（永久代）的内存溢出, OOM。
+yarn-client模式下, driver是运行在本地机器上的, spark使用的JVM的PermGen的配置, 是本地的spark-class文件（spark客户端是默认有配置的）, JVM的永久代的大小是128M, 这个是没有问题的；但是呢, 在yarn-cluster模式下, driver是运行在yarn集群的某个节点上的, 使用的是没有经过配置的默认设置（PermGen永久代大小）, 82M。
+--conf spark.driver.extraJavaOptions="-XX:PermSize=128M -XX:MaxPermSize=256M"
+
+yarn-client模式下, 会产生什么样的问题呢？
+由于咱们的driver是启动在本地机器的, 而且driver是全权负责所有的任务的调度的, 也就是说要跟yarn集群上运行的多个executor进行频繁的通信（中间有task的启动消息、task的执行统计消息、task的运行状态、shuffle的输出结果）。
+咱们来想象一下。比如你的executor有100个, stage有10个, task有1000个。每个stage运行的时候, 都有1000个task提交到executor上面去运行, 平均每个executor有10个task。接下来问题来了, driver要频繁地跟executor上运行的1000个task进行通信。通信消息特别多, 通信的频率特别高。运行完一个stage, 接着运行下一个stage, 又是频繁的通信。
+在整个spark运行的生命周期内, 都会频繁的去进行通信和调度。所有这一切通信和调度都是从你的本地机器上发出去的, 和接收到的。这是最要人命的地方。你的本地机器, 很可能在30分钟内（spark作业运行的周期内）, 进行频繁大量的网络通信。那么此时, 你的本地机器的网络通信负载是非常非常高的。会导致你的本地机器的网卡流量会激增！！！
+你的本地机器的网卡流量激增, 当然不是一件好事了。因为在一些大的公司里面, 对每台机器的使用情况, 都是有监控的。不会允许单个机器出现耗费大量网络带宽等等这种资源的情况。运维人员。可能对公司的网络, 或者其他（你的机器还是一台虚拟机）, 对其他机器, 都会有负面和恶劣的影响。
+yarn-client的driver运行在本地, 通常来说本地机器跟yarn集群都不会在一个机房的, 所以说性能可能不是特别好；
+实际上线了以后, 在生产环境中, 都得用yarn-cluster模式, 去提交你的spark作业。
+
 ----
 另一种方式：
 1、ssh免登录	ssh-keygen	ssh-copy-id spark1
@@ -27,12 +45,12 @@ spark-submit --master=local --class org.apache.spark.examples.SparkPi /usr/local
 与hadoop整合
 A)用spaek-shell客户端连接集群时：
 	方式1、val file = sc.textFile("hdfs://cloud02:9000/spark/words.txt",2)	file.first
-		不需要做任何配置，只要写是active的namenode就可以访问文件
-	方式2、无论集群外节点在主节点还是从节点或是集群外机器，只要把Hadoop集群的core-site.xml和hdfs-site.xml拷到本机SPARK_HOME/conf下即可
-	方式3、无论集群外节点在主节点还是从节点，只要在spark-env.sh中加入 HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
+		不需要做任何配置, 只要写是active的namenode就可以访问文件
+	方式2、无论集群外节点在主节点还是从节点或是集群外机器, 只要把Hadoop集群的core-site.xml和hdfs-site.xml拷到本机SPARK_HOME/conf下即可
+	方式3、无论集群外节点在主节点还是从节点, 只要在spark-env.sh中加入 HADOOP_CONF_DIR=/usr/local/app/hadoop-2.6.0/etc/hadoop/
 B)spark-submit 任务时
-	同spaek-shell，还要在代码中sc.hadoopConfiguration.addResource("core-site.xml");sc.hadoopConfiguration.addResource("hdfs-site.xml");(core-site.xml,hdfs-site.xml加入classpath)
-	（core-site.xml,hdfs-site.xml不加入jar包的classpath也可，只要 SPARK_HOME/conf 或配置了 HADOOP_CONF_DIR，没有严格验证）
+	同spaek-shell, 还要在代码中sc.hadoopConfiguration.addResource("core-site.xml");sc.hadoopConfiguration.addResource("hdfs-site.xml");(core-site.xml,hdfs-site.xml加入classpath)
+	（core-site.xml,hdfs-site.xml不加入jar包的classpath也可, 只要 SPARK_HOME/conf 或配置了 HADOOP_CONF_DIR, 没有严格验证）
 ====================================
 sparkSql:
 1、bin/spark-shell --master=local --jars=mysql-connector-java-5.1.38.jar --driver-class-path=mysql-connector-java-5.1.38.jar
@@ -134,7 +152,7 @@ import scala.sys.process._
 val file = sc.textFile("file:///usr/local/app/spark-1.5.2-bin-hadoop2.6/README.md",2)
 ps -ef | grep java
 ==================================
-spark on hive 时只需把 hive 元数据文件放到$SPARK_HOME/conf下，改名为hive-site.xml, 提交作业时加上 --driver-class-path mysql 驱动包
+spark on hive 时只需把 hive 元数据文件放到$SPARK_HOME/conf下, 改名为hive-site.xml, 提交作业时加上 --driver-class-path mysql 驱动包
 ----
 想要查看运行作业的日志
 vim spark-defaults.conf

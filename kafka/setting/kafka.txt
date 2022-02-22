@@ -44,6 +44,6 @@ log.roll.ms=60000
 log.segment.bytes=200
 $KAFKA_HOME/bin/kafka-console-consumer.sh --zookeeper localhost:2181 --topic wco --formatter kafka.tools.DefaultMessageFormatter --property print.key=true  --property print.value=true  --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer  --property value.deserializer=org.apache.kafka.common.serialization.LongDeserializer
 
-通过__consumer_offsets 查看offset:
+通过 __consumer_offsets 查看 offset:
 好像要 vim consumer.properties exclude.internal.topics=false
 kafka-console-consumer.sh --topic __consumer_offsets --zookeeper localhost:2181 --formatter "kafka.coordinator.group.GroupMetadataManager\$OffsetsMessageFormatter" --consumer.config /usr/local/app/kafka_2.11-1.0.0/config/consumer.properties --from-beginning

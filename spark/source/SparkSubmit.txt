@@ -1,6 +1,21 @@
 1、rpc: org.apache.spark.rpc.netty.NettyRpcEnv#postToOutbox
 2、org.apache.spark.scheduler.DAGScheduler#handleTaskCompletion ShuffleMapTask 执行完会走这个提交下一个任务
 3、org.apache.spark.executor.Executor.TaskRunner#run 方法中 task = ser.deserialize[Task[Any]], 不会调用 ResultTask 的构造方法
+4、
+client: 
+	--driver: SparkSubmit --> myMain
+	--CoarseGrainedExecutorBackend
+cluster: 
+	--driver: ClientApp --> DriverWrapper --> myMain
+	--CoarseGrainedExecutorBackend
+yarn-client: 
+	--driver: SparkSubmit --> myMain
+	--ExecutorLauncher --> ApplicationMaster
+	--YarnCoarseGrainedExecutorBackend
+yarn-cluster: 
+	--driver: SparkSubmit, 只是提交了一下 am
+	--ApplicationMaster, 负责 myMain
+	--YarnCoarseGrainedExecutorBackend
 
 nohup spark-submit --master=spark://pseudo:7077 --class org.apache.spark.examples.JavaWordCount /usr/local/app/mygit/spark-3.1.2-simple/examples/target/spark-examples_2.12-3.1.2.jar /data/words.txt /data/words2.txt cache > logs/spark-job.txt &
 

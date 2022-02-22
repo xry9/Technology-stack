@@ -13,6 +13,7 @@
 vim kibana.yml
 elasticsearch.url: "http://pseudo:9200"
 server.host: "pseudo"
+
 bin/kibana
 http://192.168.58.161:5601
 
