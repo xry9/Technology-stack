@@ -83,7 +83,7 @@ public class ThreadLocal<T> {
             int sz = ++size;
             if (!cleanSomeSlots(i, sz) && sz >= threshold) rehash();// 每次 set 都要 cleanSomeSlots 一下，把 key 为 null 的 Entry 置 null, 确如其名只是 some, 并不是扫描整个 table
         }
-		static class Entry extends WeakReference<ThreadLocal<?>> { // 挺奇怪的 key 是个弱引用, value 不是
+		static class Entry extends WeakReference<ThreadLocal<?>> {
             Object value;
             Entry(ThreadLocal<?> k, Object v) { super(k); value = v; }
         }
@@ -213,6 +213,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         }
     }
 	final void runWorker(Worker w) {
+		Runnable task = w.firstTask;
         w.unlock();// 我最初的想法: 这里用到锁我只能理解为防止 runWorker/run 被直接调用. 后来我知道了线程池 shutdown, 对线程 interrupt 时会用到锁啊
 		try{
 			// getTask() 可以认为是去一个阻塞队列里取 task 了
@@ -222,7 +223,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 				task.run();
 			}
             w.unlock();
-		}finally {
+		} finally {
 			// 讨论一下线程池运行原理,这里只是推测,不代表结论. 线程池的活跃线程数即上面 start 的次数,而 processWorkerExit 方法执行表示线程
 			// 运行结束, 如不执行 pool.shutdown(); 则 processWorkerExit 就不会执行,没有结束的线程去 getTask() 了. 
 			// 线程池本身并不会启动一个线程管理池的运行,这是我之前的误判
@@ -384,7 +385,7 @@ public abstract class Reference<T> {
     static boolean tryHandlePending(boolean waitForNotify) {
         Reference<Object> r;
         Cleaner c;
-		synchronized (lock) {// 加锁干嘛, 这不是个单线程吗
+		synchronized (lock) { // 加锁干嘛, 这不是个单线程吗
     		//pending 是 reference 能入队列的关键, 据非官方资料说 pending 值是 jvm 给的, 我也认同。更多信息源码注释部分说了好多, 如果 jvm 直接调用方法而不是通过 pending 其实不这个线程了
 			if (pending != null) {
 				r = pending;
@@ -502,6 +503,7 @@ public class java.lang.ref.ReferenceQueue<T> {
 ByteBuffer.allocateDirect 方式创建的 都会带一个 Cleaner, 创建 Cleaner 时传入 this 说明 Cleaner 的 reference 就是 DirectByteBuffer 对象呀
 如果 ((DirectBuffer) buffer).cleaner().clean(); 不这样主动释放内存, 就只在等 PhantomReference 机制清理 DirectByteBuffer 对象时被调用 clean 了
 DirectByteBuffer 对象是有强引用的吧, 所以也不必担心被回收, 强引用丢了 PhantomReference 机制会起作用了呀, 所以这是 PhantomReference 使用的精典场景
+
 2、堆外内存本质就这两个方法，当然里面还有一些
 long pointer = unsafe.allocateMemory(1024 * 1024 * 200);    unsafe.getByte(pointer + 1);    unsafe.freeMemory(pointer);
 如果一直没有 freeMemory 则会报错：Process finished with exit code 137 (interrupted by signal 9: SIGKILL), 好像跟 jdk 版本有关,jdk6: OutOfMemoryError 本质是内存溢出导致

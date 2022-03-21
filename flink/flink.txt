@@ -13,8 +13,24 @@ flink cancel f7e146f55594c9fe97e9a8ee3c6e9bd3
 flink list --all
 https://www.jianshu.com/p/1b05202c4fb6
 
+拷贝 jar, flink-shaded-hadoop-2-uber-2.7.2-10.0.jar(apache/flink-shaded/tree/release-10.0, 自行修改 hadoop 版本)
+--------------- yarn----------------
+不用做配制, 因为有 HADOOP_HOME, 如果启动过 yarn-session.sh, 需要 rm -f /tmp/.yarn-properties-tyx, 有此文件会优先提交到 yarn 上
+初步认定 flink 代码中并没有加载 hadoop 配置, 只是引用 hadoop jar, 可以说完全是 hadoop 自身机制加载
+
+./bin/yarn-session.sh -n 3 -tm 4096 -s 
+flink run -c com.xryj.flink.SocketTextStreamWordCount flink-demo/target/flink-demo-1.8.2.jar
+FlinkYarnSessionCli
+YarnSessionClusterEntrypoint
+YarnTaskExecutorRunner
+
+flink run -m yarn-cluster -yn 2 -yjm 1024 -ytm 1024 -c com.xryj.flink.SocketTextStreamWordCount flink-demo/target/flink-demo-1.8.2.jar
+--YarnSessionClusterEntrypoint
 
 mvn clean install -DskipTests && cd /usr/local/app/mygit/flink182-simple/flink-dist/ && mvn clean package -DskipTests && cp target/flink-dist_2.11-1.8.2.jar /usr/local/app/flink-1.8.2/lib/flink-dist_2.11-1.8.2.jar && scp target/flink-dist_2.11-1.8.2.jar pseudo2:/usr/local/app/flink-1.8.2/lib/flink-dist_2.11-1.8.2.jar && scp target/flink-dist_2.11-1.8.2.jar pseudo3:/usr/local/app/flink-1.8.2/lib/flink-dist_2.11-1.8.2.jar && cd -
+
+checkpoint blob updateGlobalAggregate
+
 
 ===============================
 flink-1.8.2:

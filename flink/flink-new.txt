@@ -1,0 +1,52 @@
+	Exactly-once state consistency: Flink’s checkpointing and recovery algorithms guarantee the consistency of application state in case of a failure. Hence, failures are transparently handled and do not affect the correctness of an application.
+1> https://flink.apache.org/flink-applications.html: StartEndDuration
+	coding demo
+3> https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/try-flink/table_api/
+4> --https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/try-flink/flink-operations-playground/
+6> https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/learn-flink/fault_tolerance/
+7> https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/concepts/stateful-stream-processing/
+8> https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/concepts/time/
+9> https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/concepts/flink-architecture/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/event-time/generating_watermarks/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/fault-tolerance/queryable_state/
+流 join connect coGroup, partitionCustom, rescale, broadcast, slotSharingGroup
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/operators/windows/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/operators/joining/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/operators/process_function/
+	stream.keyBy(...).process(new MyProcessFunction())
+	Timer Coalescing
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/operators/asyncio/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/table/overview/	--一系列
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/dataset/overview/	--一系列
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/libs/state_processor_api/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/connectors/datastream/guarantees/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/connectors/datastream/kafka/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/connectors/table/overview/	--一系列
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/overview/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/resource-providers/standalone/overview/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/resource-providers/yarn/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/memory/mem_setup/	--及其下
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/cli/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/ha/zookeeper_ha/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/deployment/advanced/historyserver/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/ops/state/checkpoints/	--及其下
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/ops/monitoring/checkpoint_monitoring/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/ops/monitoring/back_pressure/
+https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/internals/job_scheduling/
+
+
+sensor_1,1547718199,35.80018327300259
+sensor_1,1647718199,36.80018327300259
+sensor_1,1647718200,37.80018327300259
+1646655950879
+
+10000 a
+11000 b
+12000 a
+13000 c
+16000 d
+18000 e
+20000 f
+21000 a
+22000 g
+25000 a

@@ -1,0 +1,4 @@
+1、hbase client 端:
+	1.1 rpc
+	1.2 region 地址
+2、region 元数据表

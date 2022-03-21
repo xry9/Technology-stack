@@ -1,0 +1,62 @@
+1>vim /etc/sysconfig/network
+2>vim /etc/udev/rules.d/70-persistent-net.rules
+3>vim /etc/sysconfig/network-scripts/ifcfg-eth0
+DEVICE="eth0"
+BOOTPROTO="static"
+HWADDR="00:0C:29:8E:61:85"
+NM_CONTROLLED="yes"
+ONBOOT="yes"
+TYPE="Ethernet"
+UUID="18ea8599-cf13-471b-bb1a-8804812687c5"
+
+DEFROUTE="yes"
+PEERDNS="yes"
+PEERROUTES="yes"
+IPV4_FAILURE_FATAL="yes"
+IPV6INIT="no"
+NAME="System eth0"
+IPADDR=192.168.58.184
+BCAST=192.168.58.255
+GATEWAY=192.168.58.2
+NETMASK=255.255.255.0
+DNS1=219.149.135.188
+4>vim /etc/hosts
+5>service iptables stop   chkconfig iptables off
+6>vim /etc/selinux/config  -->SELINUX=disabled
+7>cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime	yum -y install ntp	cd /usr/share/zoneinfo/Asia/ ntpdate pool.ntp.org
+8>ssh 免密登录	ssh-keygen -t rsa	ssh-copy-id 
+9>
+export JAVA_HOME=/usr/local/app/jdk1.8.0_77
+export PATH=$PATH:$JAVA_HOME/bin
+10>yum install yum-utils createrepo -y
+11>yum list httpd	如没安装则yum install httpd
+12>上传三个tar包到/var/www/html解压
+13>mkdir -p /var/www/html/hdp2.6/centos6
+14>
+cp -r /var/www/html/ambari/centos6/ambari/ /var/www/html/hdp2.6/centos6/
+cp -r /var/www/html/ambari/centos6/RPM-GPG-KEY/ /var/www/html/hdp2.6/centos6/
+cp -r /var/www/html/ambari/centos6/smartsense/ /var/www/html/hdp2.6/centos6/
+=======================有快照=================================
+15>createrepo /var/www/html/hdp2.6/centos6
+16>service httpd start
+17>
+cd /etc/yum.repos.d/
+wget -c http://public-repo-1.hortonworks.com/ambari/centos6/2.x/updates/2.2.1.0/ambari.repo
+vim ambari.repo 
+	baseurl=http://192.168.58.181/hdp2.6/centos6/
+	gpgcheck=0
+18>cd /etc/yum.repos.d	yum repolist（检查仓库是否可用）
+19>yum install ambari-server
+20>ambari-server setup
+y,root,3,/usr/local/app/jdk1.8.0_77,n
+21>service ambari-server status  service ambari-server start
+
+
+[root@cloud01 yum.repos.d]# rpm -qa | grep openssl
+openssl-1.0.1e-15.el6.x86_64
+yum install openssl
+service ntpd start
+echo never > /sys/kernel/mm/redhat_transparent_hugepage/defrag
+echo never > /sys/kernel/mm/redhat_transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/defrag

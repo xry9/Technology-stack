@@ -1,0 +1,356 @@
+(function() {
+    // 没有加载先订阅
+    var Event = /** @class */ (function () {
+        function Event() {
+            this.obj = {};
+        }
+        Event.prototype.on = function (eventType, fn) {
+            if (!this.obj[eventType]) {
+                this.obj[eventType] = [];
+            }
+            this.obj[eventType].push(fn);
+        };
+        Event.prototype.emit = function () {
+            var eventType = Array.prototype.shift.call(arguments);
+            var arr = this.obj[eventType];
+            if(arr) {
+                for (var i = 0; i < arr.length; i++) {
+                    arr[i].apply(arr[i], arguments);
+                }
+            }
+        };
+        return Event;
+    }());
+    var ev = new Event();
+
+    // 引用百度广告工具js
+    var hm = document.createElement("script");
+    hm.src = "//cbjs.baidu.com/js/m.js";
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(hm, s);
+    // 通知订阅的函数，工具加载完了
+    s.onload = function() {
+        setTimeout(function() {
+            ev.emit('ad');
+        }, 1000)
+    }
+
+    $(function() {
+
+        ////////////////////////////////////////////////////////////////////
+        // 首页搜索列表页-左侧1
+        function selectIndexPageLeft1Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('index_ad_left_1')
+                } else {
+                    adIsLoaded('u6559972','index_ad_left_1');
+                }
+            }else{
+                //适合移动端的广告
+            }
+
+        }
+        // 首页搜索列表页-左侧2
+        function selectIndexPageLeft2Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('index_ad_left_2')
+                } else {
+                    adIsLoaded('u6560085','index_ad_left_2');
+                }
+            }else{
+                //适合移动端的广告
+            }
+
+        }
+        // 首页搜索列表页-左侧3
+        function selectIndexPageLeft3Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('index_ad_left_3')
+                } else {
+                    adIsLoaded('u6560086','index_ad_left_3');
+                }
+            }else{
+                //适合移动端的广告
+            }
+        }
+        //首页搜索列表页-右侧1
+        function selectIndexPageRight1Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('index_ad_right_1')
+                } else {
+                    adIsLoaded('u6560088','index_ad_right_1');
+                }
+            }else{
+                //适合移动端的广告
+            }
+        }
+        //首页搜索列表页-右侧2
+        function selectIndexPageRight2Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('index_ad_right_2')
+                } else {
+                    adIsLoaded('u6560089','index_ad_right_2');
+                }
+            }else{
+                //适合移动端的广告
+            }
+        }
+        //首页搜索列表页-右侧3
+        function selectIndexPageRight3Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('index_ad_right_3')
+                } else {
+                    adIsLoaded('u6560090','index_ad_right_3');
+                }
+            }else{
+                //适合移动端的广告
+            }
+        }
+
+        /////////////////////////////////////////////////////////////////////////////
+        // 详情顶部
+        function selectDetailPageTopAd(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('detail_ad_top');
+                } else {
+                    var parentId='detail_ad_top';
+                    addAd(parentId, "<div id='detail_ad_top2' style='float:left;'></div>");//先创建个div,用于放广告
+                    addAd(parentId, "<div id='detail_ad_top3' style='float:right;'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u6176380','detail_ad_top2');//900*150详情页顶部(大横幅)
+                    adIsLoaded('u6560195','detail_ad_top3');//300*150详情页顶部(小横幅)
+                }
+            }else{
+                //适合移动端的广告
+                adIsLoaded('u6178176','detail_ad_top');//wap原生大图
+            }
+        }
+        // 文章页-右侧1
+        function selectDetailPage1Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('detail_ad_1')
+                } else {
+                    adIsLoaded('u6560192','detail_ad_1');
+                }
+            }else{
+                //适合移动端的广告
+            }
+        }
+        // 文章页-右侧2
+        function selectDetailPage2Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('detail_ad_2')
+                } else {
+                    adIsLoaded('u6560193','detail_ad_2');//284*600 详情页,大方块
+                }
+            }else{
+                //适合移动端的广告
+            }
+        }
+        // 文章页-右侧3
+        function selectDetailPage3Ad(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('detail_ad_3')
+                } else {
+                    adIsLoaded('u6560194','detail_ad_3');
+                }
+            }else{
+                //适合移动端的广告
+            }
+
+        }
+
+        // 详情评论底部
+        function selectDetailPageBottomAd(isOwnAd) {
+            if(isOwnAd) {
+                getAd('detail_ad_bottom');
+            } else {
+                var parentId='detail_ad_bottom';
+                if(IsPC()){
+                    //适合PC的广告
+                    addAd(parentId, "<div id='detail_ad_bottom_1'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u5902665','detail_ad_bottom_1');//870*150详情页底部
+
+                    addAd(parentId, "<div id='detail_ad_bottom_2'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u5903225','detail_ad_bottom_2');//870*300 详情页底部
+                }else{
+                    //适合移动端的广告
+                    addAd(parentId, "<div id='detail_ad_bottom_2'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u6178156','detail_ad_bottom_2');//wap信息流500高，原始方式异步加载
+
+                    addAd(parentId, "<div id='detail_ad_bottom_6'></div>"); //先创建个div,用于放广告
+                    adIsLoaded('u6178180','detail_ad_bottom_6'); //Wap原生三图，原始方式异步加载
+
+                    addAd(parentId, "<div id='tag_ad_bottom_7'></div>"); //先创建个div,用于放广告
+                    adIsLoaded('u6559818','tag_ad_bottom_7'); //创新样式Wap可伦布-模拟列表1
+
+                    addAd(parentId, "<div id='tag_ad_bottom_8'></div>"); //先创建个div,用于放广告
+                    adIsLoaded('u6559824','tag_ad_bottom_8'); //创新样式Wap可伦布-模拟列表2
+                }
+            }
+        }
+
+        /////////////////////////////////////////////////////////////////////////////
+        // Tag页顶部
+        function selectTagPageTopAd(isOwnAd) {
+            if(IsPC()){
+                //适合PC的广告
+                if(isOwnAd) {
+                    getAd('tag_ad_top');
+                } else {
+                    $('#tag_ad_top').css({"padding-left": "47px"});//临时居中
+                    adIsLoaded('u6559815','tag_ad_top');//创新样式管理  1080*350 Tag页Top
+                // <script type="text/javascript">
+                //     /*1080*350 Tag页Top*/
+                //     var cpro_id = "u6559815";
+                // </script>
+                //     <script type="text/javascript" src="http://cpro.baidustatic.com/cpro/ui/c.js"></script>
+                }
+            }else{
+                //适合移动端的广告
+                adIsLoaded('u6178176','tag_ad_top');//wap原生大图
+            }
+        }
+        // Tag页底部
+        function selectTagPageBottomAd(isOwnAd) {
+            if(isOwnAd) {
+                getAd('tag_ad_bottom');
+            } else {
+                var parentId='tag_ad_bottom';
+                if(IsPC()){
+                    //适合PC的广告
+                    addAd(parentId, "<div id='tag_ad_bottom_1'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u5902665','tag_ad_bottom_1');//870*150详情页底部
+
+                    addAd(parentId, "<div id='tag_ad_bottom_2'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u5903225','tag_ad_bottom_2');//870*300 详情页底部
+                }else{
+                    //适合移动端的广告
+                    addAd(parentId, "<div id='tag_ad_bottom_2'></div>");//先创建个div,用于放广告
+                    adIsLoaded('u6178156','tag_ad_bottom_2');//wap信息流500高，原始方式异步加载
+
+                    addAd(parentId, "<div id='tag_ad_bottom_6'></div>"); //先创建个div,用于放广告
+                    adIsLoaded('u6178180','tag_ad_bottom_6'); //Wap原生三图，原始方式异步加载
+
+                    addAd(parentId, "<div id='tag_ad_bottom_7'></div>"); //先创建个div,用于放广告
+                    adIsLoaded('u6559818','tag_ad_bottom_7'); //创新样式Wap可伦布-模拟列表1
+
+                    addAd(parentId, "<div id='tag_ad_bottom_8'></div>"); //先创建个div,用于放广告
+                    adIsLoaded('u6559824','tag_ad_bottom_8'); //创新样式Wap可伦布-模拟列表2
+
+                }
+            }
+        }
+        ////////////////////////////////////////////////////////////////////////////////////////
+        /**
+         * 在某个版位展示特版位的代码
+         */
+        function getAd(id) {
+            //检查ID表示的广告位Dom是否存在
+            if(!$('#' + id)){
+                return null;
+            }
+            $.ajax({
+                type: "get",
+                url: "/special/edition/query.htm",
+                data: {number: id},
+                success: function(res){
+                    if(res.code === 'SUCCESS') {
+                        if(res.data && res.data[0]){
+                            for(var i=0;i<res.data.length;i++){
+                                addAd(id, res.data[i].content);
+                            }
+                        }
+                    } else {
+                        $('#' + id).parent().hide()
+                    }
+                }
+            });
+        }
+        /**
+         * 在某个版位展示百度广告
+         * 判断百度广告工具是否加载完 加载完直接调用，没有加载完先订阅
+         */
+        function adIsLoaded(uid, id) {
+            //检查ID表示的广告位Dom是否存在
+            if(!$('#' + id)){
+                return null;
+            }
+            if(typeof BAIDU_CLB_fillSlotAsync === 'undefined') {
+                ev.on('ad', function () {
+                    BAIDU_CLB_fillSlotAsync(uid,id);
+                });
+            } else {
+                BAIDU_CLB_fillSlotAsync(uid,id);
+            }
+        }
+
+        //js判断客户端是PC端还是移动端访问
+        function IsPC(){
+            var userAgentInfo = navigator.userAgent;
+            var Agents = new Array("Android", "iPhone", "SymbianOS", "Windows Phone", "iPad", "iPod");
+            var flag = true;
+            for (var v = 0; v < Agents.length; v++) {
+                if (userAgentInfo.indexOf(Agents[v]) > 0) { flag = false; break; }
+            }
+            return flag;
+        }
+        //如果是移动端，详情页图片宽度调整为100%
+        if(!IsPC()){
+            $("#article_content img").css({"width":"100%"});
+        }
+        //特版位Dom插到页面中
+        function addAd(id, dom) {
+            $('#' + id).append(dom)
+        }
+
+        /**
+         * 展示广告
+         * 只有当ID表示的广告位Dom存在时，才会执行
+         * isOwnAd：为true显示特版,false为异步加载百度广告
+         */
+        // 首页搜索列表页-左侧
+        selectIndexPageLeft1Ad(false);
+        selectIndexPageLeft2Ad(false);
+        selectIndexPageLeft3Ad(false);
+        // 首页搜索列表页-右侧
+        selectIndexPageRight1Ad(false);
+        selectIndexPageRight2Ad(false);
+        selectIndexPageRight3Ad(false);
+
+        // 文章页-顶部
+        selectDetailPageTopAd(false);
+        // 文章页-底部
+        selectDetailPageBottomAd(false);
+        // 文章页-右侧1
+        selectDetailPage1Ad(false);
+        // 文章页-右侧2
+        selectDetailPage2Ad(false);
+        // 文章页-右侧3
+        selectDetailPage3Ad(false);
+
+        // tag页顶部
+        selectTagPageTopAd(false);
+        // tag页底部
+        selectTagPageBottomAd(false);
+    })
+})();

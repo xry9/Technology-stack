@@ -12,13 +12,21 @@ invoke===120===false===false, handleRpcInvocation===261
 
 handleRunAsync===388 的来源有: schedule===361,
 提交任务 handleRequest===112
-
+1、
+bin/start-cluster.sh 
 flink run -c com.xryj.atGuiGu.wc.StreamWordCount app/mygit/FlinkSimple/target
-----
+2、
+bin/standalone-job.sh start --job-classname com.xryj.flink.SocketTextStreamWordCount
+bin/taskmanager.sh start
+3、
 HADOOP_CONF_DIR=/Users/fintopia/app/hadoop-2.7.2/etc/hadoop
 bin/yarn-session.sh -n 2 -jm 1024 -tm 1024, 不用启动 start-cluster.sh
 flink run -c com.atguigu.wc.StreamWordCount flink-demo/target/flink-demo-1.8.2.jar
-----
+4、
+flink run -m yarn-cluster -yn 2 -yjm 1024 -ytm 1024 -c com.xryj.flink.SocketTextStreamWordCount flink-demo/target/flink-demo-1.8.2.jar
+
+less log/flink-tyx-taskexecutor-0-pseudo*.log | grep -E "onProcessingTime===73===t|processElement===66|processInput===181"
+
 
 public class org.apache.flink.runtime.taskexecutor.TaskManagerRunner implements FatalErrorHandler, AutoCloseableAsync {
 	private final TaskExecutor taskManager;

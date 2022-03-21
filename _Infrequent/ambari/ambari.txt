@@ -1,0 +1,121 @@
+https://www.cnblogs.com/zlslch/p/6629235.html
+
+1>vim /etc/sysconfig/network
+2>vim /etc/udev/rules.d/70-persistent-net.rules (如果你是完全克隆，这个文件里应该包含eth0和eth1，我们将eth0配置删除，只保留eth1,记录该配置对应的MAC地址，并将eth1改名为eth0。https://www.cnblogs.com/zlslch/p/6629235.html)
+3>vim /etc/sysconfig/network-scripts/ifcfg-eth0	
+DEVICE="eth0"
+BOOTPROTO="static"
+HWADDR="00:0C:29:8E:61:85"
+NM_CONTROLLED="yes"
+ONBOOT="yes"
+TYPE="Ethernet"
+UUID="18ea8599-cf13-471b-bb1a-8804812687c5"
+
+DEFROUTE="yes"
+PEERDNS="yes"
+PEERROUTES="yes"
+IPV4_FAILURE_FATAL="yes"
+IPV6INIT="no"
+NAME="System eth0"
+IPADDR=192.168.58.184
+BCAST=192.168.58.255
+GATEWAY=192.168.58.2
+NETMASK=255.255.255.0
+DNS1=114.114.114.114
+
+4>vim /etc/hosts
+5>service iptables stop && chkconfig iptables off
+6>vim /etc/selinux/config  -->SELINUX=disabled
+7>cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime	yum -y install ntp	cd /usr/share/zoneinfo/Asia/ ntpdate pool.ntp.org
+8>ssh 免密登录	ssh-keygen -t rsa
+9>
+export JAVA_HOME=/usr/local/app/jdk1.8.0_77
+export JRE_HOME=$JAVA_HOME/jre
+export CLASSPATH=.:$JAVA_HOME/lib:$JRE_HOME/lib
+export PATH=$PATH:$JAVA_HOME/bin
+10>yum install yum-utils createrepo
+11>yum list httpd	如没安装则yum install httpd
+12>上传三个tar包到/var/www/html解压
+13>mkdir -p /var/www/html/hdp2.4/centos6
+14>
+cp -r /var/www/html/AMBARI-2.2.1.0/centos6/2.2.1.0-161/ambari/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/AMBARI-2.2.1.0/centos6/2.2.1.0-161/RPM-GPG-KEY/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/AMBARI-2.2.1.0/centos6/2.2.1.0-161/smartsense/ /var/www/html/hdp2.4/centos6/
+
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/accumulo/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/atlas/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/bigtop-jsvc/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/bigtop-tomcat/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/calcite/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/datafu/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/falcon/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/flume/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/hadoop/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/hadooplzo/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/hbase/ /var/www/html/hdp2.4/centos6/
+cp    /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/HDP-2.4.0.0-centos6-m2-artifacts.tar /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/hdp-select/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/hive/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/hue/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/kafka/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/knox/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/mahout/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/oozie/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/phoenix/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/pig/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/ranger/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/slider/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/slider-app-packages/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/spark/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/sqoop/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/storm/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/tez/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/vrpms/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/zeppelin/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/zookeeper/ /var/www/html/hdp2.4/centos6/
+
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/epel-release-6-8.noarch.rpm   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/extjs/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/fping/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/ganglia/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/hadoop-lzo/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/libconfuse/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/lucid/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/lzo/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/mysql-connector-java/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/nagios/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/nagios-plugins/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/pdsh/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/perl/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/rrdtool/   /var/www/html/hdp2.4/centos6
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/snappy/   /var/www/html/hdp2.4/centos6
+
+cp -r /var/www/html/HDP/centos6/2.x/updates/2.4.0.0/RPM-GPG-KEY/ /var/www/html/hdp2.4/centos6/
+cp -r /var/www/html/HDP-UTILS-1.1.0.20/repos/centos6/RPM-GPG-KEY/   /var/www/html/hdp2.4/centos6
+
+=======================有快照=================================
+15>createrepo /var/www/html/hdp2.4/centos6
+16>service httpd start
+17>
+cd /etc/yum.repos.d/
+wget -c http://public-repo-1.hortonworks.com/ambari/centos6/2.x/updates/2.2.1.0/ambari.repo
+vim ambari.repo 
+	baseurl=http://192.168.58.181/hdp2.4/centos6/
+	gpgcheck=0
+18>cd /etc/yum.repos.d	yum repolist（检查仓库是否可用）
+19>yum install ambari-server
+20>ambari-server setup
+y,root,3,/usr/local/app/jdk1.8.0_77,n
+21>service ambari-server status service ambari-server start
+
+
+[root@cloud01 yum.repos.d]# rpm -qa | grep openssl
+openssl-1.0.1e-15.el6.x86_64
+yum install openssl
+service ntpd start
+
+
+echo never > /sys/kernel/mm/redhat_transparent_hugepage/defrag
+echo never > /sys/kernel/mm/redhat_transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/defrag
