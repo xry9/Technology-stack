@@ -41,10 +41,14 @@ export HBASE_MANAGES_ZK=false
 cloud01
 cloud02
 cloud03
-4、拷贝core-site.xml,hdfs-site.xml文件
+4、拷贝 core-site.xml,hdfs-site.xml 文件
 4、scp -r hbase-1.0.3 cloud02:/usr/local/app/	三台机器配置都一样
 5、启动zk
 6、主节点 start-hbase.sh
+
+7、做 HMaster HA, 只改这里即可, 其它节点 hbase-daemon.sh start master, 在前台看active状态（16010）
+<name>hbase.master.port</name>
+<value>60000</value>
 
 ====================================
 hive on hbase:

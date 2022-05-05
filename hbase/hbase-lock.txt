@@ -1,0 +1,262 @@
+--这种设计(没有 catch)还是挺巧妙啊, lock.readLock().lock(); try { ... } finally { lock.readLock().unlock(); }
+
+scan
+	HRegion.lock.readLock
+	HStore.lock.readLock	-- get 到 scanner 迅速释放锁
+		--HStore.updateStorefiles 操作, flush 新增的文件后更新到 StoreScanner 中, scan 操作可以被察觉(bulk 不需要), 但是我认为这里是有丢数据风险的
+put/delete/append/increment
+	HRegion.lock.readLock
+	HRegion.updatesLock.readLock
+	HStore.lock.readLock
+flushcache
+	HRegion.lock.readLock
+	HRegion.updatesLock.writeLock-- MemStore.snapshot 在此锁内完成, 迅速释放。多说一句 flush 的速度要快于内存排序写 + wal 同步, 所以理论上不存 server 控制 client 写这样的限制, 而且测试时也没发现写延迟(4000_0000)
+	HStore.lock.writeLock().lock()--文件更新, 此时 clearSnapshot(创建 snapshot 的入口似乎并没有限制, 虽说不会造成因数据重复而多读, 但是感觉这样不科学, FSHLog.DrainBarrier 并不是控制这里的), 所以上一次 flush 完才能继续下一次 flush, 通过 flushRequested 可以控制, 
+close
+	HRegion.lock.writeLock()
+	HStore.lock.writeLock()
+Bulk
+	HRegion.lock.readLock/writeLock
+	HStore.lock.writeLock().lock()
+compact	--更新文件操作与 flush 的不同, 不会同步到 StoreScanner 中, 所以意味着不能立即删除文件, CompactedHFilesDischarger 线程处理并且可以根据 refCount 判断是否有读
+	-- 并没有 region 锁
+	requestCompaction(选文件):HStore.lock.readLock()
+	compact 过程并没有锁要求啊, 如果 major compact 期间恰好有 bulk 好像也不所谓是吧, bulk 是否污染数据他自己负责, flush 更是无所谓了
+
+split 与 merger 其实不涉及这些, 只是在 openRegion 时有 compact, 而且这两个操作是跨 region 的
+	虽然 canSplit getSplitPoint 加了 HStore.lock.readLock() 但是锁释放之后再 bulk 呢, 所以 bulk 无论加哪个锁都一样
+	getTableLockManager().readLock()
+merger
+	getTableLockManager().readLock()
+
+---------------------------HRegion---------------------------
+private Map<byte[], List<StoreFile>> doClose(final boolean abort, MonitoredTask status) throws IOException {
+	lock.writeLock().lock();
+	lock.writeLock().unlock();
+}
+public FlushResult flushcache(boolean forceFlushAllStores, boolean writeFlushRequestWalMarker) throws IOException {
+	lock.readLock().lock();
+	lock.readLock().unlock();
+}
+protected PrepareFlushResult internalPrepareFlushCache(final WAL wal, final long myseqid, final Collection<Store> storesToFlush, MonitoredTask status, boolean writeFlushWalMarker) throws IOException {
+	// 被调用在 flushcache 获取锁之后
+	this.updatesLock.writeLock().lock();
+	this.updatesLock.writeLock().unlock();
+	this.updatesLock.writeLock().lock();
+	this.updatesLock.writeLock().unlock();
+}
+private long doMiniBatchMutation(BatchOperationInProgress<?> batchOp) throws IOException {
+	lock(this.updatesLock.readLock(), numReadyToWrite);
+	this.updatesLock.readLock().unlock();
+	this.updatesLock.readLock().unlock();
+}
+private long dropMemstoreContentsForSeqId(long seqId, Store store) throws IOException {
+	this.updatesLock.writeLock().lock();
+	this.updatesLock.writeLock().unlock();
+}
+public void processRowsWithLocks(RowProcessor<?,?> processor, long timeout, long nonceGroup, long nonce) throws IOException {
+	// table.checkAndMutate 用到了 lock
+	lock(this.updatesLock.readLock(), acquiredRowLocks.size() == 0 ? 1 : acquiredRowLocks.size());
+	this.updatesLock.readLock().unlock();
+	this.updatesLock.readLock().unlock();
+}
+public Result append(Append mutate, long nonceGroup, long nonce) throws IOException {
+	lock(this.updatesLock.readLock());
+	this.updatesLock.readLock().unlock();
+}
+private Result doIncrement(Increment increment, long nonceGroup, long nonce) throws IOException {
+	lock(this.updatesLock.readLock());
+	this.updatesLock.readLock().unlock();
+}
+public void startRegionOperation(Operation op) throws IOException {
+	lock(lock.readLock());
+	lock.readLock().unlock();
+	lock.readLock().unlock();
+}
+public void closeRegionOperation(Operation operation) throws IOException {
+	lock.readLock().unlock();
+}
+private void startBulkRegionOperation(boolean writeLockNeeded) throws NotServingRegionException, RegionTooBusyException, InterruptedIOException {
+	if (writeLockNeeded) lock(lock.writeLock());
+	else lock(lock.readLock());
+	if (writeLockNeeded) lock.writeLock().unlock();
+	else lock.readLock().unlock();
+}
+private void closeBulkRegionOperation(){
+	if (lock.writeLock().isHeldByCurrentThread()) lock.writeLock().unlock();
+	else lock.readLock().unlock();
+}
+
+---------------------------HStore---------------------------
+public long add(final Cell cell) {
+	lock.readLock().lock();
+	lock.readLock().unlock();
+}
+protected long delete(final KeyValue kv) {
+	lock.readLock().lock();
+	lock.readLock().unlock();
+}
+public void rollback(final Cell cell) {
+	lock.readLock().lock();
+	lock.readLock().unlock();
+}
+private void bulkLoadHFile(StoreFile sf) throws IOException {
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+}
+
+public ImmutableCollection<StoreFile> close() throws IOException {
+	this.archiveLock.lock();
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+	this.archiveLock.unlock();
+}
+void snapshot() {
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+}
+
+private boolean updateStorefiles(final List<StoreFile> sfs, final long snapshotId) throws IOException {
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+}
+
+public List<KeyValueScanner> getScanners(boolean cacheBlocks, boolean isGet, boolean usePread, boolean isCompaction, ScanQueryMatcher matcher, byte[] startRow, byte[] stopRow, long readPt) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+
+public List<KeyValueScanner> getScanners(List<StoreFile> files, boolean cacheBlocks, boolean isGet, boolean usePread, boolean isCompaction, ScanQueryMatcher matcher,
+	byte[] startRow, byte[] stopRow, long readPt, boolean includeMemstoreScanner) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+void replaceStoreFiles(final Collection<StoreFile> compactedFiles, final Collection<StoreFile> result) throws IOException {
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+}
+public void compactRecentForTestingAssumingDefaultPolicy(int N) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+
+public CompactionContext requestCompaction(int priority, final CompactionRequest baseRequest, User user) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+public Cell getRowKeyAtOrBefore(final byte[] row) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+public boolean canSplit() {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+public byte[] getSplitPoint() {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+public KeyValueScanner getScanner(Scan scan, final NavigableSet<byte []> targetCols, long readPt) throws IOException {
+	lock.readLock().lock();
+	lock.readLock().unlock();
+}
+public long updateColumnValue(byte [] row, byte [] f, byte [] qualifier, long newValue) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+
+public long upsert(Iterable<Cell> cells, long readpoint) throws IOException {
+	this.lock.readLock().lock();
+	this.lock.readLock().unlock();
+}
+
+public synchronized void closeAndArchiveCompactedFiles() throws IOException {
+	archiveLock.lock();
+	lock.readLock().lock();
+	lock.readLock().unlock();
+	archiveLock.unlock();
+}
+
+private void clearCompactedfiles(final List<StoreFile> filesToRemove) throws IOException {
+	lock.writeLock().lock();
+	lock.writeLock().unlock();
+}
+---------------------------StoreScanner---------------------------
+public void updateReaders(List<StoreFile> sfs) throws IOException {
+	flushLock.lock();
+	flushLock.unlock();
+}
+
+protected void resetScannerStack(Cell lastTopKey) throws IOException {
+	flushLock.lock();
+	flushLock.unlock();
+}
+---------------------------FSHLog---------------------------
+public byte [][] rollWriter(boolean force) throws FailedLogCloseException, IOException {
+	rollWriterLock.lock();
+	rollWriterLock.unlock();
+}
+void checkLogRoll() {
+	if (!rollWriterLock.tryLock()) return;
+	rollWriterLock.unlock();
+}
+---------------------------LruBlockCache---------------------------
+void evict() {
+	if(!evictionLock.tryLock()) return;
+	evictionLock.unlock();
+}
+---------------------------HFileBlock---------------------------
+protected int readAtOffset(FSDataInputStream istream, byte [] dest, int destOffset, int size,
+	if (!pread && streamLock.tryLock())
+	streamLock.unlock();
+}
+---------------------------HRegionServer---------------------------
+void closeMetaTableRegions(final boolean abort) {
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+}
+void closeUserRegions(final boolean abort) {
+	this.lock.writeLock().lock();
+	this.lock.writeLock().unlock();
+}
+ReentrantReadWriteLock.WriteLock getWriteLock() {
+	return lock.writeLock();
+}
+---------------------------RpcServer---------------------------
+private boolean processAllResponses(final Connection connection) throws IOException {
+	connection.responseWriteLock.lock();
+	connection.responseWriteLock.unlock();
+}
+void doRespond(Call call) throws IOException {
+	if (call.connection.responseQueue.isEmpty() && call.connection.responseWriteLock.tryLock()) {
+	call.connection.responseWriteLock.unlock();
+}
+public int readAndProcess() throws IOException, InterruptedException {
+	responseWriteLock.lock();
+	responseWriteLock.unlock();
+}
+---------------------------MemStoreFlusher---------------------------
+void interruptIfNecessary() {
+	lock.writeLock().lock();
+	lock.writeLock().unlock();
+}
+private boolean flushRegion(final Region region, final boolean emergencyFlush, boolean forceFlushAllStores) {
+	lock.readLock().lock();
+	lock.readLock().unlock();
+}
+
+---------------------------SplitLogManager---------------------------
+private void removeRecoveringRegions(final Set<ServerName> serverNames, Boolean isMetaRecovery) {
+	this.recoveringRegionLock.lock();
+	this.recoveringRegionLock.unlock();    
+}
+
+void removeStaleRecoveringRegions(final Set<ServerName> failedServers) throws IOException, InterruptedIOException {
+	this.recoveringRegionLock.lock();
+	this.recoveringRegionLock.unlock();
+}
+
+public void markRegionsRecovering(ServerName server, Set<HRegionInfo> userRegions) throws InterruptedIOException, IOException {
+	this.recoveringRegionLock.lock();
+	this.recoveringRegionLock.unlock();
+}

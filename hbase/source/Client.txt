@@ -1,4 +1,4 @@
-mvn clean package -DskipTests && cp target/hbase-server-1.3.0.jar /usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar && scp target/hbase-server-1.3.0.jar pseudo2:/usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar && scp target/hbase-server-1.3.0.jar pseudo3:/usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar 
+mvn clean package -DskipTests && cp target/hbase-server-1.3.0.jar /usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar && scp target/hbase-server-1.3.0.jar cluster2:/usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar && scp target/hbase-server-1.3.0.jar cluster3:/usr/local/app/hbase-1.3.0/lib/hbase-server-1.3.0.jar 
 less logs/hbase-tyx-regionserver-pseudo*.log | grep -E "run===74|mergeRegions===1486|splitRegion===19"
 less logs/hbase-tyx-master-pseudo.log | grep -E "computePlanForTable===|normalizeRegions===1419"
 

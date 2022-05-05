@@ -1,3 +1,7 @@
+create 't1',{NAME=>'f',VERSIONS => '3'}
+get 't1','r1',{COLUMN=>'f:c',VERSIONS=>4}
+版本号是由 timestamp or seq 控制
+
 1、region merge
 方式一：71.6 $ hbase> merge_region 'ENCODED_REGIONNAME', 'ENCODED_REGIONNAME'
 	merge_region '33cfb558ffe884b73b472d8bef83c916_ns:MyTab,key937439,1516295899830.33cfb558ffe884b73b472d8bef83c916.','1de721aa0ea29f21f63675e92e41b498_ns:MyTab,key98,1516295899830.1de721aa0ea29f21f63675e92e41b498.'
@@ -13,6 +17,8 @@
 
 8、kill 掉一个HRegionServer节点, 相应region数据暂时是不能访问的, 但是过段时间（一两分钟吧）, 此HRegionServer下的region会转交给其它HRegionServer, 可以继续访问数据了
 9、经我测试 minor compaction 时也会合并数据呀
+10、hbase 数据冗余那么多, 是没法做索引吧
+11、KV, 列式数据库, 不存列族
 
 ==================================
 create 'testImport1','cf','cg'
@@ -28,10 +34,6 @@ create 'testImport1','cf','cg'
 方式2: hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.separator="," -Dimporttsv.bulk.output=/result/hfile_tmp -Dimporttsv.columns=HBASE_ROW_KEY,cf:a,cf:b,cg testImport1 /sample.csv
   hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /result/hfile_tmp testImport1
 
-----
-做 HMaster HA, 只改这里即可, 其它节点 hbase-daemon.sh start master, 在前台看active状态（16010）
-<name>hbase.master.port</name>
-<value>60000</value>
 =================================================
 hbase org.apache.hadoop.hbase.snapshot.ExportSnapshot -snapshot ss -copy-to hdfs://192.168.58.172:9000/hbase
 mr任务会报内存溢出, 看日志发现

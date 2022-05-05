@@ -14,37 +14,24 @@ https://www.cnblogs.com/yuanninesuns/p/9893144.html
 72.	编辑距离
 
 
-1,2,4,7,3,5,6,8
-4,7,2,1,5,3,8,6
-
-
-
 =================================================
-HJ36	字符串加密
-https://www.nowcoder.com/practice/e4af1fe682b54459b2a211df91a91cf3?tpId=37&tqId=21259&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
 
 HJ43	迷宫问题
 https://www.nowcoder.com/practice/cf24906056f4488c9ddb132f317e03bc?tpId=37&tqId=21266&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
-
-HJ63	DNA序列
-https://www.nowcoder.com/practice/e8480ed7501640709354db1cc4ffd42a?tpId=37&tqId=21286&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
-
-HJ65	查找两个字符串a,b中的最长公共子串
-https://www.nowcoder.com/practice/181a1a71c7574266ad07f9739f791506?tpId=37&tqId=21288&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
-
 HJ67	24点游戏算法
 https://www.nowcoder.com/practice/fbc417f314f745b1978fc751a54ac8cb?tpId=37&tqId=21290&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
-
-HJ69	矩阵乘法
-https://www.nowcoder.com/practice/ebe941260f8c4210aa8c17e99cbc663b?tpId=37&tqId=21292&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
-
-HJ70	矩阵乘法计算量估算
-https://www.nowcoder.com/practice/15e41630514445719a942e004edc0a5b?tpId=37&tqId=21293&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+HJ52 计算字符串的编辑距离
+https://www.nowcoder.com/practice/3959837097c7413a961a135d7104c314?tpId=37&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey&difficulty=3&judgeStatus=&tags=&title=&sourceUrl=&gioEnter=menu
+HJ77 火车进站
+https://www.nowcoder.com/practice/97ba57c35e9f4749826dc3befaeae109?tpId=37&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey&difficulty=3&judgeStatus=&tags=&title=&sourceUrl=&gioEnter=menu
 
 
-HJ39	判断两个IP是否属于同一子网
-https://www.nowcoder.com/practice/34a597ee15eb4fa2b956f4c595f03218?tpId=37&tqId=21262&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
-
-HJ18	识别有效的IP地址和掩码并进行分类统计
-https://www.nowcoder.com/practice/34a597ee15eb4fa2b956f4c595f03218?tpId=37&tqId=21262&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey
+HJ103 Redraiment的走法
+https://www.nowcoder.com/practice/24e6243b9f0446b081b1d6d32f2aa3aa?tpId=37&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey&difficulty=3&judgeStatus=&tags=&title=&sourceUrl=&gioEnter=menu
+HJ24 合唱队
+https://www.nowcoder.com/practice/6d9d69e3898f45169a441632b325c7b4?tpId=37&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey&difficulty=3&judgeStatus=&tags=&title=&sourceUrl=&gioEnter=menu
+HJ25 数据分类处理
+https://www.nowcoder.com/practice/9a763ed59c7243bd8ab706b2da52b7fd?tpId=37&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey&difficulty=4&judgeStatus=&tags=&title=&sourceUrl=&gioEnter=menu
+HJ50 四则运算
+https://www.nowcoder.com/practice/9999764a61484d819056f807d2a91f1e?tpId=37&rp=1&ru=%2Fta%2Fhuawei&qru=%2Fta%2Fhuawei%2Fquestion-ranking&tab=answerKey&difficulty=3&judgeStatus=&tags=&title=&sourceUrl=&gioEnter=menu
 

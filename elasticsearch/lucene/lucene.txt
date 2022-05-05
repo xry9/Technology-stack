@@ -1,12 +1,89 @@
-1、从 https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz 下载的包, 用 ant(1.9.8) 编译, 如有报错需要下载 ivy-2.4.0.jar 
+--apache mirror(https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz) 上下载的 lucene 与 github 上的不一样, 居然还有 join 模块
+1、从 https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz 下载的包, 
+	用 ant(1.9.8, 1.10.4 都可, 1.10.2 不行) 编译, 如有报错需要下载 ivy, 在源码 ivy-versions.properties 中找到 ivy 版本(ivy-2.4.0.jar) 
+	放入 ${HOME}/.ant/lib, 执行 ant 命令
 2、idea 执行 HelloWord 时, Groovy 报错, 去了就行   https://blog.csdn.net/u013361668/article/details/79568685
 3、去掉  test-framework 工程和各种 test 包
 4、expressions 工程基本都被注释了, 其它还有各别类
 
 
 
+
+1、1_0000_0000 个手机号(18819090650,r17000011:f:c), 600_0000 写一批, 18 * 180M(cfe, cfs)
+随机查询 10000:
+	4G 及以上: 8s+
+	2G 虚拟机: 310s
+	1G 虚拟机: 810s:
+		free -m
+		Mem:            780         621          42           6         116          39
+		java -cp "target/hbase-es-lucene-1.0-SNAPSHOT.jar:/usr/local/app/mygit/lucene740-simple/build/core/lucene-core-7.4.0-SNAPSHOT.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-analyzers-common/7.4.0/lucene-analyzers-common-7.4.0.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-queryparser/7.4.0/lucene-queryparser-7.4.0.jar" org.apache.lucene.demo
+	1G 虚拟机: 19s
+		java -Xms128m -Xmx128m -cp "target/hbase-es-lucene-1.0-SNAPSHOT.jar:/usr/local/app/mygit/lucene740-simple/build/core/lucene-core-7.4.0-SNAPSHOT.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-analyzers-common/7.4.0/lucene-analyzers-common-7.4.0.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-queryparser/7.4.0/lucene-queryparser-7.4.0.jar" org.apache.lucene.demo.LuceneDemo
+		-- 16G 虚拟机用相同命令时居然 3s 多
+	1G 虚拟机: 5y 数据: 用 -Xms256m -Xmx256m(128m 不行) 可以, 跑出来 45s
+		--上述结果是用 SimpleFSDirectory, 跑出来的, 如果用 MMapDirectory 会慢很多
+		--如果数据在 hdfs 比数据存本地时间长了 5 倍
+		
+2、指定超大内存, java -Xms8192m -Xmx8192m, 可以实现写入 5亿, 每批 1000w
+3、hdfs 
+	java -Xms1024m -Xmx1024m -cp "target/hbase-es-lucene-1.0-SNAPSHOT.jar:/usr/local/app/mygit/lucene740-simple/build/core/lucene-core-7.4.0-SNAPSHOT.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-analyzers-common/7.4.0/lucene-analyzers-common-7.4.0.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-queryparser/7.4.0/lucene-queryparser-7.4.0.jar:/home/tyx/.m2/repository/org/apache/hadoop/hadoop-common/2.7.2/hadoop-common-2.7.2.jar:/home/tyx/.m2/repository/org/apache/hadoop/hadoop-hdfs/2.7.2/hadoop-hdfs-2.7.2.jar:/home/tyx/.m2/repository/commons-logging/commons-logging/1.1.3/commons-logging-1.1.3.jar:/home/tyx/.m2/repository/com/google/guava/guava/11.0.2/guava-11.0.2.jar:/home/tyx/.m2/repository/commons-collections/commons-collections/3.2.2/commons-collections-3.2.2.jar:/home/tyx/.m2/repository/commons-configuration/commons-configuration/1.6/commons-configuration-1.6.jar:/home/tyx/.m2/repository/commons-lang/commons-lang/2.6/commons-lang-2.6.jar:/home/tyx/.m2/repository/org/apache/hadoop/hadoop-auth/2.7.2/hadoop-auth-2.7.2.jar:/home/tyx/.m2/repository/org/slf4j/slf4j-api/1.7.10/slf4j-api-1.7.10.jar:/home/tyx/.m2/repository/org/apache/htrace/htrace-core/3.1.0-incubating/htrace-core-3.1.0-incubating.jar:/home/tyx/.m2/repository/javax/servlet/servlet-api/2.5/servlet-api-2.5.jar:/home/tyx/.m2/repository/commons-cli/commons-cli/1.2/commons-cli-1.2.jar:/home/tyx/.m2/repository/com/google/protobuf/protobuf-java/2.5.0/protobuf-java-2.5.0.jar:/home/tyx/.m2/repository/commons-io/commons-io/2.4/commons-io-2.4.jar" org.apache.lucene.store.HdfsDemo
+	一次写 800w 可以, 但是 1000w 就报错, 没究原因
+4、hbase, 5000_0000 个手机号, 单节点:
+	如果存 hdfs, 40 search /s , 如果存本地, 700-1000 search/s
+
+
 org.apache.lucene.store.DataOutput#writeBytes
 	writeBytes===52
+
+******************************** 重要 ********************************
+SimpleFSDirectory: readInternal===172|newBuffer===102
+java.lang.NumberFormatException: For input string: "newBuffer"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.lucene.store.BufferedIndexInput.newBuffer(BufferedIndexInput.java:102)
+	at org.apache.lucene.store.SimpleFSDirectory$SimpleFSIndexInput.newBuffer(SimpleFSDirectory.java:145)
+	at org.apache.lucene.store.BufferedIndexInput.refill(BufferedIndexInput.java:339)
+	at org.apache.lucene.store.BufferedIndexInput.readByte(BufferedIndexInput.java:54)
+	at org.apache.lucene.store.DataInput.readVInt(DataInput.java:125)
+	at org.apache.lucene.store.BufferedIndexInput.readVInt(BufferedIndexInput.java:221)
+	at org.apache.lucene.codecs.blocktree.SegmentTermsEnumFrame.loadBlock(SegmentTermsEnumFrame.java:155)
+	at org.apache.lucene.codecs.blocktree.SegmentTermsEnum.seekExact(SegmentTermsEnum.java:507)
+	at org.apache.lucene.index.TermContext.build(TermContext.java:98)
+	at org.apache.lucene.search.TermQuery.createWeight(TermQuery.java:211)
+	at org.apache.lucene.search.IndexSearcher.createWeight(IndexSearcher.java:744)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:463)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:585)
+	at org.apache.lucene.search.IndexSearcher.searchAfter(IndexSearcher.java:439)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:450)
+	at com.xryj.LuceneDemo.testSearch1(LuceneDemo.java:173)
+	at com.xryj.LuceneDemo.main(LuceneDemo.java:48)
+
+MMapDirectory:
+===reset===306===3426707===MMapIndexInput(path="/usr/local/app/mygit/lucene-test/phone_i4/_19_Lucene50_0.doc")
+java.lang.NumberFormatException: For input string: "reset"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.lucene.codecs.lucene50.Lucene50PostingsReader$BlockDocsEnum.reset(Lucene50PostingsReader.java:306)
+	at org.apache.lucene.codecs.lucene50.Lucene50PostingsReader.postings(Lucene50PostingsReader.java:210)
+	at org.apache.lucene.codecs.blocktree.SegmentTermsEnum.postings(SegmentTermsEnum.java:1002)
+	at org.apache.lucene.search.TermQuery$TermWeight.scorer(TermQuery.java:112)
+	at org.apache.lucene.search.Weight.bulkScorer(Weight.java:177)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:658)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:463)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:585)
+	at org.apache.lucene.search.IndexSearcher.searchAfter(IndexSearcher.java:439)
+	at org.apache.lucene.search.IndexSearcher.search(IndexSearcher.java:450)
+	at com.xryj.LuceneDemo.testSearch1(LuceneDemo.java:173)
+	at com.xryj.LuceneDemo.main(LuceneDemo.java:48)
+
+
+
+
+
+
+
 
 
 

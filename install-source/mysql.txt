@@ -9,12 +9,14 @@ yum -y install gcc gcc-devel gcc-c++ gcc-c++-devel autoconf* automake* zlib* lib
 cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
 make -j4
 --------
+--mysql-boost-5.7.31.tar.gz
 centos8:
 yum -y install gcc gcc-c++  autoconf* automake* zlib* libxml* ncurses-devel ncurses libgcrypt* libtool* cmake openssl openssl-devel perl-Data-Dumper boost boost-devel readline-devel libedit libevent-devel libaio
 yum -y install libcurl-devel libtirpc-devel
 wget http://github.com/thkukuk/rpcsvc-proto/releases/download/v1.4/rpcsvc-proto-1.4.tar.gz
 ./configure && make && make install
 cmake -DCMAKE_INSTALL_PREFIX=/opt/mysql -DDEFAULT_CHARSET=utf8 -DDEFAULT_COLLATION=utf8_general_ci -DWITH_EXTRA_CHARSETS=all -DSYSCONFDIR=/etc -DWITH_BOOST=./boost
+--可能会遇到 undefined symbol archive_write_add_filter_zstd, 安装一下: yum install libarchive -y 再执行
 make -j8
 --------
 make install

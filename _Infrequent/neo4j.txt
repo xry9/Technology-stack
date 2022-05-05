@@ -1,0 +1,3 @@
+git clone -b 2.0.4 git@github.com:neo4j/neo4j.git
+vim community/browser/pom.xml 注释掉 npm 等内容
+mvn clean package -DskipTests -Dlicense.skip=true

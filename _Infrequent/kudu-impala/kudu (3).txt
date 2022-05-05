@@ -12,6 +12,8 @@ Kudu的设计，就是试图在OLAP与OLTP之间，寻求一个最佳的结合点，从而在一个系统的一份
 
 
 ===========================================================
+0、https://kudu.apache.org/releases/1.15.0/docs/
+Kudu is a columnar data store. A columnar data store stores data in strongly-typed columns. With a proper design, it is superior for analytical or data warehousing workloads for several reasons.
 
 1、https://kudu.apache.org/docs/：
 Reads can be serviced by read-only follower tablets, even in the event of a leader tablet failure.

@@ -1,4 +1,19 @@
+--------
+gradle -version
+Gradle 5.4
+JVM:          1.8.0_77
+----
+git clone -b 6.0 https://github.com/elastic/elasticsearch.git (tag 没有 gradlew 文件)
+./gradlew assemble
+./gradlew idea
+6.2 开始用 jdk1.9
+v6.3.0, v6.4.2, jdk 用 10.0.2, 亦可
 
+git clone -b v7.12.0 git@github.com:elastic/elasticsearch.git
+v7.12.0 jdk 用 jdk-15.0.2(在命令行设置一下 JAVAHOME 即可), 注释掉 docker 相关工程, ./gradlew assemble, 但是 idea 执行不成功, 但是人家说了已经不支持用 idea 命令, 直接打开就可以了, 已验证
+v8.1.2 jdk-17.0.3 elasticsearch 亦可, 但是 idea 打开不行
+
+---------------------------------
 ../gradlew assemble && cp build/distributions/elasticsearch-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/lib/elasticsearch-6.4.2.jar && cp build/distributions/elasticsearch-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/lib/elasticsearch-6.4.2.jar && cp build/distributions/elasticsearch-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/lib/elasticsearch-6.4.2.jar
 ../../gradlew assemble && cp build/distributions/transport-netty4-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/modules/transport-netty4/transport-netty4-6.4.2.jar && cp build/distributions/transport-netty4-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/modules/x-pack-core/transport-netty4-6.4.2.jar && cp build/distributions/transport-netty4-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/modules/transport-netty4/transport-netty4-6.4.2.jar && cp build/distributions/transport-netty4-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/modules/x-pack-core/transport-netty4-6.4.2.jar && cp build/distributions/transport-netty4-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/modules/transport-netty4/transport-netty4-6.4.2.jar && cp build/distributions/transport-netty4-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/modules/x-pack-core/transport-netty4-6.4.2.jar
 

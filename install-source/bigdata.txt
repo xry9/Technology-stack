@@ -1,5 +1,5 @@
 centos7:
---centos8 上好像 openssl和openssl-devel版本太高, 所以 hadoop 编译不过去
+--centos8 上好像 openssl 和 openssl-devel 版本太高, 所以 hadoop 编译不过去
 
 1、hadoop
 https://cwiki.apache.org/confluence/display/HADOOP2/QwertyManiac+BuildingHadoopTrunk

@@ -4,11 +4,21 @@ http://www.micmiu.com/software/build/apache-ivy-start/	--ivy
 https://www.jianshu.com/p/c5c1443337de	--mac 
 git clone -b 163.11103 git@github.com:JetBrains/intellij-community.git
 http://www.usbmi.com/3880.html	--vmware
+https://baijiahao.baidu.com/s?id=1692469218111984631&wfr=spider&for=pc	--mysql
+https://blog.csdn.net/weixin_42401025/article/details/112735896	mysql
+https://www.cnblogs.com/iceyCSE/p/5533514.html	--mysql
+https://blog.csdn.net/v_JULY_v/article/details/6530142	--mysql
 https://www.cnblogs.com/duhuo/p/5678286.html	--mysql
 https://mp.weixin.qq.com/s/y19Vh0g6FHTsYS_rEghYTg	--mysql uuid
 https://www.jb51.net/article/166757.htm	--mysql
 https://blog.csdn.net/ystyaoshengting/article/details/82869335	--mysql
 https://www.liangzl.com/get-article-detail-125726.html	--mysql
+https://blog.csdn.net/zx2011302580235/article/details/88594342	--lucene
+https://blog.csdn.net/weixin_42868638/article/details/82660664	--lucene
+https://www.cnblogs.com/cangqinglang/p/15606270.html	--lucene
+https://www.sohu.com/a/225989526_827544	--lucene
+https://blog.csdn.net/njpjsoftdev/article/details/54133548	--lucene
+https://blog.csdn.net/miyatang/article/details/73829429	--kudu
 https://blog.csdn.net/weixin_40802676/article/details/106851345
 https://www.toutiao.com/i6931602351518220808/?tt_from=weixin_moments&utm_campaign=client_share&wxshare_count=2&timestamp=1613956189&app=news_article&utm_source=weixin_moments&utm_medium=toutiao_android&use_new_style=1&req_id=2021022209094901013107521506331D73&share_token=97175680-e5cd-4d4b-9495-1c3eb1ddf118&group_id=6931602351518220808	--kafka
 http://cxy7.com/articles/2017/11/10/1510310104765.html	--hive ѪԵ

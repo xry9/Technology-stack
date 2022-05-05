@@ -72,7 +72,7 @@ select day, c, (c*1.0/first_value(c) over(order by day asc)) from
     on t1.id=t2.id
   )t group by day
 )t
-;
+
 3、https://cwiki.apache.org/confluence/display/Hive/LanguageManual+WindowingAndAnalytics
 
 4、ods 层为什么是外表，mysql增加列，删表的话数据没了
@@ -80,9 +80,9 @@ select day, c, (c*1.0/first_value(c) over(order by day asc)) from
 鑫哥说 group by id 有空值是不会数据倾斜，因为有默认开启combiner，但是distinct就不行，是在reduce端去重
 7. 怎样决定reducer个数
 Hadoop MapReduce程序中，reducer个数的设定极大影响执行效率，这使得Hive怎样决定reducer个数成为一个关键问题。遗憾的是Hive的估计机制很弱，
-1. hive.exec.reducers.bytes.per.reducer(默认为1000^3)
+1. hive.exec.reducers.bytes.per.reducer(默认为1000^3=1G)
 2. hive.exec.reducers.max(默认为999)
-计算reducer数的公式很简单：
+计算reducer数的公式很简单:
 N=min(参数2，总输入数据量/参数1)
 
 8. 合并 MapReduce 操作
@@ -113,7 +113,7 @@ hive.multigroupby.singlemr 要设为 ture, 但是原生不支持, 我觉得利�
 12、map 端 join 解决数据倾斜，如果小表过大，可以采用分片方式，小表分成两个，两个 map 端 join, 本质大表被读两次
 
 
-6、不执行mapreduce，提高速度 set hive.fetch.task.conversion=more;
+6、不执行 mapreduce，提高速度 set hive.fetch.task.conversion=more;
 7、distribute by 产生多少个 reduce
 15、distribute by 与 sort by 配合使用时, 在 reduce 结果是个全局排序, 所以造成 distribute by 的列是无序的, 这样并不是我们想要的
 这样用才能达到预期效果 select age, sal from emp cluster by age, sal;
@@ -154,7 +154,7 @@ hive.merge.mapredfiles = false 是否合并 Reduce 输出文件，默认为 Fals
 hive 支持cube函数
 select sex, addr, sum(sal) from emp group by sex,addr with cube;
 
-1、hive.map.aggr可以控制怎么进行汇总。默认为为true，配置单元会做的第一级聚合直接在MAP上的任务。这通常提供更好的效率，但可能需要更多的内存来运行成功。
+1、hive.map.aggr 可以控制怎么进行汇总。默认为为true，配置单元会做的第一级聚合直接在MAP上的任务。这通常提供更好的效率，但可能需要更多的内存来运行成功。
 	set hive.map.aggr=true;
 	select age,count(1) from emp group by age;
 	亲测: 接近一倍之差

@@ -1,4 +1,111 @@
 1、hbase client 端:
 	1.1 rpc
-	1.2 region 地址
-2、region 元数据表
+	  Table TablePoll 线程池 关连接 stub zk region 地址
+2、hbase:meta hbase:namespace
+3、HMaster:
+    分配 region, 
+	rebuildUserRegions() 方法 merge split RegionOfflineException
+	regionServerStartup
+	HRegionServer 本身是个线程
+	splitMetaLog
+
+3、create table: hbase/table-lock/ns1:tab5
+3、写多级索引 BlockIndexWriter#writeIndexBlocks
+4、client scan 等保留
+5、Don't send Compaction/Close/Open region events to recovered edit type sinks.
+6、连续写时大于 memstoreFlushSize(134217728) 开始落盘, 但是文件才 27M 多
+6、IsolationLevel
+7、split 时 wal
+8、MemStore 清理 snapshot 会对现有读操作产生影响吧
+(majorCompactPriority == DEFAULT_PRIORITY || majorCompactPriority > ((HRegion)r).getCompactPriority())
+this.instance.compactSplitThread.requestCompaction(r, s, getName()
+this.instance.compactSplitThread.requestSystemCompaction(r, s, getName()
+requestSystemCompaction(region, store, "Recursive enqueue");
+this.compactSplitThread.requestSystemCompaction(r, s, "Opening Region");
+9、hbase count, hive sql 引擎
+10、创建 hdfs 输出流时会传 favoredNodes
+11、org.apache.hadoop.hbase.KeyValue#createByteArray
+12、50 M 文件写硬盘 3.5s, 写 mysql(无主键和 有主键无其它列索引) 10s. 有索引会非常慢, 但是索引放哪了没找到, 其实是与表写在同一个文件中了
+	create table mytable(id int, name varchar(40), sal double, age int, hobby varchar(30), PRIMARY KEY (id));
+	create index mytable_index ON mytable (name);
+	4 10 8 4 10
+	(5000001, '969spark', 30000.292911406337, 65, 'play461')
+	500_0000 行:40秒(所 10000行/0.06 秒是准的(有无 id 都是这个但是无索引), 有索引是 1.2s;), 无索引: 319M, 有索引 500M 吧
+	机械盘平均无索引时 0.3 还要多, 大概是固态盘的 5 倍吧, 有索引初始 4s 吧, 后来 10-20s 多, 再后来 1min 按理说此时 cpu 是瓶颈啊, 可能此时不是批量写吧, 所以机械与固态盘相差 N 多倍
+	---- 以上测试都是 id 顺序写
+	2000w 行以上(id 乱序(2000w_2500w)):
+		无 id 无索引 10000行/0.3s
+		有 id 无索引 10000行/2min
+	----
+	只有一个 id 字段, 写了 10亿依然很快
+	---4.9y
+	[root@cluster1 ~]# less mytab1.txt | grep "<0000" | wc -l
+	853660
+	[root@cluster1 ~]# less mytab1.txt | grep "<0001" | wc -l
+	921
+	[root@cluster1 ~]# less mytab1.txt | grep "<0002" | wc -l
+	1
+	---5.0y
+	[root@cluster1 ~]# less mytab1.txt | grep "<0003" | wc -l
+	1
+	[root@cluster1 ~]# less mytab1.txt | grep "<0002" | wc -l
+	2
+	[root@cluster1 ~]# less mytab1.txt | grep "<0001" | wc -l
+	940
+	[root@cluster1 ~]# less mytab1.txt | grep "<0000" | wc -l
+	871081
+	
+----------------
+	hbase 在固态盘, 10000/0.4s, 最终写 2000w, 4.4G, ≈5.5M/s.
+		用机械盘初始阶段慢一些但差别不是非常明显. 但是后来就慢很多, 应该是 compact 的影响, 所以固态硬盘对多线程同时写比机械盘要好很多, 与之前的实验相一致
+		在机械盘如果改成 100 行写一次那会差近一倍, 原因可以基本确定是 wal sync, 因为不写 wal, 每批写 100 行与 10000 行差别不太明显 
+	-- 以上情况写到了 2000w
+	都是不随行数增加而变慢, 机械有索引也是同样. 纯纯机械硬盘写的话, 50M/s 吧
+13、面试梗: 列式数据库, 不存列族, major 时不能写, kv 是什么, 高吞吐
+14、用 zookeeper 的好处除 rpc 简单以外, 还有主备切换更简单
+15、关于 zk 的操作: zkw.sync(node); ZKUtil.getDataNoWatch(zkw, node, stat); getData(path, this.watcher, new GetDataAsyncCallback(), Long.valueOf(-1))
+	static class ExistCallback implements StatCallback
+16、memstoreSize 是 region 级的, 不是 store 级
+---------------------------------------
+
+---------------------------------------
+
+450s/930M
+
+----------------------
+public FlushResult flush(boolean force) throws IOException {
+	flushOneForGlobalPressure()
+	FlushHandler#run
+org.apache.hadoop.hbase.regionserver.FlushLargeStoresPolicy#shouldFlush: store 大于 16M 会被选择 flush
+
+------------------------
+ZKSplitLogManagerCoordination
+------------------------
+
+CompactedHFilesDischarger --字面意思
+SplitLogManager$TimeoutMonitor
+cleaner.LogCleaner
+cleaner.HFileCleaner
+balancer.ClusterStatusChore
+balancer.BalancerChore <--> normalizer.RegionNormalizerChore
+CatalogJanitor	--master 清理 split/merge Region(meta 表/HFile)
+HMaster$PeriodicDoMetrics
+--------
+CompactedHFilesDischarger
+HRegionServer$CompactionChecker
+HRegionServer$PeriodicMemstoreFlusher
+ServerNonceManager$1
+HRegionServer$MovedRegionsCleaner
+HeapMemoryManager$HeapMemoryTunerChore
+
+0.2
+0.5
+1.9
+----------------------------------------------------------
+hbase 为什么不能多列族?
+1 个列族对应的开销:
+	一个 MemStore, 这没什么
+	多个 storeFile, 意味着多次 flush 多个小文件, 到是不会产生小文件问题
+		而是会触发多次 compact
+		创建多个文件句柄, 每个句柄 hdfs dataNode server 一个网络连接, 线程, 还有一个文件句柄
+	

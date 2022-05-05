@@ -1,0 +1,189 @@
+-- hbase 建表时初始 region 分到哪个 HRegionServer 上, 对负载均衡/热点 还是很重要的
+一、读操作
+	row 会不会跨 block, 很重要, 否则查询会有麻烦
+	选择 scanner 时用到了 readPt
+	选文件时 StoreFileScanner.shouldUseScanner, 会根据 时间戳、scan 范围、bloom(get 有效) 三个条件来过滤. 
+	scan 'ns1:tab',{TIMERANGE => [1650252769422, 1650275892620]}, get 't1','r1',{COLUMN=>'f:c',VERSIONS=>3}
+	VERSIONS 建表或查询时指定, 用次数来过滤和时间戳没关系.
+	
+StoreScanner#next, 开始只以为处理 row 内的事, 但是达到了 countPerRow, 肯定是在这里跳下一行的, 外面应该没有判断了
+
+INCLUDE_AND_SEEK_NEXT_ROW: 只有指定了查询列(ExplicitColumnTracker),表示达到了版本次数,且所有列都找完了(this.index >= columns.length)
+INCLUDE_AND_SEEK_NEXT_COL: 只有指定了查询列(ExplicitColumnTracker),表示达到了版本次数,且还有列没找呢(this.index >= columns.length)
+INCLUDE: 
+
+Join
+Consistency.TIMELINE
+定 HFile 时会有个 ThroughputController
+scan
+	optional bool cache_blocks = 8 [default = true]; --client 端, 但是怎么用还是没搞太明白
+	optional uint32 batch_size = 9;	--server 端
+	optional uint64 max_result_size = 10;	----server 端
+	optional uint32 store_limit = 11;	--scan 时对每个列族 cell 的限制
+	optional uint32 store_offset = 12;	--scan 时对每个列族 cell 的限制
+
+
+一、flush:
+
+1、条件1: 
+	每次 Mutate 操作会检查 memstoreSize 是否大于 memstoreFlushSize
+
+2、条件2: 
+	private class FlushHandler extends HasThread {
+		public void run() {	
+			while (!server.isStopped()) {
+				if (isAboveLowWaterMark()) {
+					// flushOneForGlobalPressure: 选择一个 region flush
+					if (!flushOneForGlobalPressure()) {...}
+				}
+			}
+		}
+	}
+	private boolean isAboveLowWaterMark() {
+		return server.getRegionServerAccounting().getGlobalMemstoreSize() >= globalMemStoreLimitLowMark;//  物理内存 * 0.6 * 0.95
+	}
+
+3、选择 store:
+	(store.getMemStoreSize() > this.flushSizeLowerBound) //1024 * 1024 * 16L
+	||(store.timeOfOldestEdit() < now - this.flushCheckInterval) // 3600000
+	|| (earliest > 0 && earliest + flushPerChanges < mvcc.getReadPoint()) // 30000000
+		--long earliest = this.wal.getEarliestMemstoreSeqNum(getRegionInfo().getEncodedNameAsBytes(), store.getFamily().getName()) - 1;
+-- 内存中有没有版本覆盖
+
+二、compact:
+
+1、判断条件: 
+	public boolean needsCompaction(final Collection<StoreFile> storeFiles, final List<StoreFile> filesCompacting) {
+		int numCandidates = storeFiles.size() - filesCompacting.size();
+		return numCandidates >= comConf.getMinFilesToCompact();// 3
+	}
+2、调用时机:
+	1) Rpc 调用(admin 接口, minor/major)
+	2) CompactionChecker 轮询(10min)
+	3) compact 完成后检查 storefiles 是否大于 hbase.hstore.blockingStoreFiles=10, 大于则... 否则 检查 requestSplit 
+	4) s.hasReferences() || s.needsCompaction()
+	5) region.flush 会先检查 shouldSplit 然后 shouldCompact
+3、major compact
+  2)protected CompactionRequest createCompactionRequest(ArrayList<StoreFile> candidateSelection, boolean tryingMajor, boolean mayUseOffPeak, boolean mayBeStuck) throws IOException {
+		if (!tryingMajor) {
+			candidateSelection = filterBulk(candidateSelection);
+			candidateSelection = applyCompactionPolicy(candidateSelection, mayUseOffPeak, mayBeStuck);// Default minor compaction selection algorithm
+			candidateSelection = checkMinFilesCriteria(candidateSelection, comConf.getMinFilesToCompact());// 3
+		}
+		return new CompactionRequest(candidateSelection);
+	}
+  3)public ScanType org.apache.hadoop.hbase.regionserver.compactions.Compactor.InternalScannerFactory.getScanType(CompactionRequest request) {
+		return request.isAllFiles() ? ScanType.COMPACT_DROP_DELETES : ScanType.COMPACT_RETAIN_DELETES;
+	}
+4、createCompaction 方法记录了 COMPACTION 行为日志, METAFAMILY 日志应该只有 COMPACTION 在日志 split 时被保留, 其它被过滤了(keepRegionEvent)
+--skipLargeFiles
+5、compact 后的文件是被移到 /hbase/archive, 由后台线程删的, split/merge 是由 master 直接删的
+
+三、split:
+1、判断条件1:
+  发现一个 store size 过大即可
+	protected long IncreasingToUpperBoundRegionSplitPolicy.getSizeToCheck(final int tableRegionsCount) {
+		return tableRegionsCount == 0 || tableRegionsCount > 100
+			   ? getDesiredMaxFileSize()// 10 * 1024 * 1024 * 1024L
+			   : Math.min(getDesiredMaxFileSize(), initialSize * tableRegionsCount * tableRegionsCount * tableRegionsCount);// initialSize: 2 * DEFAULT_MEMSTORE_FLUSH_SIZE = 1024*1024*128L
+	}
+	--Cannot split meta region in HBase 0.20 and above
+2、判断条件2:
+	也有可能是 RegionNormalizerChore
+	
+3、调用时机:
+	1) region.flush 会先检查 shouldSplit 然后 shouldCompact
+	2) compact 结束后文件数小于 10
+
+4、splitKey:
+	最大 store 的 最大 StoreFile
+	midkey 被写在 RootIndex
+	-- 是否会造成两个 region 数据分部不均匀
+5、实现细节:
+multiMutate(meta, tableRow, putParent, putA, putB);
+hstoreFilesToSplit = this.parent.close(false);
+services.removeFromOnlineRegions(this.parent, null);
+Pair<Integer, Integer> expectedReferences = splitStoreFiles(hstoreFilesToSplit);
+Region a = this.parent.createDaughterRegionFromSplits(this.hri_a);
+openDaughters --> services.postOpenDeployTasks(b); s.hasReferences() || s.needsCompaction(), MetaTableAccessor.updateRegionLocation
+					services.addToOnlineRegions(b);
+
+先把 refence(splitKey, range) 写到 hdfs://ns1/hbase/data/ns1/tab/b37b274e768dd3935fdf7090518b47c4/.splits/656b5e5c3665e46d4e81886908f68f1f/f/8ac15ea02b554aecbaf93685fa3fd251.b37b274e768dd3935fdf7090518b47c4
+再把 f 之前的 dir 改名为 hdfs://ns1/hbase/data/ns1/tab/656b5e5c3665e46d4e81886908f68f1f, 可以认为是一个正常的 storeFile 了, 之后创建 storeFile 时国为 "." 来判断是否是一个 refence 的文件, 如果是再解析出 refence, 创建 reder 就行了
+5、生成新文件速度非常快, 80M HFile,刚执行完 split 命令, 去 hdfs 上看, 卡顿 3/5 秒钟立即就能看见一个 30M 的, 再执行卡顿 3/5 秒就能看到 50M 的
+	merge 也是同样, 生成 80M 文件也就 5s
+5、split/merge 清理 compact 文件(即 refence) 没有什么特别之处, 但是原有 region 的清理, 需要考虑到原有文件不再被读取, 是怎么做到的
+5、-- 是不是还在一个 RS 上
+6、旧 Region 何时清理, 即怎么判断两个新 Region 是否 compact 完成
+
+四、merge:
+1、条件: 
+  1) Rpc: mergeRegions
+  2) MergeNormalizationPlan
+		RegionNormalizerChore
+		List<NormalizationPlan> plans = this.normalizer.computePlanForTable(table);
+  3) BalancerChore
+--为什么要 merge
+--选中的 merge 有什么条件(逻辑上相邻即可吧, 不必在同一个节点(验证了没在同一节点))
+  
+2、实现细节:
+a.flush(true);
+b.compact(true);
+closeAndOfflineRegion(services, this.region_a, true, testing);
+fs_a.mergeStoreFile(this.mergedRegionInfo, familyName, storeFile, this.mergesdir);  // 写 refence
+MetaTableAccessor.mergeRegions(server.getConnection(),
+merged.openHRegion(reporter);
+services.postOpenDeployTasks(merged);
+
+五、master assignment
+---region-in-transition
+this.serverManager.waitForRegionServers(status);
+assignMeta
+joinCluster --> rebuildUserRegions --> MetaTableAccessor.fullScanOfMeta(server.getConnection());
+				bulkPlan = balancer.retainAssignment(regions, servers);
+if (!onlineServers.contains(regionLocation)) {
+	offlineServers.add(regionLocation);
+	regionStates.regionOffline(regionInfo);
+}
+----
+OpenRegionHandler: 
+  if (useZKForAssignment && !coordination.transitionFromOfflineToOpening(regionInfo, ord)) // M_ZK_REGION_OFFLINE --> RS_ZK_REGION_OPENING
+  region = openRegion();
+  if (!isRegionStillOpening() || (useZKForAssignment && !coordination.transitionToOpened(region, ord)))  RS_ZK_REGION_OPENING --> RS_ZK_REGION_OPENED
+----
+
+六、RS 监控:
+--rs
+--splitWAL
+RegionServerTracker
+ServerCrashProcedure
+	行分割日志, 然后 AssignmentManager.assign(分配算法太 low, 好像就两类分配模式吧, region 有原始 server 的, 和纯随机的) , 最后 master 发送 openRegion. 但是分割日志的 RS 和 region 分配到的 RS 不用保证是一个吧, 肯定不保证(发现了不在一个节点的情况), 例如多个 region
+-- 
+--ProcedureExecutor 这个状态模式的代码道是非常复杂但是不用管
+StochasticLoadBalancer
+多个 RS 竟争 set 到分割日志路径 attemptToOwnTask
+--GetDataAsyncCallback 继承的接口怎么回事
+
+RS openHRegion 会有 replayRecoveredEditsIfAny, 解析文件 add 到 store 中, seqid > minSeqIdForTheRegion
+
+hdfs://ns1/hbase/data/ns1/tab/9613dc2d07aa3620fbce565d77618245/recovered.edits/0000000000000000024-cluster1%2C16020%2C1648685028785.1648685040420.temp===
+hdfs://ns1/hbase/data/ns1/tab/9613dc2d07aa3620fbce565d77618245/recovered.edits/0000000000000000025
+
+七、HFile 
+    public void append(final Cell cell) throws IOException {
+      appendGeneralBloomfilter(cell);
+      appendDeleteFamilyBloomFilter(cell);
+      writer.append(cell);
+      trackTimestamps(cell);
+    }
+	
+八、hbase 可分享拆解
+1、flush compact split merge
+1、为什么写可以高吞吐, 不需要对比 mysql
+2、锁(HRegion, HStore, Table)
+3、租约
+4、Client 连接
+5、scan 为什么要慎用, block 不断加入内存, 进出缓存(虽说快进快出也没什么, 但毕竟占用了机器内存)
+	--request.getScannerId(), request.getNextCallSeq() != rsh.getNextCallSeq()(分别在 server client 自增)
+6、bulk (会发生 flush )
+7、让 hbase 支持索引

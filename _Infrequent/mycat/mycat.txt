@@ -1,0 +1,4 @@
+https://github.com/MyCATApache/Mycat2
+Mycat2-1.20-2021-8-12.zip
+mvn clean package -Dmaven.test.skip=true
+需要跳过测试, 但是 -DskipTests 不好使

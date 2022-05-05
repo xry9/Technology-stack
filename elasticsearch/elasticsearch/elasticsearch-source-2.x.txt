@@ -1,33 +1,29 @@
 https://github.com/elastic/elasticsearch/
-mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-1/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-2/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-3/lib/elasticsearch-2.0.3-SNAPSHOT.jar 
+
+mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-1/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-2/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-3/lib/elasticsearch-2.0.3-SNAPSHOT.jar
+mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/lib/elasticsearch-2.0.2.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch/elasticsearch-2.0.2-2/lib/elasticsearch-2.0.2.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch/elasticsearch-2.0.2-3/lib/elasticsearch-2.0.2.jar
 
 git clone -b 1.2 https://github.com/elastic/elasticsearch.git
 
---------
-gradle -version
-Gradle 5.4
-JVM:          1.8.0_77
-----
-git clone -b 6.0 https://github.com/elastic/elasticsearch.git
-./gradlew assemble
-./gradlew idea
 
-v6.3.0, v6.4.2, jdk 用 10.0.2, 亦可
-----
-安装 lucene: 在源码 ivy-versions.properties 中找到ivy 版本, 到 maven 中下载一下放入 ${HOME}/.ant/lib, 执行 ant 即可
-apache mirror(https://archive.apache.org/dist/lucene/java/7.4.0/lucene-7.4.0-src.tgz) 上下载的 lucene 与 github 上的不一样, 居然还有 join 模块
-
-http.port: 9600
-transport.tcp.port: 9700
-path.data: /Users/fintopia/app/elasticsearch-6.4.2-3/data
-path.logs: /Users/fintopia/app/elasticsearch-6.4.2-3/logs
-discovery.zen.ping.unicast.hosts: ["127.0.0.1:9300", "127.0.0.1:9500", "127.0.0.1:9700"]
-
+network.host: 192.168.58.161
+http.port: 9200
+transport.tcp.port: 9300
+path.data: /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/data
+path.logs: /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/logs
+discovery.zen.ping.unicast.hosts: ["192.168.58.161:9100", "192.168.58.161:9300", "192.168.58.161:9500"]
+--6.4.2 同样
+nohup elasticsearch-2.0.2-1/bin/elasticsearch >elasticsearch-2.0.2-1/elasticsearch.log 2>&1 &
 kill -9 $(ps -ef|grep Elasticsearch |gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
 
-http://192.168.58.141:9200/_cat/health?v
-http://192.168.58.141:9200/_cat/indices?v
-http://192.168.58.141:9200/usermanage/user/_search?q=id=1
+java -Xms5120m -Xmx5120m -cp "target/mydemo1-2.0.3-SNAPSHOT.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/elasticsearch-2.0.2.jar:/home/tyx/.m2/repository/commons-pool/commons-pool/1.6/commons-pool-1.6.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/netty-3.10.5.Final.jar:/home/tyx/.m2/repository/com/google/guava/guava/18.0/guava-18.0.jar:/home/tyx/.m2/repository/org/apache/lucene/lucene-core/5.2.1/lucene-core-5.2.1.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/joda-time-2.8.2.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/joda-convert-1.2.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/jsr166e-1.1.0.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/t-digest-3.0.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/hppc-0.7.1.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/compress-lzf-1.0.2.jar:/usr/local/app/elasticsearch/elasticsearch-2.0.2-0/lib/jackson-core-2.5.3.jar" com.xry9.elasticsearch.TransportClientTest
+
+
+http://192.168.58.161:9200/_cat/health?v
+http://192.168.58.161:9200/_cat/indices?v
+http://192.168.58.161:9200/usermanage/user/_search?q=id=1
+http://192.168.58.161:9200/_cat/shards
+http://192.168.58.161:9200/_cat/segments
 ============================================
 
 
@@ -38,7 +34,7 @@ http://192.168.58.141:9200/usermanage/user/_search?q=id=1
 bindServerBootstrap===429|bindAddress===281
 sendResponse===97
 handleRequest===238|sendResponse===82, server: 接收 request 并返回 response
-sendRequest===286|messageReceived===112===false, client:发送 request 和接收本 request 和 response
+sendRequest===286|messageReceived===112===false, client:发送 request 和接收本 request 的 response
 sendRequest===756|handleRequest===238, client 发送与 server 接收
 
 tail -f logs/es.log | grep -E "sendRequest===756|sendLocalRequest===339|messageReceived===115"

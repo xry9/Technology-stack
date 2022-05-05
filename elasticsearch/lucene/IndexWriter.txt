@@ -1,0 +1,326 @@
+public class IndexFiles {
+	static void indexDoc(IndexWriter writer, Path file, long lastModified) throws IOException {
+		try (InputStream stream = Files.newInputStream(file)) {
+			Document doc = new Document();
+			Field pathField = new StringField("path", file.toString(), Field.Store.YES);
+			doc.add(pathField);
+			doc.add(new LongPoint("modified", lastModified));
+			doc.add(new TextField("contents", new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))));      
+			if (writer.getConfig().getOpenMode() == OpenMode.CREATE) {
+				writer.addDocument(doc);
+			} else {
+				writer.updateDocument(new Term("path", file.toString()), doc);
+			}
+		}
+	}
+}
+public class org.apache.lucene.index.IndexWriter implements Closeable, TwoPhaseCommit, Accountable, MergePolicy.MergeContext {
+	private final Analyzer analyzer;
+	public long addDocument(Iterable<? extends IndexableField> doc) throws IOException {
+		return updateDocument((DocumentsWriterDeleteQueue.Node<?>) null, doc);
+	}
+	private long updateDocument(final DocumentsWriterDeleteQueue.Node<?> delNode, Iterable<? extends IndexableField> doc) throws IOException {
+		long seqNo = docWriter.updateDocument(doc, analyzer, delNode);
+	}
+}
+final class org.apache.lucene.index.DocumentsWriter implements Closeable, Accountable {
+	long updateDocument(final Iterable<? extends IndexableField> doc, final Analyzer analyzer, final DocumentsWriterDeleteQueue.Node<?> delNode) throws IOException {
+		final DocumentsWriterPerThread dwpt = perThread.dwpt;
+		final int dwptNumDocs = dwpt.getNumDocsInRAM();
+		seqNo = dwpt.updateDocument(doc, analyzer, delNode, flushNotifications);
+  }
+}
+final class org.apache.lucene.index.DocumentsWriterPerThread {
+	public long updateDocument(Iterable<? extends IndexableField> doc, Analyzer analyzer, DocumentsWriterDeleteQueue.Node<?> deleteNode, DocumentsWriter.FlushNotifications flushNotifications) throws IOException {
+		reserveOneDoc();
+		docState.doc = doc;
+		docState.analyzer = analyzer;
+		consumer.processDocument();
+		return finishDocument(deleteNode);
+	}
+}
+
+
+
+
+
+
+
+
+
+public final class org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter extends FieldsConsumer {
+	public void write(Fields fields) throws IOException {
+		for(String field : fields) {
+			Terms terms = fields.terms(field);
+			TermsEnum termsEnum = terms.iterator();
+			TermsWriter termsWriter = new TermsWriter(fieldInfos.fieldInfo(field));
+			while (true) {
+				BytesRef term = termsEnum.next();
+				termsWriter.write(term, termsEnum);
+			}
+			termsWriter.finish();
+		}
+	}
+	public void write(BytesRef text, TermsEnum termsEnum) throws IOException {
+      BlockTermState state = postingsWriter.writeTerm(text, termsEnum, docsSeen);
+      if (state != null) {
+        pushTerm(text);
+        PendingTerm term = new PendingTerm(text, state);
+        pending.add(term);
+        sumDocFreq += state.getDocFreq();
+        sumTotalTermFreq += state.getTotalTermFreq();
+        numTerms++;
+      }
+    }
+	void writeBlocks(int prefixLength, int count) throws IOException {
+		int start = pending.size()-count;
+		int end = pending.size();
+		for (int i=start; i<end; i++) {
+			PendingEntry ent = pending.get(i);
+			if (suffixLeadLabel != lastSuffixLeadLabel) {
+				int itemsInBlock = i - nextBlockStart;
+				if (itemsInBlock >= minItemsInBlock && end-nextBlockStart > maxItemsInBlock) {
+					boolean isFloor = itemsInBlock < count;
+					newBlocks.add(writeBlock(prefixLength, isFloor, nextFloorLeadLabel, nextBlockStart, i, hasTerms, hasSubBlocks));
+					hasTerms = false;
+					hasSubBlocks = false;
+					nextFloorLeadLabel = suffixLeadLabel;
+					nextBlockStart = i;
+				}
+				lastSuffixLeadLabel = suffixLeadLabel;
+			}
+		}
+		pending.subList(pending.size()-count, pending.size()).clear();
+	}
+	private PendingBlock writeBlock(int prefixLength, boolean isFloor, int floorLeadLabel, int start, int end, boolean hasTerms, boolean hasSubBlocks) throws IOException {
+      long startFP = termsOut.getFilePointer();
+      boolean hasFloorLeadLabel = isFloor && floorLeadLabel != -1;
+      final BytesRef prefix = new BytesRef(prefixLength + (hasFloorLeadLabel ? 1 : 0));
+      System.arraycopy(lastTerm.get().bytes, 0, prefix.bytes, 0, prefixLength);
+      prefix.length = prefixLength;
+      int numEntries = end - start;
+      int code = numEntries << 1;
+      termsOut.writeVInt(code);
+      boolean isLeafBlock = hasSubBlocks == false;
+      final List<FST<BytesRef>> subIndices;
+      boolean absolute = true;
+      if (isLeafBlock) {
+        subIndices = null;
+        for (int i=start;i<end;i++) {
+          PendingEntry ent = pending.get(i);
+          PendingTerm term = (PendingTerm) ent;
+          BlockTermState state = term.state;
+          final int suffix = term.termBytes.length - prefixLength;
+          suffixWriter.writeVInt(suffix);
+          suffixWriter.writeBytes(term.termBytes, prefixLength, suffix);
+          statsWriter.writeVInt(state.getDocFreq());
+          if (fieldInfo.getIndexOptions() != IndexOptions.DOCS) {
+            statsWriter.writeVLong(state.getTotalTermFreq() - state.getDocFreq());
+          }
+          postingsWriter.encodeTerm(longs, bytesWriter, fieldInfo, state, absolute);
+          for (int pos = 0; pos < longsSize; pos++) {
+            metaWriter.writeVLong(longs[pos]);
+          }
+          bytesWriter.writeTo(metaWriter);
+          bytesWriter.reset();
+          absolute = false;
+        }
+      } else {
+        subIndices = new ArrayList<>();
+        for (int i=start;i<end;i++) {
+          PendingEntry ent = pending.get(i);
+          if (ent.isTerm) {
+            PendingTerm term = (PendingTerm) ent;
+            assert StringHelper.startsWith(term.termBytes, prefix): "term.term=" + term.termBytes + " prefix=" + prefix;
+            BlockTermState state = term.state;
+            final int suffix = term.termBytes.length - prefixLength;
+            suffixWriter.writeVInt(suffix << 1);
+            suffixWriter.writeBytes(term.termBytes, prefixLength, suffix);
+            statsWriter.writeVInt(state.getDocFreq());
+            if (fieldInfo.getIndexOptions() != IndexOptions.DOCS) {
+              statsWriter.writeVLong(state.getTotalTermFreq() - state.getDocFreq());
+            }
+            postingsWriter.encodeTerm(longs, bytesWriter, fieldInfo, state, absolute);
+            for (int pos = 0; pos < longsSize; pos++) {
+              assert longs[pos] >= 0;
+              metaWriter.writeVLong(longs[pos]);
+            }
+            bytesWriter.writeTo(metaWriter);
+            bytesWriter.reset();
+            absolute = false;
+          } else {
+            PendingBlock block = (PendingBlock) ent;
+            assert StringHelper.startsWith(block.prefix, prefix);
+            final int suffix = block.prefix.length - prefixLength;
+            suffixWriter.writeVInt((suffix<<1)|1);
+            suffixWriter.writeBytes(block.prefix.bytes, prefixLength, suffix);
+            suffixWriter.writeVLong(startFP - block.fp);
+            subIndices.add(block.index);
+          }
+        }
+      }
+      termsOut.writeVInt((int) (suffixWriter.getFilePointer() << 1) | (isLeafBlock ? 1:0));
+      suffixWriter.writeTo(termsOut);
+      suffixWriter.reset();
+      termsOut.writeVInt((int) statsWriter.getFilePointer());
+      statsWriter.writeTo(termsOut);
+      statsWriter.reset();
+      termsOut.writeVInt((int) metaWriter.getFilePointer());
+      metaWriter.writeTo(termsOut);
+      metaWriter.reset();
+      if (hasFloorLeadLabel) {
+        prefix.bytes[prefix.length++] = (byte) floorLeadLabel;
+      }
+      return new PendingBlock(prefix, startFP, hasTerms, isFloor, floorLeadLabel, subIndices);
+    }
+}
+
+
+class org.apache.lucene.index.FreqProxFields extends Fields {
+	private static class FreqProxTerms extends Terms {
+		final FreqProxTermsWriterPerField terms;
+		public TermsEnum iterator() {
+			FreqProxTermsEnum termsEnum = new FreqProxTermsEnum(terms);
+			termsEnum.reset();
+			return termsEnum;
+		}
+	}
+	private static class FreqProxTermsEnum extends TermsEnum {
+		public FreqProxTermsEnum(FreqProxTermsWriterPerField terms) {
+			this.terms = terms;
+			this.numTerms = terms.bytesHash.size();
+			sortedTermIDs = terms.sortedTermIDs;
+			assert sortedTermIDs != null;
+			postingsArray = (FreqProxPostingsArray) terms.postingsArray;
+		}
+		public BytesRef next() {
+			ord++;
+			if (ord >= numTerms) {
+				return null;
+			} else {
+				int textStart = postingsArray.textStarts[sortedTermIDs[ord]];
+				terms.bytePool.setBytesRef(scratch, textStart);
+				return scratch;
+			}
+		}
+	}
+}
+
+public final class org.apache.lucene.util.ByteBlockPool {
+	public byte[][] buffers = new byte[10][];
+	public void setBytesRef(BytesRef term, int textStart) {
+		final byte[] bytes = term.bytes = buffers[textStart >> BYTE_BLOCK_SHIFT];
+		int pos = textStart & BYTE_BLOCK_MASK;
+		term.length = bytes[pos];
+		term.offset = pos+1;
+	}
+}
+
+public final class org.apache.lucene.util.BytesRefHash {
+	public int add(BytesRef bytes) {
+		final byte[] buffer = pool.buffer;      
+	}
+}
+
+abstract class org.apache.lucene.index.TermsHashPerField implements Comparable<TermsHashPerField> {
+	void add() throws IOException {
+		BytesRef bytesRef = termAtt.getBytesRef();//PackedTokenAttributeImpl extends CharTermAttributeImpl
+		int termID = bytesHash.add(bytesRef);
+	}
+}
+
+public class org.apache.lucene.analysis.tokenattributes.CharTermAttributeImpl extends AttributeImpl implements CharTermAttribute, TermToBytesRefAttribute, Cloneable {
+	public BytesRef getBytesRef() {
+		builder.copyChars(termBuffer, 0, termLength);
+		return builder.get();
+	}
+	public final void copyBuffer(char[] buffer, int offset, int length) {
+		growTermBuffer(length);
+		System.arraycopy(buffer, offset, termBuffer, 0, length);
+		termLength = length;
+	}
+}
+
+
+===write===341===acheive
+===write===869===acheive
+
+
+
+===copyBuffer===46===of
+.analysis.tokenattributes.CharTermAttributeImpl.copyBuffer(CharTermAttributeImpl.java:46)
+	at org.apache.lucene.analysis.standard.StandardTokenizerImpl.getText(StandardTokenizerImpl.java:464)
+	at org.apache.lucene.analysis.standard.StandardTokenizer.incrementToken(StandardTokenizer.java:156)
+	at org.apache.lucene.analysis.standard.StandardFilter.incrementToken(StandardFilter.java:37)
+	at org.apache.lucene.analysis.LowerCaseFilter.incrementToken(LowerCaseFilter.java:44)
+	at org.apache.lucene.analysis.FilteringTokenFilter.incrementToken(FilteringTokenFilter.java:49)
+	at org.apache.lucene.index.DefaultIndexingChain$PerField.invert(DefaultIndexingChain.java:738)
+	at org.apache.lucene.index.DefaultIndexingChain.processField(DefaultIndexingChain.java:428)
+	at org.apache.lucene.index.DefaultIndexingChain.processDocument(DefaultIndexingChain.java:392)
+	at org.apache.lucene.index.DocumentsWriterPerThread.updateDocument(DocumentsWriterPerThread.java:251)
+	at org.apache.lucene.index.DocumentsWriter.updateDocument(DocumentsWriter.java:494)
+	at org.apache.lucene.index.IndexWriter.updateDocument(IndexWriter.java:1601)
+	at org.apache.lucene.index.IndexWriter.addDocument(IndexWriter.java:1221)
+	at org.apache.lucene.demo.IndexFiles.indexDoc(IndexFiles.java:190)
+	at org.apache.lucene.demo.IndexFiles$1.visitFile(IndexFiles.java:148)
+	at org.apache.lucene.demo.IndexFiles$1.visitFile(IndexFiles.java:144)
+	at java.nio.file.Files.walkFileTree(Files.java:2670)
+	at java.nio.file.Files.walkFileTree(Files.java:2742)
+	at org.apache.lucene.demo.IndexFiles.indexDocs(IndexFiles.java:144)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:110)
+	
+java.lang.NumberFormatException: For input string: "append"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.lucene.util.ByteBlockPool.append(ByteBlockPool.java:326)
+	at org.apache.lucene.index.PointValuesWriter.addPackedValue(PointValuesWriter.java:62)
+	at org.apache.lucene.index.DefaultIndexingChain.indexPoint(DefaultIndexingChain.java:513)
+	at org.apache.lucene.index.DefaultIndexingChain.processField(DefaultIndexingChain.java:471)
+	at org.apache.lucene.index.DefaultIndexingChain.processDocument(DefaultIndexingChain.java:392)
+	at org.apache.lucene.index.DocumentsWriterPerThread.updateDocument(DocumentsWriterPerThread.java:251)
+	at org.apache.lucene.index.DocumentsWriter.updateDocument(DocumentsWriter.java:494)
+	at org.apache.lucene.index.IndexWriter.updateDocument(IndexWriter.java:1601)
+	at org.apache.lucene.index.IndexWriter.addDocument(IndexWriter.java:1221)
+	at org.apache.lucene.demo.IndexFiles.indexDoc(IndexFiles.java:190)
+	at org.apache.lucene.demo.IndexFiles$1.visitFile(IndexFiles.java:148)
+	at org.apache.lucene.demo.IndexFiles$1.visitFile(IndexFiles.java:144)
+	at java.nio.file.Files.walkFileTree(Files.java:2670)
+	at java.nio.file.Files.walkFileTree(Files.java:2742)
+	at org.apache.lucene.demo.IndexFiles.indexDocs(IndexFiles.java:144)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:110)
+
+java.lang.NumberFormatException: For input string: "writeBlock"
+	at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+	at java.lang.Integer.parseInt(Integer.java:580)
+	at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.writeBlock(BlockTreeTermsWriter.java:661)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.writeBlocks(BlockTreeTermsWriter.java:602)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.pushTerm(BlockTreeTermsWriter.java:905)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter$TermsWriter.write(BlockTreeTermsWriter.java:870)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter.write(BlockTreeTermsWriter.java:343)
+	at org.apache.lucene.codecs.perfield.PerFieldPostingsFormat$FieldsWriter.write(PerFieldPostingsFormat.java:140)
+	at org.apache.lucene.index.FreqProxTermsWriter.flush(FreqProxTermsWriter.java:110)
+	at org.apache.lucene.index.DefaultIndexingChain.flush(DefaultIndexingChain.java:164)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:470)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:118)
+
+at java.lang.Integer.parseInt(Integer.java:615)
+	at org.apache.lucene.codecs.blocktree.BlockTreeTermsWriter.write(BlockTreeTermsWriter.java:320)
+	at org.apache.lucene.codecs.perfield.PerFieldPostingsFormat$FieldsWriter.write(PerFieldPostingsFormat.java:140)
+	at org.apache.lucene.index.FreqProxTermsWriter.flush(FreqProxTermsWriter.java:110)
+	at org.apache.lucene.index.DefaultIndexingChain.flush(DefaultIndexingChain.java:164)
+	at org.apache.lucene.index.DocumentsWriterPerThread.flush(DocumentsWriterPerThread.java:470)
+	at org.apache.lucene.index.DocumentsWriter.doFlush(DocumentsWriter.java:554)
+	at org.apache.lucene.index.DocumentsWriter.flushAllThreads(DocumentsWriter.java:719)
+	at org.apache.lucene.index.IndexWriter.doFlush(IndexWriter.java:3595)
+	at org.apache.lucene.index.IndexWriter.flush(IndexWriter.java:3570)
+	at org.apache.lucene.index.IndexWriter.shutdown(IndexWriter.java:1028)
+	at org.apache.lucene.index.IndexWriter.close(IndexWriter.java:1071)
+	at org.apache.lucene.demo.IndexFiles.main(IndexFiles.java:118)
