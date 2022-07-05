@@ -17,3 +17,5 @@ make CONF=linux-x86_64-normal-server-fastdebug
 ---- jdk9u 同样, 但是 centos8 只有编译成功 jdk8u. jdk7u 在 centos7 centos8 都不能编译成功, 貌似依赖 jdk6 啊
 rpm -qa |grep jdk
 rpm --nodeps -e
+yum list java* |grep 1.8
+yum install -y java-1.8.0-openjdk.x86_64

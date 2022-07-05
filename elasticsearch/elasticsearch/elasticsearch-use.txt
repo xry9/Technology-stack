@@ -1,0 +1,539 @@
+
+
+https://www.elastic.co/guide/en/elasticsearch/reference/current/getting-started-update-documents.html
+POST /customer/_update/1?pretty
+{
+  "script" : "ctx._source.age += 5"
+}
+
+https://www.elastic.co/guide/en/elasticsearch/reference/current/targz.html#setup-installation-daemon
+To run Elasticsearch as a daemon, specify -d on the command line, and record the process ID in a file using the -p option:
+
+https://www.elastic.co/guide/en/elasticsearch/reference/current/path-settings.html
+If these important folders are left in their default locations, there is a high risk of them being deleted while upgrading Elasticsearch to a new version.
+	In production use, you will almost certainly want to change the locations of the data and log folder
+
+
+
+有如果有问题 max virtual memory areas vm.max_map_count [65530] is too low
+	则 sysctl -w vm.max_map_count=262144
+	--不知道上面是不是永久生效, 所以 vim /etc/sysctl.conf, vm.max_map_count=262144
+
+network.host: 192.168.58.161
+http.port: 9200
+transport.tcp.port: 9300
+path.data: /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/data
+path.logs: /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/logs
+discovery.zen.ping.unicast.hosts: ["192.168.58.161:9100", "192.168.58.161:9300", "192.168.58.161:9500"]
+--6.4.2 同样
+-- 试过了 elasticsearch-7.10.2 安装只需要 jdk8 就可以, 编译需要高版本 jdk
+--cluster.initial_master_nodes: ["192.168.58.161"] ,7.14.0 需要加这个了, 另外还设置了 ES_JAVA_HOME=/usr/local/app/elasticsearch/elasticsearch-7.14.0/jdk
+
+nohup elasticsearch-2.0.2-1/bin/elasticsearch >elasticsearch-2.0.2-1/elasticsearch.log 2>&1 &
+kill -9 $(ps -ef|grep Elasticsearch |gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
+--有人说 ES7版本后不支持TransportClient方式连接了, 那怎么 jar 包里有相应的类呢
+
+----------------------------- sql -----------------------------
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/sql-getting-started.html
+
+curl -X PUT "192.168.58.161:9200/library/book/_bulk?refresh&pretty" -H 'Content-Type: application/json' -d'
+{"index":{"_id": "Leviathan Wakes"}}
+{"name": "Leviathan Wakes", "author": "James S.A. Corey", "release_date": "2011-06-02", "page_count": 561}
+{"index":{"_id": "Hyperion"}}
+{"name": "Hyperion", "author": "Dan Simmons", "release_date": "1989-05-26", "page_count": 482}
+{"index":{"_id": "Dune"}}
+{"name": "Dune", "author": "Frank Herbert", "release_date": "1965-06-01", "page_count": 604}
+'
+
+curl -X POST "192.168.58.161:9200/_xpack/sql?format=txt&pretty" -H 'Content-Type: application/json' -d'
+{
+    "query": "SELECT * FROM library WHERE release_date < \u00272000-01-01\u0027"
+}
+'
+
+./bin/elasticsearch-sql-cli uri=http://192.168.58.161:9200/
+-- 7.14 不写 uri=
+SELECT * FROM library WHERE release_date < '2000-01-01';
+SELECT name, sum(page_count) FROM library group by name;
+select age, sum(sal) from emp group by age;
+select hobby, count(1) from emp group by hobby;
+--elasticsearch-7.14.0/bin/elasticsearch-sql-cli http://192.168.58.161:9200/
+
+curl -H "Content-Type:application/json" -XPOST  http://192.168.58.161:9200/_xpack/license/start_trial?acknowledge=true
+
+-------------------------------------------------------------------
+1、Replication is important for two primary reasons:
+	It provides high availability in case a shard/node fails. For this reason, it is important to note that a replica shard is never allocated on the same node as the original/primary shard that it was copied from.
+	It allows you to scale out your search volume/throughput since searches can be executed on all replicas in parallel.
+2、Now let’s create an index named "customer" and then list all the indexes again:
+curl -X PUT "192.168.58.161:9200/customer?pretty&pretty"
+curl -X GET "192.168.58.161:9200/_cat/indices?v&pretty"
+3、Let’s now put something into our customer index. We’ll index a simple customer document into the customer index, with an ID of 1 as follows:
+curl -X PUT "192.168.58.161:9200/customer/_doc/1?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "name": "John Doe"
+}
+'
+curl -X GET "192.168.58.161:9200/customer/_doc/1?pretty&pretty"
+
+4、curl -X DELETE "192.168.58.161:9200/customer?pretty&pretty"
+curl -X GET "192.168.58.161:9200/_cat/indices?v&pretty"
+5、更新
+curl -X PUT "192.168.58.161:9200/customer/_doc/1?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "name": "Jane Tom"
+}
+'
+6、不指定 id, http://192.168.58.161:9200/customer/_doc/_search
+curl -X POST "192.168.58.161:9200/customer/_doc?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "name": "Jane Doe"
+}
+'
+7、
+curl -X POST "192.168.58.161:9200/customer/_doc/1/_update?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "doc": { "name": "Jane Doe", "age": 20 }
+}
+'
+curl -X POST "192.168.58.161:9200/customer/_doc/1/_update?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "script" : "ctx._source.age += 5"
+}
+'
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-update-by-query.html
+8、curl -X DELETE "192.168.58.161:9200/customer/_doc/2?pretty&pretty"
+9、curl -X POST "192.168.58.161:9200/customer/_doc/_bulk?pretty&pretty" -H 'Content-Type: application/json' -d'
+{"index":{"_id":"1"}}
+{"name": "John Doe" }
+{"index":{"_id":"2"}}
+{"name": "Jane Doe" }
+'
+curl -X POST "192.168.58.161:9200/customer/_doc/_bulk?pretty&pretty" -H 'Content-Type: application/json' -d'
+{"update":{"_id":"1"}}
+{"doc": { "name": "John Doe becomes Jane Doe" } }
+{"delete":{"_id":"2"}}
+'
+10、
+curl -H "Content-Type: application/json" -XPOST "192.168.58.161:9200/bank/_doc/_bulk?pretty&refresh" --data-binary "@accounts.json"
+	-- accounts.json 放在当前目录下, 源码:/docs/src/test/resources/accounts.json
+curl "192.168.58.161:9200/_cat/indices?v"
+curl -X GET "192.168.58.161:9200/bank/_search?q=*&sort=account_number:asc&pretty&pretty"
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match_all": {} },
+  "sort": [
+    { "account_number": "asc" }
+  ]
+}
+'
+It is important to understand that once you get your search results back, Elasticsearch is completely done with the request and does not maintain any kind of server-side resources or open cursors into your results. This is in stark contrast to many other platforms such as SQL wherein you may initially get a partial subset of your query results up-front and then you have to continuously go back to the server if you want to fetch (or page through) the rest of the results using some kind of stateful server-side cursor.
+
+11、
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match_all": {} }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match_all": {} },
+  "from": 10,
+  "size": 10
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match_all": {} },
+  "sort": { "balance": { "order": "desc" } }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match_all": {} },
+  "_source": ["account_number", "balance"]
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match": { "account_number": 20 } }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": { "match": { "address": "mill lane" } }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "address": "mill" } },
+        { "match": { "address": "lane" } }
+      ]
+    }
+  }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "bool": {
+      "should": [
+        { "match": { "address": "mill" } },
+        { "match": { "address": "lane" } }
+      ]
+    }
+  }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "bool": {
+      "must_not": [
+        { "match": { "address": "mill" } },
+        { "match": { "address": "lane" } }
+      ]
+    }
+  }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "age": "40" } }
+      ],
+      "must_not": [
+        { "match": { "state": "ID" } }
+      ]
+    }
+  }
+}
+'
+12、
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "bool": {
+      "must": { "match_all": {} },
+      "filter": {
+        "range": {
+          "balance": {
+            "gte": 20000,
+            "lte": 30000
+          }
+        }
+      }
+    }
+  }
+}
+'
+13、
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "size": 0,
+  "aggs": {
+    "group_by_state": {
+      "terms": {
+        "field": "state.keyword"
+      }
+    }
+  }
+}
+'
+curl -X GET "192.168.58.161:9200/bank/_search?pretty" -H 'Content-Type: application/json' -d'
+{
+  "size": 0,
+  "aggs": {
+    "group_by_state": {
+      "terms": {
+        "field": "state.keyword",
+        "order": {
+          "average_balance": "desc"
+        }
+      },
+      "aggs": {
+        "average_balance": {
+          "avg": {
+            "field": "balance"
+          }
+        }
+      }
+    }
+  }
+}
+'
+14、discovery.zen.minimum_master_nodes
+	https://www.elastic.co/guide/en/elasticsearch/reference/6.4/modules-node.html#split-brain
+15、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/heap-size.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/heap-dump-path.html
+16、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/setting-system-settings.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/setup-configuration-memory.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/file-descriptors.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/vm-max-map-count.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/max-number-of-threads.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/networkaddress-cache-ttl.html
+17、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/bootstrap-checks.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/_memory_lock_check.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/max-size-virtual-memory-check.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/_maximum_map_count_check.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/_client_jvm_check.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/_system_call_filter_check.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/_onerror_and_onoutofmemoryerror_checks.html
+18、To run Elasticsearch as a daemon, specify -d on the command line, and record the process ID in a file using the -p option:
+./bin/elasticsearch -d -p pid
+kill `cat pid`
+19、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/stopping-elasticsearch.html
+20、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/setup-xpack-client.html
+21、
+curl -X PUT "localhost:9200/twitter/_doc/1?pretty" -H 'Content-Type: application/json' -d'
+{
+    "user" : "kimchy",
+    "post_date" : "2009-11-15T14:12:12",
+    "message" : "trying out Elasticsearch"
+}
+'
+curl -X PUT "localhost:9200/_cluster/settings?pretty" -H 'Content-Type: application/json' -d'
+{
+    "persistent": {
+        "action.auto_create_index": "twitter,index10,-index1*,+ind*" 
+    }
+}
+'
+curl -X PUT "localhost:9200/_cluster/settings?pretty" -H 'Content-Type: application/json' -d'
+{
+    "persistent": {
+        "action.auto_create_index": "true" 
+    }
+}
+'
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-index_.html
+22、
+curl -X GET "localhost:9200/twitter/_doc/0?pretty"
+The API also allows to check for the existence of a document using HEAD, for example:
+	curl -I "localhost:9200/twitter/_doc/0?pretty"
+By default, the get API is realtime, and is not affected by the refresh rate of the index (when data will become visible for search). If a document has been updated but is not yet refreshed, the get API will issue a refresh call in-place to make the document visible. This will also make other documents changed since the last refresh visible. In order to disable realtime GET, one can set the realtime parameter to false.
+curl -X GET "localhost:9200/twitter/_doc/0?_source=false&pretty"
+curl -X GET "localhost:9200/twitter/_doc/0?_source_include=*.id&_source_exclude=entities&pretty"
+curl -X PUT "localhost:9200/twitter?pretty" -H 'Content-Type: application/json' -d'
+{
+   "mappings": {
+      "_doc": {
+         "properties": {
+            "counter": {
+               "type": "integer",
+               "store": false
+            },
+            "tags": {
+               "type": "keyword",
+               "store": true
+            }
+         }
+      }
+   }
+}
+'
+curl -X PUT "localhost:9200/twitter/_doc/1?pretty" -H 'Content-Type: application/json' -d'
+{
+    "counter" : 1,
+    "tags" : ["red"]
+}
+'
+curl -X GET "localhost:9200/twitter/_doc/1?stored_fields=tags,counter&pretty"
+curl -X GET "localhost:9200/twitter/_doc/1/_source?pretty"
+curl -X GET "localhost:9200/twitter/_doc/1/_source?_source_include=*.id&_source_exclude=entities'&pretty"
+curl -I "localhost:9200/twitter/_doc/1/_source?pretty"
+When indexing using the ability to control the routing, in order to get a document, the routing value should also be provided. For example:
+curl -X GET "localhost:9200/twitter/_doc/2?routing=user1&pretty"
+The above will get a tweet with id 2, but will be routed based on the user. Note, issuing a get without the correct routing, will cause the document not to be fetched.
+
+Controls a preference of which shard replicas to execute the get request on. By default, the operation is randomized between the shard replicas.
+The preference can be set to:
+_primary
+The operation will go and be executed only on the primary shards.
+_local
+The operation will prefer to be executed on a local allocated shard if possible.
+Custom (string) value
+	A custom value will be used to guarantee that the same shards will be used for the same custom value. This can help with "jumping values" when hitting different shards in different refresh states. A sample value can be something like the web session id, or the user name.
+The refresh parameter can be set to true in order to refresh the relevant shard before the get operation and make it searchable. Setting it to true should be done after careful thought and verification that this does not cause a heavy load on the system (and slows down indexing).
+The get operation gets hashed into a specific shard id. It then gets redirected to one of the replicas within that shard id and returns the result. The replicas are the primary shard and its replicas within that shard id group. This means that the more replicas we will have, the better GET scaling we will have.
+You can use the version parameter to retrieve the document only if its current version is equal to the specified one. This behavior is the same for all version types with the exception of version type FORCE which always retrieves the document. Note that FORCE version type is deprecated.
+Internally, Elasticsearch has marked the old document as deleted and added an entirely new document. The old version of the document doesn’t disappear immediately, although you won’t be able to access it. Elasticsearch cleans up deleted documents in the background as you continue to index more data.
+23、curl -X DELETE "localhost:9200/twitter/_doc/1?pretty"
+Each document indexed is versioned. When deleting a document, the version can be specified to make sure the relevant document we are trying to delete is actually being deleted and it has not changed in the meantime. Every write operation executed on a document, deletes included, causes its version to be incremented. The version number of a deleted document remains available for a short time after deletion to allow for control of concurrent operations. The length of time for which a deleted document’s version remains available is determined by the index.gc_deletes index setting and defaults to 60 seconds.
+24、When indexing using the ability to control the routing, in order to delete a document, the routing value should also be provided. For example:
+curl -X DELETE "localhost:9200/twitter/_doc/1?routing=kimchy&pretty"
+The above will delete a tweet with id 1, but will be routed based on the user. Note, issuing a delete without the correct routing, will cause the document to not be deleted.
+The primary shard assigned to perform the delete operation might not be available when the delete operation is executed. Some reasons for this might be that the primary shard is currently recovering from a store or undergoing relocation. By default, the delete operation will wait on the primary shard to become available for up to 1 minute before failing and responding with an error. The timeout parameter can be used to explicitly specify how long it waits. Here is an example of setting it to 5 minutes:
+curl -X DELETE "localhost:9200/twitter/_doc/1?timeout=5m&pretty"
+25、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-update.html
+26、
+curl -X GET "localhost:9200/_mget?pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "1"
+        },
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "2"
+        }
+    ]
+}
+'
+curl -X GET "localhost:9200/test/_mget?pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_type" : "_doc",
+            "_id" : "1"
+        },
+        {
+            "_type" : "_doc",
+            "_id" : "2"
+        }
+    ]
+}
+'
+curl -X GET "localhost:9200/test/_doc/_mget?pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_id" : "1"
+        },
+        {
+            "_id" : "2"
+        }
+    ]
+}
+'
+curl -X GET "localhost:9200/test/_doc/_mget?pretty" -H 'Content-Type: application/json' -d'
+{
+    "ids" : ["1", "2"]
+}
+'
+27、
+curl -X GET "localhost:9200/_mget?pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "1",
+            "_source" : false
+        },
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "2",
+            "_source" : ["field3", "field4"]
+        },
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "3",
+            "_source" : {
+                "include": ["user"],
+                "exclude": ["user.location"]
+            }
+        }
+    ]
+}
+'
+curl -X GET "localhost:9200/_mget?pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "1",
+            "stored_fields" : ["field1", "field2"]
+        },
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "2",
+            "stored_fields" : ["field3", "field4"]
+        }
+    ]
+}
+'
+curl -X GET "localhost:9200/test/_doc/_mget?stored_fields=field1,field2&pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_id" : "1" 
+        },
+        {
+            "_id" : "2",
+            "stored_fields" : ["field3", "field4"] 
+        }
+    ]
+}
+'
+curl -X GET "localhost:9200/_mget?routing=key1&pretty" -H 'Content-Type: application/json' -d'
+{
+    "docs" : [
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "1",
+            "routing" : "key2"
+        },
+        {
+            "_index" : "test",
+            "_type" : "_doc",
+            "_id" : "2"
+        }
+    ]
+}
+'
+28、
+action_and_meta_data\n
+optional_source\n
+action_and_meta_data\n
+optional_source\n
+....
+action_and_meta_data\n
+optional_source\n
+
+curl -X POST "localhost:9200/_bulk?pretty" -H 'Content-Type: application/json' -d'
+{ "index" : { "_index" : "test", "_type" : "_doc", "_id" : "1" } }
+{ "field1" : "value1" }
+{ "delete" : { "_index" : "test", "_type" : "_doc", "_id" : "2" } }
+{ "create" : { "_index" : "test", "_type" : "_doc", "_id" : "3" } }
+{ "field1" : "value3" }
+{ "update" : {"_id" : "1", "_type" : "_doc", "_index" : "test"} }
+{ "doc" : {"field2" : "value2"} }
+'
+The endpoints are /_bulk, /{index}/_bulk, and {index}/{type}/_bulk. When the index or the index/type are provided, they will be used by default on bulk items that don’t provide them explicitly.
+curl -X POST "localhost:9200/_bulk?pretty" -H 'Content-Type: application/json' -d'
+{ "update" : {"_id" : "1", "_type" : "_doc", "_index" : "index1", "retry_on_conflict" : 3} }
+{ "doc" : {"field" : "value"} }
+{ "update" : { "_id" : "0", "_type" : "_doc", "_index" : "index1", "retry_on_conflict" : 3} }
+{ "script" : { "source": "ctx._source.counter += params.param1", "lang" : "painless", "params" : {"param1" : 1}}, "upsert" : {"counter" : 1}}
+{ "update" : {"_id" : "2", "_type" : "_doc", "_index" : "index1", "retry_on_conflict" : 3} }
+{ "doc" : {"field" : "value"}, "doc_as_upsert" : true }
+{ "update" : {"_id" : "3", "_type" : "_doc", "_index" : "index1", "_source" : true} }
+{ "doc" : {"field" : "value"} }
+{ "update" : {"_id" : "4", "_type" : "_doc", "_index" : "index1"} }
+{ "doc" : {"field" : "value"}, "_source": true}
+'
+29、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-delete-by-query.html
+30、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-update-by-query.html
+31、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-reindex.html
+32、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-termvectors.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-multi-termvectors.html#docs-multi-termvectors
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/docs-refresh.html
+33、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/search.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/search-search.html
+https://www.elastic.co/guide/en/elasticsearch/reference/6.4/search-uri-request.html
+........
+34、https://www.elastic.co/guide/en/elasticsearch/reference/6.4/sql-getting-started.html

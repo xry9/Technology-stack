@@ -16,6 +16,11 @@ mysql -uroot -proot
 ---------------------
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'root' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
+----
+create user 'root'@'%' identified by  'password';
+grant all privileges on *.* to 'root'@'%' with grant option;
+FLUSH PRIVILEGES;
+
 
 # 查询用户信息
 mysql> select User,Host,Password from user;

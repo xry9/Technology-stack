@@ -1,3 +1,7 @@
+
+git clone -b 1.2 https://github.com/elastic/elasticsearch.git
+
+
 --------
 gradle -version
 Gradle 5.4
@@ -11,7 +15,9 @@ v6.3.0, v6.4.2, jdk 用 10.0.2, 亦可
 
 git clone -b v7.12.0 git@github.com:elastic/elasticsearch.git
 v7.12.0 jdk 用 jdk-15.0.2(在命令行设置一下 JAVAHOME 即可), 注释掉 docker 相关工程, ./gradlew assemble, 但是 idea 执行不成功, 但是人家说了已经不支持用 idea 命令, 直接打开就可以了, 已验证
-v8.1.2 jdk-17.0.3 elasticsearch 亦可, 但是 idea 打开不行
+在 github 上直接下载 zip 亦可, (v7.14.0 亦可, 但是用 idea 打开不行)
+
+v8.1.2 jdk-17.0.3 elasticsearch 亦可(zip 好像不行啊), 但是 idea 打开不行
 
 ---------------------------------
 ../gradlew assemble && cp build/distributions/elasticsearch-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/lib/elasticsearch-6.4.2.jar && cp build/distributions/elasticsearch-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/lib/elasticsearch-6.4.2.jar && cp build/distributions/elasticsearch-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/lib/elasticsearch-6.4.2.jar
@@ -20,7 +26,4 @@ v8.1.2 jdk-17.0.3 elasticsearch 亦可, 但是 idea 打开不行
 ../../../gradlew assemble && cp sql-proto/build/distributions/sql-proto-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/modules/x-pack-sql/sql-proto-6.4.2.jar && cp sql-proto/build/distributions/sql-proto-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/modules/x-pack-sql/sql-proto-6.4.2.jar && cp sql-proto/build/distributions/sql-proto-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/modules/x-pack-sql/sql-proto-6.4.2.jar && cp sql-action/build/distributions/sql-action-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/modules/x-pack-sql/sql-action-6.4.2.jar && cp sql-action/build/distributions/sql-action-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/modules/x-pack-sql/sql-action-6.4.2.jar && cp sql-action/build/distributions/sql-action-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/modules/x-pack-sql/sql-action-6.4.2.jar && cp sql-cli/build/distributions/elasticsearch-sql-cli-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/bin/elasticsearch-sql-cli-6.4.2.jar && cp sql-cli/build/distributions/elasticsearch-sql-cli-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/bin/elasticsearch-sql-cli-6.4.2.jar && cp sql-cli/build/distributions/elasticsearch-sql-cli-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/bin/elasticsearch-sql-cli-6.4.2.jar&& cp build/distributions/x-pack-sql-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/modules/x-pack-sql/x-pack-sql-6.4.2.jar && cp build/distributions/x-pack-sql-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/modules/x-pack-sql/x-pack-sql-6.4.2.jar && cp build/distributions/x-pack-sql-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/modules/x-pack-sql/x-pack-sql-6.4.2.jar 
 
 ../../../gradlew assemble && cp build/distributions/x-pack-security-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-1/modules/x-pack-security/x-pack-security-6.4.2.jar && cp build/distributions/x-pack-security-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-2/modules/x-pack-security/x-pack-security-6.4.2.jar && cp build/distributions/x-pack-security-6.4.2-SNAPSHOT.jar /Users/fintopia/app/elasticsearch-6.4.2-3/modules/x-pack-security/x-pack-security-6.4.2.jar
-
-handleRequest===1549
-sendRequest===522
 

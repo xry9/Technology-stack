@@ -1,0 +1,22 @@
+1、presto-0.100-simple/presto-main, 
+我只是注释掉 PrestoServer 中一行代码 new JmxModule() 及其 import io.airlift.jmx.JmxModule 而已, 报错:
+org.apache.maven.plugins:maven-dependency-plugin:2.10:analyze-only, 但是是打印了:
+[INFO] Compiling 782 source files to /usr/local/app/mygit/presto-0.100-simple/presto-main/target/classes
+maven-dependency-plugin 这个应该是 maven 集成的 plugin 里面, 
+所以加入:
+	<plugin>
+		<groupId>org.apache.maven.plugins</groupId>
+		<artifactId>maven-dependency-plugin</artifactId>
+		<version>2.10</version>
+		<configuration>
+			<ignoredDependencies>
+				<ignoredDependency>org.weakref:jmxutils:jar</ignoredDependency>
+				<ignoredDependency>io.airlift:jmx:jar</ignoredDependency>
+				<ignoredDependency>io.airlift:jmx-http:jar</ignoredDependency>
+			</ignoredDependencies>
+		</configuration>
+	</plugin>
+https://maven.apache.org/plugins/maven-dependency-plugin/analyze-only-mojo.html
+
+2、上面好像可以用 mvn dependency:analyze 分析, 显示项目中无用的包
+mvn duplicate-finder:check -- 是否有相同 classpath.Classname

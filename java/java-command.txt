@@ -1,7 +1,7 @@
 18、yum install java-1.8.0-openjdk 安装openJDK，好像8以前没有tar包
 java -XX:+PrintCommandLineFlags -version
   打印一些参数的基本信息, 加了 -version 进程就不会启动了
-  
+
 1、jps | grep PhantomTest |awk '{print $1}' |head -1 |xargs lsof -p |grep /home/tyx  --这个命令好重要啊
    lsof abc.txt 显示开启文件 abc.txt 的进程, lsof -p 107250 显示进程打开的文件
 3、nohup java -Dlogback.configurationFile=/home/admin/zhengli/scylla/bench-hbase/logback.xml -jar stress-2.0-SNAPSHOT.jar -Xfile2db \

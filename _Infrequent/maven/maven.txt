@@ -208,3 +208,11 @@
         </plugins>
     </build>
 
+20、没有 .git 目录报错时加入
+<plugin>
+	<groupId>pl.project13.maven</groupId>
+	<artifactId>git-commit-id-plugin</artifactId>
+	<configuration>
+		<skip>true</skip>
+	</configuration>
+</plugin>

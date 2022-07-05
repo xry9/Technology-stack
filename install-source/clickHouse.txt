@@ -1,7 +1,7 @@
--------------------------------- ClickHouse --------------------------------
-
+-------------------------------- ClickHouse 安装 --------------------------------
+https://blog.csdn.net/universsky2015/article/details/124008314
+centos7:
 https://blog.csdn.net/wbl381/article/details/106995351/
-
 grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"
 systemctl stop firewalld.service
 systemctl disable firewalld.service
@@ -21,8 +21,42 @@ service clickhouse-server start
 --clickhouse-server --config-file=/etc/clickhouse-server/config.xml
 clickhouse-client
 	执行 sql: select 1
-=====================================================================
 
+centos8:
+https://blog.csdn.net/qq_39075209/article/details/123206917	--不好使
+https://blog.csdn.net/saynaihe/article/details/117555314
+sudo rpm --import https://repo.clickhouse.tech/CLICKHOUSE-KEY.GPG
+sudo yum-config-manager --add-repo https://repo.clickhouse.tech/rpm/stable/x86_64
+sudo yum install clickhouse-server clickhouse-client
+	版本:
+		Installing:
+		 clickhouse-client                                noarch                         22.2.2.1-2                            repo.clickhouse.tech_rpm_stable_x86_64                          30 k
+		 clickhouse-server                                noarch                         22.2.2.1-2                            repo.clickhouse.tech_rpm_stable_x86_64                          55 k
+		Installing dependencies:
+		 clickhouse-common-static                         x86_64                         22.2.2.1-2                            repo.clickhouse.tech_rpm_stable_x86_64                         213 M
+配置文件: /etc/clickhouse-server
+
+sudo -u clickhouse clickhouse-server --config-file=/etc/clickhouse-server/config.xml
+	--root 用户也要这样启动
+
+
+
+-------------------------------- ClickHouse 使用 --------------------------------
+CREATE DATABASE if not exists clickhouse_tutorial ENGINE = Atomic;
+show create database system;
+select * from system.databases;
+SELECT name, supports_ttl FROM system.table_engines;
+
+create table if not exists clickhouse_tutorial.user_tag(user_id UInt64 DEFAULT 0,gender String DEFAULT 'NA',age String DEFAULT 'NA',active_level String DEFAULT 'NA',date Date) 
+engine = MergeTree() order by (user_id, active_level) primary key (user_id) partition by (date);
+
+INSERT INTO clickhouse_tutorial.user_tag(user_id, gender, age, active_level, date) VALUES
+(2042690798151930621, 'male', 56, 'active', toDate(now()))
+(2042690798151930623, 'f', 16, 'active', toDate(now()))
+(2042690798151930624, 'm', 46, 'active', toDate(now()))
+;
+
+-------------------------------- ClickHouse compile --------------------------------
 centos7, 8g 8core:
 
 grep -q sse4_2 /proc/cpuinfo && echo "SSE 4.2 supported" || echo "SSE 4.2 not supported"

@@ -1,0 +1,21 @@
+https://github.com/prestodb/presto/tree/0.236
+
+1、./mvnw clean install -DskipTests
+2、高版本(0.248) 需要高版本 jdk(8u181), 8u77 不行, 0.273.2 用这个版本可以
+	JAVA_HOME=/usr/local/app/jdk1.8.0_181
+
+-DskipTests，不执行测试用例，但编译测试用例类生成相应的class文件至target/test-classes下
+-Dmaven.test.skip=true，不执行测试用例，也不编译测试用例类
+
+
+<plugin>
+	<groupId>pl.project13.maven</groupId>
+	<artifactId>git-commit-id-plugin</artifactId>
+	<configuration>
+		<skip>true</skip>
+	</configuration>
+</plugin>
+3、trino-386.zip jdk 用 jdk-11.0.15, 注释掉 docs
+------------------------------------
+presto,0.100:
+airbase-36 pom.xml 中 更改为 <dep.jersey.version>2.16</dep.jersey.version>

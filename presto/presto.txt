@@ -1,0 +1,202 @@
+--------------------------------0.100 安装--------------------------------
+https://blog.csdn.net/zyj8170/article/details/60954885
+https://blog.csdn.net/zzq900503/article/details/79403949
+https://prestodb.io/docs/0.52/installation.html
+https://prestodb.io/docs/0.100/installation/deployment.html
+
+1、mkdir etc
+2、vim etc/node.properties
+	node.environment=test
+	node.id=ffffffff-ffff-ffff-ffff-ffffffffff01
+	node.data-dir=/usr/local/app/presto-server-0.100/data
+3、vim etc/jvm.config
+	-server
+	-Xmx4G
+	-XX:+UseConcMarkSweepGC
+	-XX:+ExplicitGCInvokesConcurrent
+	-XX:+CMSClassUnloadingEnabled
+	-XX:+AggressiveOpts
+	-XX:+HeapDumpOnOutOfMemoryError
+	-XX:OnOutOfMemoryError=kill -9 %p
+	-XX:ReservedCodeCacheSize=150M
+4、vim etc/config.properties
+	coordinator=true
+	node-scheduler.include-coordinator=true
+	http-server.http.port=9001
+	task.max-memory=1GB
+	discovery-server.enabled=true
+	discovery.uri=http://192.168.58.161:9001
+5、mkdir etc/catalog
+vim etc/catalog/hive.properties
+	connector.name=hive-hadoop2
+	hive.metastore.uri=thrift://192.168.58.161:9083
+	hive.config.resources=/usr/local/app/hadoop-2.7.2/etc/hadoop/core-site.xml,/usr/local/app/hadoop-2.7.2/etc/hadoop/hdfs-site.xml
+	hive.allow-drop-table=true
+vim etc/catalog/jmx.properties
+	connector.name=jmx
+
+6、bin/launcher start (launcher run前台启动 看日志)
+hive --service metastore &
+./presto.jar --server 192.168.58.161:9001 --catalog hive --schema default
+
+
+--------
+新版本中
+config.properties
+task.max-memory=1GB 改为
+query.max-memory=50GB
+query.max-memory-per-node=1GB
+即：
+coordinator=true
+node-scheduler.include-coordinator=true
+http-server.http.port=9001
+query.max-memory=50GB
+query.max-memory-per-node=1GB
+discovery-server.enabled=true
+discovery.uri=http://cloud01:9001
+=================================
+分布式（新版本）
+coordinator 节点不变
+worker 节点：
+coordinator=false
+http-server.http.port=9001
+query.max-memory=50GB
+query.max-memory-per-node=1GB
+discovery.uri=http://cloud01:9001
+node.properties 也要相应更改一下
+
+===========================kafka============================
+https://prestodb.io/docs/current/connector/kafka-tutorial.html
+1、vim etc/catalog/kafka.properties
+connector.name=kafka
+kafka.nodes=localhost:9092
+kafka.table-names=tpch.customer,tpch.orders,tpch.lineitem,tpch.part,tpch.partsupp,tpch.supplier,tpch.nation,tpch.region
+kafka.hide-internal-columns=false
+
+curl -o kafka-tpch https://repo1.maven.org/maven2/de/softwareforge/kafka_tpch_0811/1.0/kafka_tpch_0811-1.0.sh
+755 kafka_tpch_0811-1.0.sh
+./kafka_tpch_0811-1.0.sh load --brokers localhost:9092 --prefix tpch. --tpch-type tiny
+./presto-cli-0.200-executable.jar --server 192.168.58.161:9001  --catalog kafka --schema tpch
+SELECT count(*) FROM customer;
+
+========================================================
+discovery-server.enabled：Presto 通过Discovery 服务来找到集群中所有的节点。为了能够找到集群中所有的节点，每一个Presto实例都会在启动的时候将自己注册到discovery服务。Presto为了简化部署，并且也不想再增加一个新的服务进程，Presto coordinator 可以运行一个内嵌在coordinator 里面的Discovery 服务。这个内嵌的Discovery 服务和Presto共享HTTP server并且使用同样的端口。
+discovery.uri：Discovery server的URI。由于启用了Presto coordinator内嵌的Discovery 服务，因此这个uri就是Presto coordinator的uri。修改example.net:8080， 根据你的实际环境设置该URI。注意：这个URI一定不能以“/“结尾。
+==========================presto技术内幕==============================
+1、性能略有提升：group by 时将值多的字段放左边
+2、or like 改成 regexp_like
+3、用orc存储，相比其它格式，随着数据量增大，orc效率更高。orc文件头存了文件的元信息，尤其在count时效率特别高
+4、默认 distributed hash join ，join时左表会发达右表数据所在结点，出于内存的考虑，大表要在左边
+5、数据倾斜时在session中关闭 distributed hash join ，小表放右边。
+6、maven 编译时加-T2C参数，一个CPU启动两个线程
+7、datanucleus.fixedDatastore，hive的配置，是否固定元数据库，默认false，设置为true时效率会高，不进行元数据结构的检查。启动metastore时好像可以用 -p 指定端口号
+8、6.2.2
+
+
+-------------------------------- 性能测试--------------------------------
+------------------------- 0.100 -------------------------
+4g 机器 centos7, 机械硬盘上
+etc/config.properties: 
+	task.max-memory=1GB
+vim etc/jvm.config:
+	-Xmx2G
+	-XX:ReservedCodeCacheSize=150M
+select e1.birthday, sum(e1.age) from emp1y e1 left join emp5kw e5 on e1.id=e5.id group by e1.birthday;
+-- emp1y, emp5kw: 11896490973, 6968096953
+
+处理速度稳定在 33M/s
+相同机器和配置每次跑出结果差别还不少, 用 8g 机器, task.max-memory=1GB, -Xmx2G 最好的一次是  4min 20s, 平均处理速度 70+g/s
+如果改成 2g 机器或者 -Xmx1G 都是跑不下来的
+
+Caused by: java.lang.IllegalArgumentException: Invalid memory configuration. The sum of max total query memory per node (2147483648) and heap headroom (644245094) cannot be larger than the available heap memory (2147483648)
+
+------------------------- 0.272 -------------------------
+16g 机器 centos8, 固态硬盘上
+hive load 5942653156 表,用时 18.514 seconds, 可以达到 300M/s 固态硬盘机器
+-- emp1y, emp5kw: 11896421948, 5942653156
+
+vim etc/jvm.config
+-Xmx3072M
+-XX:+UseG1GC
+-XX:G1HeapRegionSize=32M
+vim etc/config.properties
+query.max-memory=2GB
+query.max-memory-per-node=2GB
+query.max-total-memory-per-node=2GB
+
+select e1.birthday, sum(e1.age) from emp1y e1 left join emp5kw e5 on e1.id=e5.id group by e1.birthday;
+hive 较好一次: 2:40 [200M rows, 17.2GB] [1.25M rows/s, 110MB/s]
+hive-orc: 1:14 [150M rows, 408MB] [2.02M rows/s, 5.49MB/s]
+-- 除 PrestoServer hdfs yarn metastore clickhouse es idea, 只启了一个疯狂写 es 的进程, 再执行 select otherf1, count(1) from hive.default.emp1 group by otherf1; 就会导致 PrestoServer 挂掉, emp 表可以执行成功
+	launcher.log 日志中 会报 OutOfMemoryError, 会有 dump file, 果然把那个写 es 进程 kill 再执行就没问题, 34887431 个 otherf1
+	--Query 20220513_071141_00002_3nd3r failed: Query exceeded per-node total memory limit of 2GB [Allocated: 1.97GB, Delta: 38.03MB, Top Consumers: {HashAggregationOperator=1.74GB, InMemoryHashAggregationBuilder=188.58MB, PartitionedOutputOperator=29.13MB}, Details: [{"taskId":"1.0.0","reservation":"1.74GB","topConsumers":[{"type":"HashAggregationOperator","planNodeId":"3","reservations":["122.96MB","122.96MB","122.95MB","122.95MB","122.95MB","122.95MB","122.95MB","122.95MB","122.95MB","122.95MB","122.95MB","84.93MB","84.90MB","84.89MB","84.89MB","84.89MB"],"total":"1.74GB","info":"FINAL;"}]},{"taskId":"2.0.0","reservation":"241.48MB","topConsumers":[{"type":"HashAggregationOperator","planNodeId":"188","reservations":["16.07MB","16.07MB","11.05MB","9.29MB","9.29MB","9.28MB","9.28MB","9.28MB","9.28MB","8.82MB","8.00MB","8.00MB","5.35MB","5.35MB","5.35MB","5.35MB","5.34MB","5.34MB","5.34MB","5.34MB","5.34MB","2.63MB","2.35MB","2.34MB","2.34MB","2.34MB","2.34MB","2.34MB","0B","0B","0B","0B"],"total":"188.58MB","info":"PARTIAL;"},{"type":"PartitionedOutputOperator","planNodeId":"188","reservations":["1.97MB","1.97MB","1.97MB","1.97MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","0B","0B","0B","0B","0B","0B","0B","0B","0B","0B","0B"],"total":"29.13MB"},{"type":"ScanFilterAndProjectOperator","planNodeId":"208","reservations":["1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","1.25MB","340B","340B","340B","340B","340B","340B","340B","340B","340B","340B","340B","340B","340B"],"total":"23.76MB"}]}]]
+	--0.100: task.max-memory=2GB -Xmx4G 可以跑出来(2:40 [100M rows, 11.1GB] [623K rows/s, 70.7MB/s]), 0.272: -Xmx4G 其它配置 2G 却是不行啊
+	
+clickhouse: 3:41 [150M rows, 0B] [677K rows/s, 0B/s], 平均 1M rows/s 左右
+	但是这个比 clickhouse 自身要慢很多, 其实硬盘读比 hive 也慢很多呀, 因为上面 hive 表是行存储, clickhouse 应该是列存储
+-- 5kw 聚合: 25s, 条件过滤 4-5s
+--500w 聚合: 3s,  条件过滤 2s
+
+--------------------------------0.272 安装--------------------------------
+elasticsearch-6.0.0:
+vim etc/catalog/elasticsearch.properties
+	connector.name=elasticsearch
+	elasticsearch.host=192.168.58.161
+	elasticsearch.port=9200
+	elasticsearch.default-schema-name=default
+
+curl -X PUT "192.168.58.161:9200/library/book/_bulk?refresh&pretty" -H 'Content-Type: application/json' -d'
+{"index":{"_id": "Leviathan Wakes"}}
+{"name": "Leviathan Wakes", "author": "James S.A. Corey", "release_date": "2011-06-02", "page_count": 561}
+{"index":{"_id": "Hyperion"}}
+{"name": "Hyperion", "author": "Dan Simmons", "release_date": "1989-05-26", "page_count": 482}
+{"index":{"_id": "Dune"}}
+{"name": "Dune", "author": "Frank Herbert", "release_date": "1965-06-01", "page_count": 604}
+'
+
+./presto-cli-0.272-executable.jar --server 192.168.58.161:8080 --catalog elasticsearch --schema default
+select name, author, release_date, page_count from elasticsearch.default.library;
+select substr(name, 1, 10), sum(age) from elasticsearch.default.twitter group by substr(name, 1, 10);
+	9:14 [50M rows, 2.54GB] [90.2K rows/s, 4.69MB/s]
+select name, age, date, message, tel, create_date from elasticsearch.default.twitter where name='中华人民共和国13444545';
+	查不到数据, 根据 age/message 可以查到
+.startObject("message").field("type","keyword")
+.startObject("age").field("type","long")
+startObject("name").field("type","text")
+
+select e.name, e.age, e.message from 
+(select name, substr(name, 1, 9) sname, age, date, message, tel, create_date from elasticsearch.default.twitter) e
+left join 
+(select name, substr(name, 1, 9) sname, age, date, message, tel, create_date from elasticsearch.default.twitter1) e1
+on e.sname=e1.sname
+;
+--Query 20220513_081236_00023_6tshp failed: Query exceeded per-node total memory limit of 2GB [Allocated: 2.00GB, Delta: 1.03MB, Top Consumers: {HashBuilderOperator=1.92GB, LazyOutputBuffer=33.45MB, ExchangeOperator=32.39MB}, Details: [{"taskId":"1.0.0","reservation":"1.92GB","topConsumers":[{"type":"HashBuilderOperator","planNodeId":"12","reservations":["252.77MB","248.33MB","226.82MB","165.96MB","153.93MB","147.79MB","147.06MB","117.37MB","107.50MB","102.28MB","71.69MB","64.26MB","60.55MB","37.31MB","34.76MB","26.57MB"],"total":"1.92GB","info":"LEFT;PARTITIONED;"}]},{"taskId":"2.0.0","reservation":"9.68MB","topConsumers":[{"type":"PartitionedOutputOperator","planNodeId":"407","reservations":["1.95MB","1.93MB","1.93MB","1.93MB","1.93MB"],"total":"9.68MB"},{"type":"FilterAndProjectOperator","planNodeId":"407","reservations":["940B","940B","940B","940B","940B"],"total":"4.59kB"},{"type":"ScanFilterAndProjectOperator","planNodeId":"1","reservations":["812B","812B","812B","812B","812B"],"total":"3.96kB"}]},{"taskId":"3.0.0","reservation":"6.81MB","topConsumers":[{"type":"PartitionedOutputOperator","planNodeId":"408","reservations":["1.36MB","1.36MB","1.36MB","1.36MB","1.36MB"],"total":"6.80MB"},{"type":"FilterAndProjectOperator","planNodeId":"408","reservations":["388B","388B","388B","388B","388B"],"total":"1.89kB"},{"type":"ScanFilterAndProjectOperator","planNodeId":"6","reservations":["260B","260B","260B","260B","260B"],"total":"1.27kB"}]}]]
+-- 50w 的数据聚合用了 5s,  条件过滤 1s 多
+--500w 的数据聚合用了 60s, 条件过滤 3s 多
+--如果是直连 es 执行 sql, 无论是聚合或条件过滤都是非常快的(5kw)
+
+--------
+vim etc/catalog/clickhouse.properties
+connector.name=clickhouse
+#clickhouse.connection-url=jdbc:clickhouse://127.0.0.1:9000
+clickhouse.connection-url=jdbc:clickhouse://192.168.58.161:8123
+clickhouse.connection-user=
+clickhouse.connection-password=
+--------
+join:
+./presto-cli-0.272-executable.jar --server 192.168.58.161:8080
+select h.*, c.* from hive.default.tab1 h left join clickhouse.default.jdbc_example c on h.age=c.age;
+
+--------------------------------内存分析--------------------------------
+-Xms 堆内存的初始大小，默认为物理内存的1/64
+-Xmx 堆内存的最大大小，默认为物理内存的1/4
+
+1、0.100:
+select otherf1, count(1) from hive.default.emp1 group by otherf1;
+-Xmx2G
+  1) task.max-memory=768MB 时会, Task exceeded max memory size of 768MB
+  2) task.max-memory=896MB 及以上, 不能以上太多, 进程直接挂了
+  
+2、select otherf3, count(1) from hive.default.emp2 group by otherf3; --Xmx14G
+	-- 0.100 task.max-memory=12GB 可以跑出来, otherf5 也可以跑出来
+	-- 0.272 query.max-memory=9728MB 不行

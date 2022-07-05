@@ -1,18 +1,7 @@
-https://github.com/elastic/elasticsearch/
 
 mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-1/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-2/lib/elasticsearch-2.0.3-SNAPSHOT.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch-2.0.3-3/lib/elasticsearch-2.0.3-SNAPSHOT.jar
 mvn clean package -DskipTests && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/lib/elasticsearch-2.0.2.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch/elasticsearch-2.0.2-2/lib/elasticsearch-2.0.2.jar && cp target/elasticsearch-2.0.3-SNAPSHOT.jar /usr/local/app/elasticsearch/elasticsearch-2.0.2-3/lib/elasticsearch-2.0.2.jar
 
-git clone -b 1.2 https://github.com/elastic/elasticsearch.git
-
-
-network.host: 192.168.58.161
-http.port: 9200
-transport.tcp.port: 9300
-path.data: /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/data
-path.logs: /usr/local/app/elasticsearch/elasticsearch-2.0.2-1/logs
-discovery.zen.ping.unicast.hosts: ["192.168.58.161:9100", "192.168.58.161:9300", "192.168.58.161:9500"]
---6.4.2 同样
 nohup elasticsearch-2.0.2-1/bin/elasticsearch >elasticsearch-2.0.2-1/elasticsearch.log 2>&1 &
 kill -9 $(ps -ef|grep Elasticsearch |gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
 

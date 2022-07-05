@@ -1,5 +1,0 @@
-https://github.com/prestodb/presto/tree/0.236
-
-1、./mvnw clean install -DskipTests
-2、0.168 用 tyx 用户执行即可, 往上版本应该就得用 root 用户了, 0.208 版本还可以编译, 到 0.218 就有问题了, 暂时不去研究
-3、mac, 0.244, mvn clean install -DskipTests
