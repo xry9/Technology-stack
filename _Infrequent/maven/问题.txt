@@ -20,3 +20,11 @@ https://maven.apache.org/plugins/maven-dependency-plugin/analyze-only-mojo.html
 
 2、上面好像可以用 mvn dependency:analyze 分析, 显示项目中无用的包
 mvn duplicate-finder:check -- 是否有相同 classpath.Classname
+3、如果遇到某些 plugin check 错误, 但是这个 plugin 可能在父父工程中, 可以在当前工程中引用, 再 <skip>true</skip>
+<plugin>
+	<groupId>com.mycila</groupId>
+	<artifactId>license-maven-plugin</artifactId>
+	<configuration>
+		<skip>true</skip>
+	</configuration>
+</plugin>

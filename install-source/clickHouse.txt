@@ -37,9 +37,13 @@ sudo yum install clickhouse-server clickhouse-client
 配置文件: /etc/clickhouse-server
 
 sudo -u clickhouse clickhouse-server --config-file=/etc/clickhouse-server/config.xml
-	--root 用户也要这样启动
-
-
+	--root 用户也要这样启动, root 用户第一次执行报错, 两次执行可以, 如果还不行 使用命令: 
+		sudo -u clickhouse clickhouse-server --config-file=/etc/clickhouse-server/config.xml, 还不行 usermod -a -G root clickhouse
+		
+如果 8123 端口不能连接:
+	vim /etc/clickhouse-server/config.xml
+		添加 <listen_host>::</listen_host>
+	systemctl restart clickhouse-server.service
 
 -------------------------------- ClickHouse 使用 --------------------------------
 CREATE DATABASE if not exists clickhouse_tutorial ENGINE = Atomic;
