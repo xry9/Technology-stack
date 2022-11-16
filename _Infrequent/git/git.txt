@@ -1,14 +1,46 @@
-git push --set-upstream origin 20190128_FLIGHT-84903
+git push --set-upstream origin 20190128_FLIGHT-84903 (远程没有这个分支时需要这样 push, 应该是创建并提交的意思)
 git branch -a (貌似执行之前要 pull一下，才能看到所有新分支)
-git checkout 20181227_FLIGHT-82109
-git branch 20181227_FLIGHT-82109
+git branch 20181227_FLIGHT-82109 (创建新分支, 直接 checkout -b 也可以)
+git checkout 20181227_FLIGHT-82109 切换分支
 git branch
+git tag
 ----
-git checkout -b 20181227_FLIGHT-82109 (由master进入分支，可以不加-b)
-git pull (从非master分支拉代码，checkout后要pull一下)
+
+merge 代码：
+git checkout master
+git merge release/v0.1.0
+git push
+----如遇冲突，修改后 add commit push 
+在其它分支:
 git merge master
+	-- merge master 代码到当前 branch , 但是叫同步更为合理, 因为 master 中没有文件, merge 完会把当前 branch 文件清空 
 =========================
-发布release 版本
+更新替换本地代码：
+git fetch --all
+git reset --hard
+git pull
+=========================
+1、删除本地分支(没有远程分支)
+	git branch --delete feature/five
+	git branch -d feature/fure
+2、删除远程分支(不需要确认)
+	git push origin --delete feature/second
+3、删除追踪分支
+------------
+如果用git push 指令时，当前分支没有跟踪远程分支（没有和远程分支建立联系），那么就会git就会报错。当前分支没有追踪远程指定的分支的话，当前分支指定的版本快照不知道要作为服务器哪一个分支的版本快照的子节点。简单来说就是：不知道要推送给哪一个分支
+  a. 远端代码clone时会自动将创建好的本地master分支追踪到origin/master分支
+  b.在远程分支的基础上建立dev分支(本地dev分支存有所有远端最新文件内容)，并且让本地的dev分支追踪到远端dev分支
+     git checkout -b dev origin/dev
+		其实直接 checkout 一个远程分支也可以, 有日志(git checkout feature/first):
+			Branch 'feature/first' set up to track remote branch 'feature/first' from 'origin'.
+			Switched to a new branch 'feature/first'
+  c. 如果想指定本地某个分支追踪到远端某个分支
+    git branch --set-upstream branch_1 origin/branch_2
+------------
+git branch --delete --remotes origin/feature/first
+	
+=========================
+发布 release 版本
 1> 保证引用没有SNAPSHOT，本身版本可以是SNAPSHOT（本身叫什么名无所谓？）
 2> scm
 3>
@@ -23,18 +55,7 @@ What is SCM release tag or label for "sophonstore-api"? (com.lvwan.sophonstore:s
 What is the new development version for "sophonstore-api"? (com.lvwan.sophonstore:sophonstore-api) 0.1.1-SNAPSHOT: : 0.1.1-SNAPSHOT
 --------
 5> mvn release:perform
-========================
-merge 代码：
-git checkout master
-git merge release/v0.1.0
-git push
-----如遇冲突，修改后 add commit push 
 
-========================
-更新替换本地代码：
-git fetch --all
-git reset --hard
-git pull
 ========================
 github 再遇到 push 不上去报 403 ，可以试试 vim .git/config --> url = https://username:passwd@github.com/xry9/javaTest.git
 	产生这个问题的原因就是 http 方式而不是 git 方式

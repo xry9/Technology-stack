@@ -40,7 +40,7 @@ source /etc/profile
 ======================================================================================
 0、基本概念
 工作区：就是你在电脑里能看到的目录。
-暂存区：英文叫stage, 或index。一般存放在 ".git目录下" 下的index文件（.git/index）中，所以我们把暂存区有时也叫作索引（index）
+暂存区：英文叫 stage, 或index。一般存放在 ".git目录下" 下的index文件（.git/index）中，所以我们把暂存区有时也叫作索引（index）
 版本库：工作区有一个隐藏目录.git，这个不算工作区，而是Git的版本库
 --是不是这样 .git 叫版本库, 里面包含了 index(暂存区)
 
@@ -53,8 +53,8 @@ git config user.name
 1、git clone 时，可以所用不同的协议，包括 ssh, git, https 等，其中最常用的是 ssh，因为速度较快，还可以配置公钥免输入密码。各种写法如下：
 
 git clone git@github.com:fsliurujie/test.git         --SSH协议
-git clone git://github.com/fsliurujie/test.git          --GIT协议
-git clone https://github.com/fsliurujie/test.git      --HTTPS协议
+git clone git://github.com/fsliurujie/test.git       --GIT协议
+git clone https://github.com/fsliurujie/test.git     --HTTPS协议
 
 2、
 vim a.txt
@@ -77,9 +77,11 @@ git status -s
   
 4、使用 git add 命令将想要快照的内容写入缓存区， 而执行 git commit 将缓存区内容添加到仓库中
 5、git commit -am '修改 hello.php 文件', 对于修改的文件可以这样, 新增不行
+
 6、git reset HEAD a.txt  命令用于取消已缓存的内容, 注意文件内容没有修改, 说白了就是 add 操作的回退
   git rm --cached a.txt 一样的效果啊, 虽然看图他俩是不一样, 但本质真是一样的吧
   git checkout HEAD a.txt 这个的效果可以看图
+  
 7、如果只是简单地从工作目录中手工删除文件，运行 git status 时就会在 Changes not staged for commit 的提示。
 要从 Git 中移除某个文件，就必须要从已跟踪文件清单中移除，然后提交。可以用以下命令完成此项工作
 git rm -f <file>

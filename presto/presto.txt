@@ -79,6 +79,8 @@ curl -o kafka-tpch https://repo1.maven.org/maven2/de/softwareforge/kafka_tpch_08
 ./presto-cli-0.200-executable.jar --server 192.168.58.161:9001  --catalog kafka --schema tpch
 SELECT count(*) FROM customer;
 
+insert into tpch.customer1(row_number, customer_key, name, address, nation_key, phone, account_balance, market_segment, comment) select row_number, customer_key, name, address, nation_key, phone, account_balance, market_segment, comment from tpch.customer;
+
 ========================================================
 discovery-server.enabled：Presto 通过Discovery 服务来找到集群中所有的节点。为了能够找到集群中所有的节点，每一个Presto实例都会在启动的时候将自己注册到discovery服务。Presto为了简化部署，并且也不想再增加一个新的服务进程，Presto coordinator 可以运行一个内嵌在coordinator 里面的Discovery 服务。这个内嵌的Discovery 服务和Presto共享HTTP server并且使用同样的端口。
 discovery.uri：Discovery server的URI。由于启用了Presto coordinator内嵌的Discovery 服务，因此这个uri就是Presto coordinator的uri。修改example.net:8080， 根据你的实际环境设置该URI。注意：这个URI一定不能以“/“结尾。
@@ -174,6 +176,7 @@ on e.sname=e1.sname
 -- 50w 的数据聚合用了 5s,  条件过滤 1s 多
 --500w 的数据聚合用了 60s, 条件过滤 3s 多
 --如果是直连 es 执行 sql, 无论是聚合或条件过滤都是非常快的(5kw)
+
 
 --------
 vim etc/catalog/clickhouse.properties
