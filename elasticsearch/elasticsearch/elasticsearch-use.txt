@@ -29,7 +29,7 @@ discovery.zen.ping.unicast.hosts: ["192.168.58.161:9100", "192.168.58.161:9300",
 -- 试过了 elasticsearch-7.10.2 安装只需要 jdk8 就可以, 编译需要高版本 jdk
 --cluster.initial_master_nodes: ["192.168.58.161"] ,7.14.0 需要加这个了, 另外还设置了 ES_JAVA_HOME=/usr/local/app/elasticsearch/elasticsearch-7.14.0/jdk
 
-nohup elasticsearch-2.0.2-1/bin/elasticsearch >elasticsearch-2.0.2-1/elasticsearch.log 2>&1 &
+nohup bin/elasticsearch > elasticsearch.log 2>&1 &
 kill -9 $(ps -ef|grep Elasticsearch |gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
 --有人说 ES7版本后不支持TransportClient方式连接了, 那怎么 jar 包里有相应的类呢
 

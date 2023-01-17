@@ -1,14 +1,8 @@
-1、https://www.runoob.com/go/go-program-structure.html
-当标识符（包括常量、变量、类型、函数名、结构字段等等）以一个大写字母开头，如：Group1，那么使用这种形式的标识符的对象就可以被外部包的代码所使用（客户端程序需要先导入这个包），这被称为导出（像面向对象语言中的 public）；
-	标识符如果以小写字母开头，则对包外是不可见的，但是他们在整个包的内部是可见并且可用的（像面向对象语言中的 protected ）。
---关于包
-文件夹名与包名没有直接关系，并非需要一致, 同一个文件夹下的文件只能有一个包名
-同一个文件夹下的文件只能有一个包名，否则编译报错。
+https://github.com/sxw521/7days-golang-master
 
 3、https://www.runoob.com/go/go-constants.html
    c = unsafe.Sizeof(a)
    iota
-
 4、https://www.runoob.com/go/go-function-as-values.html
    https://www.runoob.com/go/go-function-closures.html
    https://www.runoob.com/go/go-method.html
@@ -22,6 +16,8 @@
 10、https://www.runoob.com/go/go-interfaces.html
 11、https://www.runoob.com/go/go-error-handling.html
 12、https://www.runoob.com/go/go-concurrent.html
+https://blog.csdn.net/glenshappy/article/details/121352258
+https://blog.csdn.net/u010649766/article/details/80327035
 ==============================AtGuiGu============================
 1、一个文件中先执行全局变量定义 --> init 函数 --> main 函数
 2、闭包可以理解为：闭包是类，n 是成员变量，函数和它用到的 n 构成闭包
@@ -56,3 +52,7 @@ GOPATH可以是一个目录列表, go get下载的第三方库, 一般都会下�
 需要把GOPATH中的可执行目录也配置到环境变量中, 否则你自行下载的第三方go工具就无法使用了, 操作如下:
 在~/bash_profile中配置,
 export $PATH:$GOPATH/bin
+============================
+go mod init bookstore0612
+--go env -w GOSUMDB="sum.golang.org"
+go mod tidy	--下载包

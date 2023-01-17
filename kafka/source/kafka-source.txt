@@ -4,9 +4,12 @@ git clone -b 1.0 git@github.com:apache/kafka.git
 
 2.0 版本同样可以编译成功
 可如果从 apache mirror 下载的源码需要先执行一下 gradle 命令生成 gradlew 
+2.8.1
+./gradlew clean releaseTarGz
+./gradlew idea
 
 3.0 版本
-./gradlew releaseTarGz
+./gradlew clean releaseTarGz
 
 =========================================================================
 org.apache.kafka.common.record.FileRecords#searchForTimestamp

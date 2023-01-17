@@ -1,3 +1,6 @@
+bin/kafka-consumer-perf-test.sh --bootstrap-server 10.1.100.102:31090,10.1.100.102:31091,10.1.100.102:31092 --topic  baize-edr-windows-registry  --fetch-size 10000 --messages 10000000 --threads 12
+bin/kafka-consumer-groups.sh  --bootstrap-server 10.1.100.102:31090,10.1.100.102:31091,10.1.100.102:31092 --describe --group baize-edr-windows-registry
+
 1、创建俩目录data，data_zk，可不创建，会自动创建
 2、vim server.properties
 	log.dirs=/usr/local/app/kafka_2.11-1.0.0/data
