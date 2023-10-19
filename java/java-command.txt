@@ -43,7 +43,7 @@ java -XX:+PrintCommandLineFlags -version
 6、
 打印GC的简要信息  -verbose:gc
 打印GC的详细信息  -XX:+PrintGCDetails
-指定GC log的位置  -Xloggc:log/gc.log
+指定GC log的位置  -Xloggc:/home/tyx/gc.log
 每一次GC前和GC后，都打印堆信息  -XX:+PrintHeapAtGC
 监控类的加载  -XX:+TraceClassLoading, 最先的肯定是 Object, 通过他可以看类的加载时期, 能解决好多疑问啊
 -XX:-PrintClassHistogram  遇到Ctrl-Break后打印类实例的柱状信息，与jmap -histo 功能相同

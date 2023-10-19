@@ -1,0 +1,37 @@
+1、new String(chars, i%5, i%5) 比 new String(bytes, i%5, i%5) 快了好几倍，符合预期
+2、for (int j=0; j< arrays.length; j++) 比 for (String line: list) 快两倍以上
+3、取余运算真的很慢, 相比其它运算慢了几个数量级
+4、Long lo 与 long l 相比进行数值运算差了几个数量级
+5、强转操作很轻量级
+6、基本类型 char short int 等转换很轻量级
+7、简单函数调用一层和六层几乎没有区别, 也可能是透传的代码太简单了。 private static int f1(int i1, int i2){return f2(i1, i2);}
+8、1-4 个线程线性增长。所以可以认为，操作如果不是很小，想要多线程执行没有必要用队列
+    public static void main(String[] args) throws InterruptedException {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(4, 4, 1_0000, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>());
+        long start = System.currentTimeMillis();
+        final double[] d = {0};
+        int size = 30_0000;
+        CountDownLatch countDownLatch = new CountDownLatch(size);
+        for (int i = 0; i < size; i++) {
+            pool.submit(new Runnable() {
+                public void run() {
+                    d[0] += f(size);
+                    countDownLatch.countDown();
+                }
+            });
+        }
+        countDownLatch.await();
+//        for (int j = 0; j < size; j++) {
+//            d[0] += f(size);
+//        }
+        System.out.println(d[0]);
+        System.out.println(System.currentTimeMillis() - start);
+        pool.shutdown();
+    }
+    public static int f(int size){
+        double d = 0;
+        for (int i = 0; i < Integer.MAX_VALUE/size; i++) {
+            d ++;
+        }
+        return (int) (d + 1 - Integer.MAX_VALUE/size);
+    }

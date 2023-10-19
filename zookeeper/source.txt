@@ -1,3 +1,10 @@
+mvn clean package -DskipTests && cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper-3.5.6-bin/lib/zookeeper-3.5.6.jar && scp target/zookeeper-3.5.6.jar cluster02:/usr/local/app/zookeeper-3.5.6-bin/lib/zookeeper-3.5.6.jar  && scp target/zookeeper-3.5.6.jar cluster03:/usr/local/app/zookeeper-3.5.6-bin/lib/zookeeper-3.5.6.jar 
+
+mvn clean package -DskipTests && cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper-3.5.6-bin-1/lib/zookeeper-3.5.6.jar &&  cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper-3.5.6-bin-2/lib/zookeeper-3.5.6.jar &&  cp target/zookeeper-3.5.6.jar /usr/local/app/zookeeper/zookeeper-3.5.6-bin-3/lib/zookeeper-3.5.6.jar 
+zookeeper-3.5.6-bin-1/bin/zkServer.sh stop && zookeeper-3.5.6-bin-2/bin/zkServer.sh stop && zookeeper-3.5.6-bin-3/bin/zkServer.sh stop
+rm -rf zookeeper-3.5.6-bin-1/logs/* && rm -rf zookeeper-3.5.6-bin-2/logs/* && rm -rf zookeeper-3.5.6-bin-3/logs/* && zookeeper-3.5.6-bin-1/bin/zkServer.sh start && zookeeper-3.5.6-bin-2/bin/zkServer.sh start && zookeeper-3.5.6-bin-3/bin/zkServer.sh start
+zookeeper-3.5.6-bin-1/bin/zkServer.sh status && zookeeper-3.5.6-bin-2/bin/zkServer.sh status && zookeeper-3.5.6-bin-3/bin/zkServer.sh status
+
 1、生效只是一次:
 	zooKeeper.getData 传入的 watcher 对 NodeDataChanged, NodeDeleted 是生效的
 	zooKeeper.getChildren 传入的 watcher 对 NodeChildrenChanged(删除/创建子节点有效, 子节点值改变无效), NodeDeleted(删除当前节点) 生效, 改变节点值无效
@@ -8,3 +15,76 @@
 3、EPHEMERAL 类型节点: org.apache.zookeeper.server.DataTree#killSession
 4、org.apache.zookeeper.ClientCnxn.SendThread#sendPing 是 EPHEMERAL 存在(保持连接)的原因
 5、org.apache.zookeeper.server.persistence.FileTxnSnapLog#fastForwardFromEdits 加载日志
+
+
+RecvWorker===1168|LearnerHandler===402|learner-sock===291
+
+learner-sock===291|ia-oa===376
+
+learner-read===|learner-write===
+followLeader===93|learner-write===141
+
+
+
+
+
+
+
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+learner-write===263===2888===/192.168.58.161:58754===5===150323855360===35===510005023
+
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+learner-write===263===2888===/192.168.58.161:58752===5===150323855360===35===265671752
+
+
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096
+DIFF===753===
+syncFollower===746===false===true===false===false===true===false===219043332096===219043332096

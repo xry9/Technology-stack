@@ -1,3 +1,6 @@
+bin/kafka-consumer-perf-test.sh --bootstrap-server 10.1.100.102:31090,10.1.100.102:31091,10.1.100.102:31092 --topic  baize-edr-windows-registry  --fetch-size 10000 --messages 10000000 --threads 12
+bin/kafka-consumer-groups.sh  --bootstrap-server 10.1.100.102:31090,10.1.100.102:31091,10.1.100.102:31092 --describe --group baize-edr-windows-registry
+
 1、消息系统分类:
   peer2peer( 只能 pull 方式吧)，发布订阅/pee(两种都可吧)
 2、Sync Producer, Aync Producer
@@ -18,8 +21,8 @@ Partition/Replica重新分配
   删除Broker前，需要将待删除的Broker上的数据迁移到其它Broker上
 kafka-reassign-partitions.sh  
 -----------------------
-../gradlew releaseTarGz -x signArchives && cp build/libs/kafka_2.11-2.0.0.jar /usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar && scp build/libs/kafka_2.11-2.0.0.jar pseudo2:/usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar && scp build/libs/kafka_2.11-2.0.0.jar pseudo3:/usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar
-../gradlew clean build -x signArchives && cp build/libs/kafka-clients-2.0.0.jar /usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar && scp build/libs/kafka-clients-2.0.0.jar pseudo2:/usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar && scp build/libs/kafka-clients-2.0.0.jar pseudo3:/usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar
+../gradlew releaseTarGz -x signArchives && cp build/libs/kafka_2.11-2.0.0.jar /usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar && scp build/libs/kafka_2.11-2.0.0.jar cluster02:/usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar && scp build/libs/kafka_2.11-2.0.0.jar cluster03:/usr/local/app/kafka_2.11-2.0.0/libs/kafka_2.11-2.0.0.jar
+../gradlew clean build -x signArchives && cp build/libs/kafka-clients-2.0.0.jar /usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar && scp build/libs/kafka-clients-2.0.0.jar cluster02:/usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar && scp build/libs/kafka-clients-2.0.0.jar cluster03:/usr/local/app/kafka_2.11-2.0.0/libs/kafka-clients-2.0.0.jar
 
 less k2.log |grep -E -A 15 "doSend===420===LEADER_AND_ISR"
 less logs/* |grep -E "doWork===239"

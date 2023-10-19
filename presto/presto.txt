@@ -38,7 +38,8 @@ vim etc/catalog/jmx.properties
 6、bin/launcher start (launcher run前台启动 看日志)
 hive --service metastore &
 ./presto.jar --server 192.168.58.161:9001 --catalog hive --schema default
-
+use kafka.default;
+show tables;
 
 --------
 新版本中
